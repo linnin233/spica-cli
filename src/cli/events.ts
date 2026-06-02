@@ -4,6 +4,7 @@ import { COLORS, format } from './ui/colors';
 import { TokenCounter } from '../llm/TokenCounter';
 import prompts from 'prompts';
 import { getRuntimeState } from '../core/RuntimeState';
+import os from 'os';
 
 
 const screen = getScreenManager();
@@ -20,7 +21,7 @@ function buildStatusText(
 
   // 工作区路径显示（智能缩写）
   const workspace = agent.getWorkspacePath();
-  const homeDir = require('os').homedir();
+  const homeDir = os.homedir();
   let displayPath = workspace;
 
   // 缩写用户目录为 ~

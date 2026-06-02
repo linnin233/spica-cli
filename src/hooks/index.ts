@@ -106,19 +106,6 @@ export function runPreHooks(toolName: string, args: Record<string, any>): HookRe
     }
   }
 
-  // 插件 pre hooks
-  try {
-    const { getPluginManager } = require('../plugins');
-    const pluginResult = getPluginManager().runPreHooks(toolName, safeArgs);
-    if (pluginResult) {
-      return {
-        matched: pluginResult.matched,
-        action: pluginResult.action,
-        message: pluginResult.message,
-      };
-    }
-  } catch { /* plugin system not loaded */ }
-
   return { matched: false, action: 'none', message: '' };
 }
 

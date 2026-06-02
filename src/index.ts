@@ -168,7 +168,7 @@ program
 
         // 工作区路径显示（Windows 下缩写长路径）
         const workspace = agent.getWorkspacePath();
-        const homeDir = require('os').homedir();
+        const homeDir = os.homedir();
         let displayPath = workspace;
 
         // 缩写用户目录为 ~（跨平台）
