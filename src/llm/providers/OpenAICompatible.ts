@@ -183,7 +183,7 @@ async generate(prompt: string, tools?: ToolDefinition[], signal?: AbortSignal): 
       }, { signal });
 
       let fullContent = '';
-      let toolCalls: any[] = [];
+      const toolCalls: any[] = [];
       let hasToolCalls = false;
 
       for await (const chunk of stream) {
@@ -341,7 +341,7 @@ async generate(prompt: string, tools?: ToolDefinition[], signal?: AbortSignal): 
       }, { signal });
 
       let fullContent = '';
-      let toolCalls: any[] = [];
+      const toolCalls: any[] = [];
       let hasToolCalls = false;
 
       for await (const chunk of stream) {
@@ -474,7 +474,7 @@ async generate(prompt: string, tools?: ToolDefinition[], signal?: AbortSignal): 
       }, { signal });
 
       let fullContent = '';
-      let toolCalls: any[] = [];
+      const toolCalls: any[] = [];
       let hasToolCalls = false;
 
       for await (const chunk of stream) {

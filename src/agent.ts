@@ -1169,7 +1169,7 @@ async init() {
       grep: (e, a) => `Search failed. Check pattern and path.`,
     };
 
-    let baseSuggestion = suggestions[toolName]?.(error, args) || `Tool ${toolName} failed. Check parameters.`;
+    const baseSuggestion = suggestions[toolName]?.(error, args) || `Tool ${toolName} failed. Check parameters.`;
 
     return baseSuggestion;
   }
@@ -1248,7 +1248,7 @@ async init() {
 
     // 用 LLM 生成摘要（如果还有旧消息）
     // Safety: if kept messages alone exceed 70% of target, reduce until they fit
-    let safetyTruncated = [...truncatedRecent];
+    const safetyTruncated = [...truncatedRecent];
     let safetyTokens = tokenCounter.estimateMessages(safetyTruncated);
     while (safetyTokens > targetTokens * 0.7 && safetyTruncated.length > 2) {
       safetyTruncated.shift();

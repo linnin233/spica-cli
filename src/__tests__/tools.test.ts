@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { executeTool, setWorkspace, getWorkspace, getAllToolDefinitions, TOOLS_DEFINITIONS } from '../tools/index';
 
 // We'll test the tool definitions and basic functionality

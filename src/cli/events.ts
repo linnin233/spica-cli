@@ -61,9 +61,9 @@ function formatArgs(args: Record<string, any>): string {
 
 export function setupAgentEvents(
   agent: SpicaAgent,
-  interactive: boolean = false,
+  _interactive: boolean = false,
   model?: string,
-  tokenCounter?: TokenCounter
+  _tokenCounter?: TokenCounter
 ): void {
   // 追踪 reasoning 状态
   let reasoningStarted = false;
@@ -210,7 +210,7 @@ export function setupAgentEvents(
       if (answer && typeof answer.approve === 'boolean') {
         approved = answer.approve;
       }
-    } catch (e) {
+    } catch (_e) {
       approved = false;
     } finally {
       state.setPermissionDialogActive(false);

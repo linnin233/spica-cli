@@ -1,6 +1,5 @@
 // Test interrupt handling
 import { SpicaAgent } from '../agent';
-import { EventEmitter } from 'events';
 
 describe('Interrupt Handling', () => {
   let agent: SpicaAgent;

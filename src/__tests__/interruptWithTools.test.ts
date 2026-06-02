@@ -1,5 +1,5 @@
 // Test interrupt handling with tool cancellation
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SpicaAgent } from '../agent';
 
 describe('Interrupt Handling with Tool Cancellation', () => {
@@ -55,7 +55,7 @@ describe('Critical Error Handling', () => {
   it('should detect critical network errors', () => {
     // Test the isCriticalToolError logic indirectly
     // Network errors should be detected as critical
-    const networkError = {
+    const _networkError = {
       success: false,
       error: 'ECONNREFUSED: Connection refused',
     };
@@ -66,7 +66,7 @@ describe('Critical Error Handling', () => {
 
   it('should detect critical API auth errors', () => {
     // Auth errors should be detected as critical
-    const authError = {
+    const _authError = {
       success: false,
       error: '401 Unauthorized: Invalid API key',
     };

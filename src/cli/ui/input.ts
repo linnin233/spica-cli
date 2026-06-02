@@ -157,7 +157,7 @@ export function createInputHandler(
     if (str === '\x08' || str === '\x7f' || str.charCodeAt(0) === 127) {
       if (state.cursorPos > 0) {
         // 找到光标前的字符
-        let chars = [...state.buffer];
+        const chars = [...state.buffer];
         chars.splice(state.cursorPos - 1, 1);
         state.buffer = chars.join('');
         state.cursorPos--;
@@ -192,7 +192,7 @@ export function createInputHandler(
 
     // 普通字符 - 插入
     if (str.length > 0 && !str.startsWith(ESC)) {
-      let chars = [...state.buffer];
+      const chars = [...state.buffer];
       chars.splice(state.cursorPos, 0, str);
       state.buffer = chars.join('');
       state.cursorPos += str.length;
@@ -236,7 +236,7 @@ export function createInputHandler(
 // 替代 readline 的简单版本
 export function createStableREPL(onSubmit: (text: string) => Promise<void>) {
   let isProcessing = false;
-  let interruptResolve: ((approved: boolean) => void) | null = null;
+  const interruptResolve: ((approved: boolean) => void) | null = null;
 
   const handler = createInputHandler(
     async (text: string) => {
