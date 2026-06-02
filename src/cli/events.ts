@@ -85,8 +85,8 @@ export function setupAgentEvents(
     // 从 reasoning 切换到 stream 时，加分隔线
     if (reasoningStarted && !justSwitchedFromReasoning) {
       justSwitchedFromReasoning = true;
-      if (state.isShowThinking()) {
-        screen.appendScroll('\n' + COLORS.muted('[out]\n'));
+      if (state.isVerboseMode()) {
+        screen.appendScroll('\n' + COLORS.muted('---\n'));
       } else {
         screen.appendScroll('\n');
       }
@@ -105,8 +105,8 @@ export function setupAgentEvents(
     if (!reasoningStarted) {
       reasoningStarted = true;
       justSwitchedFromReasoning = false;
-      if (state.isShowThinking()) {
-        screen.appendScroll('\n' + COLORS.muted('[think]\n'));
+      if (state.isVerboseMode()) {
+        screen.appendScroll('\n' + COLORS.reasoning('[THINKING]\n'));
         if (!state.isStreamingOutput()) {
           state.setStreamingOutput(true);
           screen.setStreaming(true);
@@ -116,8 +116,8 @@ export function setupAgentEvents(
       }
     }
 
-    // showThinking 模式下显示完整 reasoning content
-    if (state.isShowThinking()) {
+    // verbose 模式下显示完整 reasoning content
+    if (state.isVerboseMode()) {
       screen.appendScroll(COLORS.reasoning(data.content));
     }
   });
