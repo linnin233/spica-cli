@@ -6,7 +6,7 @@ import fastGlob from "fast-glob";
 import { SubAgentTask, getSubAgentConfig, summarizeResult } from "./subAgent";
 import { computeDiff, formatDiff, generateEditDiff } from "../cli/ui/diff";
 import { getMCPManager } from "../mcp/client";
-import { getBashPath } from "../utils/platform";
+import { getBashPath, getBashOrFallback } from "../utils/platform";
 import type { Todo } from "../agent";
 import type { PersistedTask } from "../storage/taskPersistence";
 import { analyzeCodeHealth, formatCodeHealthResult } from "./codeHealth";
@@ -512,6 +512,9 @@ Write-Output $proc.Id;
 
           const actualCommand = command;
 
+          // 在 Windows 上优先使用 Git Bash（支持 head/grep/管道等 Unix 命令）
+          const bashShellInfo = getBashOrFallback();
+
           // 链接外部 abort signal（自动清理，防止 listener 累积）
           const externalSignal = safeArgs._abortSignal as AbortSignal | undefined;
           const abortController = new AbortController();
@@ -526,7 +529,8 @@ Write-Output $proc.Id;
           // 先启动进程（detached: true 创建进程组）
           // execa 的 pid 属性在进程启动后立即可用
           const bashProcess = execa(actualCommand, {
-            shell: true,
+            shell: bashShellInfo.shell,
+            shellArgs: bashShellInfo.args,
             cwd: WORKSPACE,
             timeout: timeout,
             reject: false,

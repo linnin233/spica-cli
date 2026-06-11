@@ -1030,7 +1030,7 @@ export function setupAgentEvents(
       const argsDisplay = data.name === 'bash'
         ? String(args.command || '').slice(0, 30)
         : String(args.path || args.url || '').slice(0, 30);
-      screen.appendScroll(COLORS.muted(`  ${data.name} ${argsDisplay} - `));
+      screen.appendScroll(COLORS.muted(`  ${data.name} ${argsDisplay}\n`));
     }
 
     screen.flushOutput();
