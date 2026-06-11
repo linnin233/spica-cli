@@ -142,6 +142,10 @@ export class SpicaAgent extends EventEmitter {
   // Non-blocking compression: LLM summary runs in background
   private _pendingCompression: Promise<void> | null = null;
   private _deferredSummary: ChatMessage | null = null;
+  // Full history — append-only, independent of LLM context compression
+  // Used by getMessages() for session persistence. Never truncated by compression.
+  private _fullHistory: ChatMessage[] = [];
+
 
   // === Interrupt 机制（参考 Crush 设计）===
   // 当前活跃的 AbortController（每个请求独立）
@@ -570,7 +574,7 @@ async init() {
           contextParts.push(`Current todos:\n${pendingTodos.map(t => `- [${t.status}] ${t.content}`).join('\n')}`);
         }
       }
-      this.llm.addMessage({
+      this.agentAddMessage({
         role: 'system',
         content: contextParts.join('\n\n'),
       });
@@ -633,6 +637,7 @@ async init() {
     if (session && session.messages.length > 0) {
       // session.messages已经通过cleanMessages清理过了
       this.llm.setMessages(session.messages);
+      this._fullHistory = [...session.messages];
     }
 
     const projectState = loadProjectState(this.workspacePath);
@@ -702,10 +707,11 @@ async init() {
   }
 
   getMessages(): ChatMessage[] {
-    return this.llm?.getMessages() || [];
+    return this._fullHistory;
   }
 
   setMessages(messages: ChatMessage[]) {
+    this._fullHistory = [...messages];
     if (this.llm) {
       // 保留系统提示词
       const currentMessages = this.llm.getMessages();
@@ -722,6 +728,25 @@ async init() {
       this.llm.setMessages(cleanedMessages);
     }
   }
+
+  getContextMessages(): ChatMessage[] {
+    return this.llm?.getMessages() || [];
+  }
+
+  private agentAddMessage(message: ChatMessage): void {
+    this._fullHistory.push(message);
+    this.llm?.addMessage(message);
+  }
+
+  private syncFullHistory(): void {
+    if (!this.llm) return;
+    const providerMessages = this.llm.getMessages();
+    if (providerMessages.length > this._fullHistory.length) {
+      const newMessages = providerMessages.slice(this._fullHistory.length);
+      this._fullHistory.push(...newMessages);
+    }
+  }
+
 
   private cleanMessagesForLLM(messages: ChatMessage[]): ChatMessage[] {
     return cleanMessages(messages);
@@ -849,6 +874,9 @@ async runLoop(prompt: string, maxIterations = 50): Promise<string> {
       return `LLM request failed (retried 10 times): ${errorMsg}. Check API config and network.`;
     }
 
+    // Sync provider-auto-added messages (user + assistant response) to full history
+    this.syncFullHistory();
+
     // 防御性检查：确保 response 存在
     if (!response) {
       this.emit('error_suggestion', {
@@ -878,7 +906,7 @@ async runLoop(prompt: string, maxIterations = 50): Promise<string> {
       if (queuedInputAtStart) {
         this.emit('queue_injected', { input: queuedInputAtStart.slice(0, 50) });
         // 将队列输入作为用户消息注入
-        this.llm!.addMessage({ role: 'user', content: `[QUEUED INPUT] ${queuedInputAtStart}` });
+        this.agentAddMessage({ role: 'user', content: `[QUEUED INPUT] ${queuedInputAtStart}` });
         queueInjectedThisIteration = true;  // 标记已注入
       }
 
@@ -932,7 +960,7 @@ async runLoop(prompt: string, maxIterations = 50): Promise<string> {
         }
 
         // 添加提示消息，让LLM继续尝试
-        this.llm!.addMessage({
+        this.agentAddMessage({
           role: 'user' as const,
           content: '[SYSTEM] Previous response was empty. Please continue working on the task and provide a response or use tools.'
         });
@@ -1150,6 +1178,8 @@ async runLoop(prompt: string, maxIterations = 50): Promise<string> {
               10,
               signal  // Pass abort signal
             );
+            // Sync tool results and assistant response to full history
+            this.syncFullHistory();
           } catch (llmError: unknown) {
             const errorMsg = llmError instanceof Error ? llmError.message : String(llmError);
             const isRetryable = this.isRetryableError(llmError);
@@ -1169,7 +1199,7 @@ async runLoop(prompt: string, maxIterations = 50): Promise<string> {
             // 添加一个用户消息记录已执行的操作（方便继续）
             if (toolsActuallyExecuted.length > 0) {
               const resultsSummary = toolsActuallyExecuted.map(t => `[${t.name}] ${t.result.slice(0, 200)}`).join('\n');
-              this.llm?.addMessage({
+              this.agentAddMessage({
                 role: 'user' as const,
                 content: `[SYSTEM NOTE] Previous operations completed but LLM response failed. Results:\n${resultsSummary}\nError: ${errorMsg}\nPlease continue based on these results.`
               });
@@ -1248,6 +1278,7 @@ async runLoop(prompt: string, maxIterations = 50): Promise<string> {
     if (this.llm) {
       this.llm.setMessages([]);
     }
+    this._fullHistory = [];
 
     // 发送workspace变更事件
     this.emit('workspace_changed', { path: newPath });
