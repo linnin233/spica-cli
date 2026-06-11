@@ -149,7 +149,7 @@ interface TodoUpdateData {
 interface AgentInterruptedData {
   toolResults?: Array<{ name: string; result: string }>;
   reason?: string;
-  cancelSeq?: number;  // Used to prevent duplicate display
+  cancelSeq?: number;  // 🔴 用于防止重复显示
 }
 
 interface AgentStoppedOnErrorData {
@@ -199,7 +199,7 @@ function resetToolTracking(): void {
   idToSeq.clear();
   nextToolSeq = 1;
   batchToolCount = 0;
-  // Also reset interrupt state
+  // 🔴 同时重置 interrupt 状态
   interruptDisplayed = false;
   lastInterruptCancelSeq = 0;
 }
@@ -427,9 +427,10 @@ function countAgents(output: string): number {
 function formatToolSummary(data: { name: string; success: boolean; output?: string; error?: string; content?: string }): string {
   if (!data.success) {
     const errorMsg = data.error || '';
-    // compact 模式：显示错误类型（不超过30字符）
-    const firstLine = errorMsg.split('\n')[0].slice(0, 30);
-    return `err: ${firstLine}`;
+    // 显示第一行错误，截断到 80 字符足够判断原因
+    const firstLine = errorMsg.split('\n')[0];
+    const shortErr = firstLine.length > 80 ? firstLine.slice(0, 80) + '...' : firstLine;
+    return `err: ${shortErr}`;
   }
 
   const name = data.name;
@@ -492,9 +493,9 @@ function formatToolSummary(data: { name: string; success: boolean; output?: stri
       const passed = countTestPassed(output);
       const failed = countTestFailed(output);
       if (failed > 0) {
-        return `${passed} pass, ${failed} fail`;
+        return `${passed}✓ ${failed}✗`;
       }
-      return passed > 0 ? `${passed} pass` : 'done';
+      return passed > 0 ? `${passed}✓` : 'done';
     }
     case 'lint': {
       const errors = countLintErrors(output);
@@ -580,7 +581,7 @@ function formatElapsed(ms: number): string {
 // 简洁的工具结果显示（统一格式）
 function displayToolResult(record: ToolCallRecord, data: ToolResultData): void {
   const elapsed = formatElapsed(calcElapsedMs(record.startTime));
-  const icon = data.success ? COLORS.success('OK') : COLORS.error('FAIL');
+  const icon = data.success ? COLORS.success('✓') : COLORS.error('✗');
   const summary = formatToolSummary(data);
 
   if (state.isVerboseMode()) {
@@ -693,7 +694,7 @@ function displayToolResult(record: ToolCallRecord, data: ToolResultData): void {
         break;
     }
 
-    screen.appendScroll(COLORS.muted(' - '));
+    screen.appendScroll(COLORS.muted(` → `));
     screen.appendScroll(COLORS.primary(`${summary}`));
     screen.appendScroll(` ${icon}`);
     screen.appendScroll(COLORS.muted(` ${elapsed}\n`));
@@ -744,7 +745,11 @@ function displayToolResult(record: ToolCallRecord, data: ToolResultData): void {
       }
       case 'bash': {
         const cmd = (record.args.command as string) || '';
-        if (cmd) screen.appendScroll(COLORS.muted(` ${cmd}`));
+        if (cmd) {
+          // 截断超长命令，保持单行可读
+          const shortCmd = cmd.length > 50 ? cmd.slice(0, 50) + '...' : cmd;
+          screen.appendScroll(COLORS.muted(` ${shortCmd}`));
+        }
         break;
       }
       case 'grep': {
@@ -842,7 +847,7 @@ function displayToolResult(record: ToolCallRecord, data: ToolResultData): void {
         break;
     }
 
-    screen.appendScroll(COLORS.muted(' - '));
+    screen.appendScroll(COLORS.muted(` → `));
     screen.appendScroll(COLORS.primary(`${summary}`));
     screen.appendScroll(` ${icon}`);
     screen.appendScroll(COLORS.muted(` ${elapsed}\n`));
@@ -905,7 +910,7 @@ function displaySubAgentPanel(): void {
   // 每个 subagent 的状态
   for (const agent of agents.slice(0, 3)) { // 最多显示 3 个
     const elapsed = formatElapsed(Date.now() - agent.startTime);
-    const statusIcon = agent.status === 'running' ? '...' : agent.status === 'done' ? 'OK' : 'FAIL';
+    const statusIcon = agent.status === 'running' ? '⏳' : agent.status === 'done' ? '✓' : '✗';
     const statusColor = agent.status === 'running' ? COLORS.warning : agent.status === 'done' ? COLORS.success : COLORS.error;
     
     const line = `${statusIcon} [${agent.type}] ${truncateToWidth(agent.description, 20)} (${elapsed})`;
@@ -1022,7 +1027,7 @@ export function setupAgentEvents(
     // 注册工具调用
     registerToolCall(data);
 
-    // Critical: show tool start notification (user knows bash is running, can ESC ESC)
+    // 🔴 关键：显示工具开始提示（让用户知道 bash 正在执行，可以 ESC ESC）
     // 只显示关键工具（bash, file_write 等）
     const importantTools = ['bash', 'file_write', 'file_edit', 'web_fetch', 'web_search'];
     if (importantTools.includes(data.name)) {
@@ -1030,8 +1035,7 @@ export function setupAgentEvents(
       const argsDisplay = data.name === 'bash'
         ? String(args.command || '').slice(0, 30)
         : String(args.path || args.url || '').slice(0, 30);
-      screen.appendScroll(COLORS.muted(`
-  ${data.name} ${argsDisplay}\n`));
+      screen.appendScroll(COLORS.muted(`  ${data.name} ${argsDisplay} → `));
     }
 
     screen.flushOutput();
@@ -1060,9 +1064,9 @@ export function setupAgentEvents(
       displayToolResult(record, data);
     } else {
       // 未找到匹配，显示简单格式
-      const icon = data.success ? COLORS.success('[OK]') : COLORS.error('[FAIL]');
+      const icon = data.success ? COLORS.success('✓') : COLORS.error('✗');
       const summary = formatToolSummary(data);
-      screen.appendScroll(`${icon} ${data.name} - ${summary}\n`);
+      screen.appendScroll(`${icon} ${data.name} → ${summary}\n`);
     }
     // 强制刷新
     screen.flushOutput();
@@ -1132,11 +1136,11 @@ export function setupAgentEvents(
 
   on('sub_agent_tool_call', (data: SubAgentToolCallData) => {
     // Subagent 内部的工具调用（缩进显示）
-    screen.appendScroll(COLORS.subAgent(`    - ${data.name}\n`));
+    screen.appendScroll(COLORS.subAgent(`    → ${data.name}\n`));
   });
 
   on('sub_agent_tool_result', (data: SubAgentToolResultData) => {
-    const icon = data.success ? 'OK' : 'FAIL';
+    const icon = data.success ? '✓' : '✗';
     const colorFn = data.success ? COLORS.success : COLORS.error;
     screen.appendScroll(colorFn(`    ${icon} ${data.name}\n`));
   });
@@ -1207,7 +1211,7 @@ export function setupAgentEvents(
     screen.setStreaming(false);
     screen.clearThinkingAnimation();
 
-    // Based on cancelSeq prevent duplicate display (only show latest cancelSeq)
+    // 🔴 基于 cancelSeq 防止重复显示（只显示最新的 cancelSeq）
     const currentCancelSeq = data.cancelSeq || 0;
 
     // 如果是同一个 cancelSeq 已经显示过，不重复显示
@@ -1230,7 +1234,7 @@ export function setupAgentEvents(
 
   on('agent_stopped_on_error', (data: AgentStoppedOnErrorData) => {
     screen.appendScroll(COLORS.error(`\n[stop] ${data.tool}: ${data.error?.slice(0, 50)}\n`));
-    screen.appendScroll(COLORS.warning(`  hint: ${data.suggestion}\n`));
+    screen.appendScroll(COLORS.warning(`  → ${data.suggestion}\n`));
     screen.restoreCursor();
     screen.refreshInput();
   });
@@ -1248,7 +1252,7 @@ export function setupAgentEvents(
     screen.appendScroll(COLORS.muted(`  task: ${data.task.slice(0, 50)}\n`));
     screen.appendScroll(COLORS.warning(`  error: ${data.error.slice(0, 50)}\n`));
     data.suggestions.slice(0, 2).forEach(s => {
-      screen.appendScroll(COLORS.primary(`  - ${s.slice(0, 50)}\n`));
+      screen.appendScroll(COLORS.primary(`  → ${s.slice(0, 50)}\n`));
     });
     screen.restoreCursor();
     screen.refreshInput();
@@ -1269,14 +1273,14 @@ export function setupAgentEvents(
 
   function displayTodoProgress(todos: TodoUpdateData['todos']) {
     const statusIcons: Record<string, string> = {
-      'completed': '[done]',
-      'in_progress': '[..]',
-      'pending': '[  ]',
+      'completed': '✔',
+      'in_progress': '◼',
+      'pending': '◻',
     };
 
     screen.appendScroll(COLORS.secondary('\n[tasks]\n'));
     todos.forEach((todo) => {
-      const icon = statusIcons[todo.status] || '[  ]';
+      const icon = statusIcons[todo.status] || '◻';
       const colorFn = todo.status === 'completed'
         ? COLORS.success
         : todo.status === 'in_progress'
@@ -1295,9 +1299,9 @@ export function setupAgentEvents(
   on('context_compressed', (data: ContextCompressedData) => {
     const formatTokens = (t: number) => t >= 1000 ? `${Math.floor(t/1000)}k` : `${t}`;
     const tokensInfo = data.tokensBefore && data.tokensAfter
-      ? ` (${formatTokens(data.tokensBefore)} -> ${formatTokens(data.tokensAfter)})`
+      ? ` (${formatTokens(data.tokensBefore)}→${formatTokens(data.tokensAfter)})`
       : '';
-    screen.appendScroll(COLORS.secondary(`\n[compress] ${data.before} -> ${data.after}${tokensInfo}\n`));
+    screen.appendScroll(COLORS.secondary(`\n[compress] ${data.before}→${data.after}${tokensInfo}\n`));
     screen.restoreCursor();
   });
 

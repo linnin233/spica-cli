@@ -310,15 +310,14 @@ export class ScreenManager {
         writeStdout(`${ESC}[${this.state.scrollBottom};1H`);
         this.state.cursorInScrollArea = true;
       }
-      writeStdout(this.streamBuffer);
+      writeStdout(this.streamBuffer + '\n');
       this.streamBuffer = '';
       this.refreshInputDuringStreaming();
     }
   }
 
-  // 强制刷新（用于工具调用结束等）— 清空流式缓冲，防止残留文本叠在工具输出上
+  // 强制刷新（用于工具调用结束等）
   flushOutput(): void {
-    this.flushStreamBuffer();
     this.refreshInputDuringStreaming();
   }
 
@@ -738,7 +737,7 @@ export class ScreenManager {
     return data
       .replace(/\x1b\[200~/g, '')   // bracketed paste start
       .replace(/\x1b\[201~/g, '')   // bracketed paste end
-      .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')  // CSI: colors, cursor moves (incl. ?25l/h), etc.
+      .replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')  // CSI: colors, cursor moves, etc.
       .replace(/\x1b\][^\x07]*\x07/g, '')     // OSC: title, link, etc.
       .replace(/\x1b[PX^_][^\x1b]*\x1b\\/g, ''); // Other escape sequences
   }
