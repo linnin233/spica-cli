@@ -152,22 +152,31 @@ draw_solid_box(25.8, 5.8, 5.0, 1.3, PNK,
 draw_box(25.8, 4.5, 5.0, 0.9, PNK,
          'Project State  .spica/state.json', fs=12)
 
-# ═══ ARROWS ═══
-arrow(10, 22.0, 7, 18.0, BLU)
-arrow(7, 13.8, 5, 11.2, GRN)
-arrow(5.5, 11.0, 7, 13.5, YLW)
-arrow(8, 12.5, 4, 8.0, GRN)
-arrow(20, 12.5, 28, 9.5, GRN)
-arrow(28, 4.5, 28.5, 9.2, YLW)
-arrow(15, 15.5, 19, 22.0, M)
+# ═══ ARROWS — main data flow (left to right, top to bottom) ═══
 
-# Labels
-ax.text(13.0, 20.5, 'user input', color=BLU, fontsize=12, ha='center')
-ax.text(4.0, 12.6, 'stream()', color=GRN, fontsize=12, ha='center')
-ax.text(7.5, 12.0, 'tool_calls', color=YLW, fontsize=12, ha='center')
-ax.text(4.5, 10.3, 'execute', color=GRN, fontsize=12, ha='center')
-ax.text(23.5, 11.3, 'save/load', color=GRN, fontsize=12, ha='center')
-ax.text(17.5, 19.2, 'events → UI', color=M, fontsize=12, ha='center')
+# 1. User Input → Agent (downward)
+arrow(5.5, 21.5, 5.5, 18.3, BLU)
+ax.text(7.8, 20.0, 'user\ninput', color=BLU, fontsize=12, ha='center')
+
+# 2. Agent → LLM: stream() request (down-left)
+arrow(3.5, 13.5, 3.5, 11.5, GRN)
+ax.text(2.3, 12.5, 'stream()', color=GRN, fontsize=11, ha='center')
+
+# 3. LLM → Agent: returns text or tool_calls (up-right)
+arrow(8.0, 11.5, 8.0, 13.5, YLW)
+ax.text(9.3, 12.5, 'response /\ntool_calls', color=YLW, fontsize=11, ha='center')
+
+# 4. Agent → Tools: execute (downward)
+arrow(11.0, 13.0, 5.0, 8.0, GRN)
+ax.text(8.0, 10.8, 'execute\ntools', color=GRN, fontsize=11, ha='center')
+
+# 5. Agent → Storage: save/load (rightward)
+arrow(22.0, 14.5, 25.6, 14.5, GRN)
+ax.text(23.8, 14.9, 'save / load', color=GRN, fontsize=11, ha='center')
+
+# 6. Agent events → UI display (upward)
+arrow(20.0, 14.0, 20.0, 20.5, M)
+ax.text(21.5, 17.5, 'events\n→ UI', color=M, fontsize=11, ha='center')
 
 ax.text(16, 0.3, 'github.com/zisonzishen0415-stack/spica-cli  •  MIT License', color=M,
         fontsize=10, ha='center', va='center')
