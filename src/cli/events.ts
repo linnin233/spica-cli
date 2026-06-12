@@ -127,6 +127,17 @@ interface SubAgentErrorData {
   error: string;
 }
 
+interface SubAgentMessageData {
+  id: string;
+  role: string;
+  content: string;
+}
+
+interface SubAgentReasoningData {
+  id: string;
+  content: string;
+}
+
 interface PendingInputDetectedData {
   content: string;
   input?: string;
@@ -1255,6 +1266,30 @@ export function setupAgentEvents(
 
     // 更新状态面板
     displaySubAgentPanel();
+  });
+
+  // Subagent text output — show what subagent is saying
+  on('sub_agent_message', (data: SubAgentMessageData) => {
+    if (data.role === 'assistant' && data.content) {
+      const lines = data.content.split('\n');
+      for (const line of lines) {
+        if (line.trim()) {
+          screen.appendScroll(COLORS.subAgent(`  │ ${line.slice(0, 200)}\n`));
+        }
+      }
+    }
+  });
+
+  // Subagent reasoning — show with reasoning color
+  on('sub_agent_reasoning', (data: SubAgentReasoningData) => {
+    if (data.content && data.content.trim()) {
+      const lines = data.content.split('\n');
+      for (const line of lines) {
+        if (line.trim()) {
+          screen.appendScroll(COLORS.reasoning(`  │ ${line.slice(0, 200)}\n`));
+        }
+      }
+    }
   });
 
   on('hook_blocked', (data: HookBlockedData) => {

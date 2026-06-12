@@ -1266,8 +1266,20 @@ Write-Output $proc.Id;
                   eventCallback('sub_agent_tool_result', { id: subTaskId, ...data });
                 }
               };
+              const messageHandler = (data: any) => {
+                if (eventCallback) {
+                  eventCallback('sub_agent_message', { id: subTaskId, ...data });
+                }
+              };
+              const reasoningHandler = (data: any) => {
+                if (eventCallback) {
+                  eventCallback('sub_agent_reasoning', { id: subTaskId, ...data });
+                }
+              };
               taskAgent.on('tool_call', toolCallHandler);
               taskAgent.on('tool_result', toolResultHandler);
+              taskAgent.on('message', messageHandler);
+              taskAgent.on('reasoning', reasoningHandler);
 
               // 创建超时 AbortController
               const timeoutController = new AbortController();
@@ -1283,6 +1295,8 @@ Write-Output $proc.Id;
                 if (externalSignal.aborted) {
                   taskAgent.off('tool_call', toolCallHandler);
                   taskAgent.off('tool_result', toolResultHandler);
+                  taskAgent.off('message', messageHandler);
+                  taskAgent.off('reasoning', reasoningHandler);
                   taskAgent.interrupt();
                   taskAgent.dispose();
                   clearTimeout(timeoutId);
@@ -1306,6 +1320,8 @@ Write-Output $proc.Id;
               } else {
                 taskAgent.off('tool_call', toolCallHandler);
                 taskAgent.off('tool_result', toolResultHandler);
+                taskAgent.off('message', messageHandler);
+                taskAgent.off('reasoning', reasoningHandler);
                 taskAgent.interrupt();
                 taskAgent.dispose();
                 clearTimeout(timeoutId);
@@ -1339,6 +1355,8 @@ Write-Output $proc.Id;
                 clearTimeout(timeoutId);
                 taskAgent.off('tool_call', toolCallHandler);
                 taskAgent.off('tool_result', toolResultHandler);
+                taskAgent.off('message', messageHandler);
+                taskAgent.off('reasoning', reasoningHandler);
                 if (abortHandler && externalSignal) {
                   externalSignal.removeEventListener('abort', abortHandler);
                 }
@@ -1392,6 +1410,8 @@ Write-Output $proc.Id;
                 clearTimeout(timeoutId);
                 taskAgent.off('tool_call', toolCallHandler);
                 taskAgent.off('tool_result', toolResultHandler);
+                taskAgent.off('message', messageHandler);
+                taskAgent.off('reasoning', reasoningHandler);
                 if (abortHandler && externalSignal) {
                   externalSignal.removeEventListener('abort', abortHandler);
                 }
