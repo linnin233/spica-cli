@@ -5,7 +5,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle, FancyBboxPatch, FancyArrowPatch
-import matplotlib.patches as mpatches
+from matplotlib.patches import FancyArrowPatch as FAP
 
 fig, ax = plt.subplots(figsize=(20, 16))
 ax.set_xlim(0, 20)
@@ -49,33 +49,36 @@ class Box:
     def cx(self):     return self.x + self.w/2
     def cy(self):     return self.y + self.h/2
 
-def arrow(b1, b2, style='->', dir='down', color=LINE, lw=1.5, label='', fs=9):
-    """Draw arrow between two Box objects."""
-    if dir == 'down':
-        y1, y2 = b1.bottom(), b2.top()
-        x1 = x2 = b1.cx()
-    elif dir == 'up':
-        y1, y2 = b1.top(), b2.bottom()
-        x1 = x2 = b1.cx()
-    elif dir == 'right':
-        x1, x2 = b1.right(), b2.left()
-        y1 = y2 = b1.cy()
-    elif dir == 'left':
-        x1, x2 = b1.left(), b2.right()
-        y1 = y2 = b1.cy()
-    else:
+def arrow(x1, y1, x2, y2, color=LINE, lw=1.8, label='', fs=9, gap=0.15):
+    """Draw a clean arrow from (x1,y1) to (x2,y2), with gap from endpoints.
+    Supports horizontal or vertical arrows only."""
+    dx, dy = x2 - x1, y2 - y1
+    dist = (dx**2 + dy**2)**0.5
+    if dist == 0:
         return
+    ux, uy = dx/dist, dy/dist
+    # Apply gap
+    sx, sy = x1 + ux*gap, y1 + uy*gap
+    ex, ey = x2 - ux*gap, y2 - uy*gap
+    p = FAP((sx, sy), (ex, ey), arrowstyle='->', color=color, lw=lw,
+            mutation_scale=15, shrinkA=0, shrinkB=0)
+    ax.add_patch(p)
+    if label:
+        mx, my = (sx+ex)/2, (sy+ey)/2
+        # Place label offset perpendicular to arrow direction
+        if abs(dx) > abs(dy):  # horizontal
+            ax.text(mx, my + 0.22, label, color=GRAY, fontsize=fs, ha='center', va='bottom')
+        else:  # vertical
+            ax.text(mx + 0.25, my, label, color=GRAY, fontsize=fs, ha='left', va='center')
 
-    if style == '<->':
-        ax.annotate('', xy=(x2, y2), xytext=(x1, y1),
-                    arrowprops=dict(arrowstyle='<->', color=color, lw=lw))
-    else:
-        ax.annotate('', xy=(x2, y2), xytext=(x1, y1),
-                    arrowprops=dict(arrowstyle='->', color=color, lw=lw))
-
+def bidir_arrow(x1, y1, x2, y2, color=LINE, lw=1.8, label='', fs=9):
+    """Bidirectional arrow. Shows a single line with arrowheads at both ends."""
+    p = FAP((x1, y1), (x2, y2), arrowstyle='<->', color=color, lw=lw,
+            mutation_scale=15, shrinkA=2, shrinkB=2)
+    ax.add_patch(p)
     if label:
         mx, my = (x1+x2)/2, (y1+y2)/2
-        ax.text(mx + 0.2, my, label, color=GRAY, fontsize=fs, ha='left', va='center')
+        ax.text(mx + 0.3, my, label, color=GRAY, fontsize=fs, ha='left', va='center')
 
 # ═══════════════════════════════════════════════
 # TITLE
@@ -170,26 +173,23 @@ project = Box(15.5, sto_y, 3.7, sto_h,
               'Project State\n.spica/\nstate.json\nsnapshots/\nbackups/\ntasks.json', BOX5, 8)
 
 # ═══════════════════════════════════════════════
-# ARROWS — data flow
+# ARROWS — precise edge-to-edge, no crossings
 # ═══════════════════════════════════════════════
 
-# UI → Agent
-arrow(tui, agent, dir='down', label='user input')
+# 1. UI → Agent: user input enters the system
+arrow(5.5, 13.0, 5.5, 12.0, LINE, label='user input', fs=9)
 
-# Agent ↔ LLM (bidirectional)
-arrow(agent, llm, dir='down', style='<->', label='stream / response')
+# 2. Agent ↔ LLM: bidirectional — stream request and response
+bidir_arrow(3.5, 9.0, 3.5, 8.0, LINE, label='stream / response', fs=9)
 
-# Agent → Tools
-arrow(agent, tools, dir='down', label='execute')
+# 3. Agent → Tools: agent dispatches tool calls
+arrow(9.7, 9.0, 9.7, 8.0, LINE, label='execute', fs=9)
 
-# Agent → Storage
-arrow(agent, active, dir='down', label='save/load')
+# 4. Agent → Storage: save/load session, passing through service-layer gap
+arrow(6.5, 9.0, 6.5, 3.2, LINE, label='save / load', fs=9, gap=0.2)
 
-# Storage: active → historical (archive)
-arrow(active, historical, dir='right', label='archive')
-
-# Agent events → UI
-arrow(events, uicomp, dir='up', label='events')
+# 5. Active → Historical: archive moves session rightward
+arrow(10.3, 2.1, 10.7, 2.1, LINE, label='archive', fs=9, gap=0.08)
 
 # ═══════════════════════════════════════════════
 # LAYER BOUNDARIES (dashed)
