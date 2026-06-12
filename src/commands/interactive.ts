@@ -91,13 +91,16 @@ export async function runInteractiveMode(
           "/archive",
           "/clear",
           "/reset",
+          "/new",
           "/checkpoint",
           "/skill",
           "/mcp",
           "/history",
+          "/sessions",
           "/view",
           "/compact",
           "/summary",
+          "/sum",
           "/init",
           "/rename",
           "/delete",
@@ -332,7 +335,7 @@ export async function runInteractiveMode(
             }
 
             // History browser — archived sessions (read-only)
-            if (cmd === "sessions" || cmd === "history" || cmd === "h") {
+            if (cmd === "sessions" || cmd === "history") {
               const { listSessions } = await import("../utils/session");
               const sessions = listSessions(agent.getWorkspacePath());
 
@@ -897,36 +900,6 @@ ${assistantMessages.join('\n')}
               return;
             }
 
-            // 历史（显示最近消息）
-            if (cmd === "history") {
-              const msgs = agent.getMessages();
-
-              screen.appendScroll(COLORS.primary.bold("\nHistory:\n"));
-              if (msgs.length === 0) {
-                screen.appendScroll(COLORS.muted("  (empty)\n"));
-              } else {
-                msgs.forEach((m, i) => {
-                  const role =
-                    m.role === "user"
-                      ? "YOU"
-                      : m.role === "assistant"
-                        ? "AI"
-                        : "SYS";
-                  const content = m.content || "";
-                  screen.appendScroll(COLORS.muted(`  ${i + 1}. [${role}]\n`));
-                  content.split("\n").forEach((line) => {
-                    screen.appendScroll(COLORS.muted(`     ${line}\n`));
-                  });
-                });
-                screen.appendScroll(
-                  COLORS.muted(`\n  Total: ${msgs.length} messages\n`),
-                );
-              }
-              screen.appendScroll("\n");
-
-              return;
-            }
-
             // 压缩上下文
             if (cmd === "compact") {
               await agent.compact();
@@ -1081,47 +1054,44 @@ If AGENTS.md already exists, preserve valuable content and supplement updates.`;
         // 帮助信息
         const showHelp = () => {
           screen.appendScroll(COLORS.primary.bold("\nCommands:\n"));
-          screen.appendScroll(COLORS.muted("  quit/exit   Exit\n"));
-          screen.appendScroll(COLORS.muted("  help        Show help\n"));
+          screen.appendScroll(COLORS.muted("  quit/exit   Exit spica\n"));
+          screen.appendScroll(COLORS.muted("  /help /h    Show this help\n"));
           screen.appendScroll("\n");
           screen.appendScroll(COLORS.primary.bold("Session:\n"));
-          screen.appendScroll(COLORS.muted("  /archive    Archive current & start new\n"));
-          screen.appendScroll(COLORS.muted("  /history    Browse archived chats (read-only)\n"));
-          screen.appendScroll(COLORS.muted("  /view <id>  Read specific archived chat\n"));
-          screen.appendScroll(COLORS.muted("  /summary    Summarize current session\n"));
-          screen.appendScroll(COLORS.muted("  /compact    Compress context\n"));
-          screen.appendScroll(
-            COLORS.muted("  /rename <id> <name> Rename archived chat\n"),
-          );
-          screen.appendScroll(
-            COLORS.muted("  /delete <id> Delete archived chat\n"),
-          );
+          screen.appendScroll(COLORS.muted("  /archive /clear /reset /new  Archive current & start new\n"));
+          screen.appendScroll(COLORS.muted("  /history /sessions           Browse archived chats (read-only)\n"));
+          screen.appendScroll(COLORS.muted("  /view <id>                   Read specific archived chat\n"));
+          screen.appendScroll(COLORS.muted("  /rename <id> <name>          Rename archived chat\n"));
+          screen.appendScroll(COLORS.muted("  /delete <id>                 Delete archived chat\n"));
+          screen.appendScroll(COLORS.muted("  /summary /sum                Summarize current session\n"));
+          screen.appendScroll(COLORS.muted("  /compact                     Compress context\n"));
+          screen.appendScroll(COLORS.muted("  /init [instructions]         Create AGENTS.md\n"));
           screen.appendScroll("\n");
           screen.appendScroll(COLORS.primary.bold("Queue:\n"));
-          screen.appendScroll(COLORS.muted("  /queue      Show queue\n"));
-          screen.appendScroll(
-            COLORS.muted("  /undo       Remove last input\n"),
-          );
+          screen.appendScroll(COLORS.muted("  /queue /q    Show input queue\n"));
+          screen.appendScroll(COLORS.muted("  /undo        Remove last queued input\n"));
           screen.appendScroll("\n");
           screen.appendScroll(COLORS.primary.bold("Checkpoint:\n"));
-          screen.appendScroll(COLORS.muted("  /checkpoint list        List checkpoints\n"));
-          screen.appendScroll(COLORS.muted("  /checkpoint show <id>   Show checkpoint\n"));
-          screen.appendScroll(COLORS.muted("  /checkpoint restore <id> Restore files\n"));
-          screen.appendScroll(COLORS.muted("  /checkpoint clean       Clean old checkpoints\n"));
+          screen.appendScroll(COLORS.muted("  /checkpoint list            List checkpoints\n"));
+          screen.appendScroll(COLORS.muted("  /checkpoint show <id>       Show checkpoint details\n"));
+          screen.appendScroll(COLORS.muted("  /checkpoint restore <id>    Restore files from checkpoint\n"));
+          screen.appendScroll(COLORS.muted("  /checkpoint clean           Clean old checkpoints\n"));
           screen.appendScroll("\n");
           screen.appendScroll(COLORS.primary.bold("Skill:\n"));
           screen.appendScroll(COLORS.muted("  /skill list             List skills\n"));
           screen.appendScroll(COLORS.muted("  /skill install <url>    Install skill package\n"));
+          screen.appendScroll(COLORS.muted("  /skill uninstall <name> Uninstall skill package\n"));
           screen.appendScroll(COLORS.muted("  /skill add <name> [tpl] Add custom skill\n"));
-          screen.appendScroll(COLORS.muted("  /skill remove <name>   Remove skill\n"));
+          screen.appendScroll(COLORS.muted("  /skill remove <name>    Remove skill\n"));
+          screen.appendScroll(COLORS.muted("  /skill edit <name> <tpl> Edit skill template\n"));
           screen.appendScroll("\n");
           screen.appendScroll(COLORS.primary.bold("MCP:\n"));
           screen.appendScroll(COLORS.muted("  /mcp status     Show MCP status\n"));
           screen.appendScroll(COLORS.muted("  /mcp init       Create example config\n"));
           screen.appendScroll(COLORS.muted("  /mcp tools      List available tools\n"));
-          screen.appendScroll(COLORS.muted("  /mcp disconnect  Disconnect all servers\n"));
+          screen.appendScroll(COLORS.muted("  /mcp disconnect Disconnect all servers\n"));
           screen.appendScroll("\n");
-          screen.appendScroll(COLORS.muted("  /status     Show status\n"));
+          screen.appendScroll(COLORS.muted("  /status     Show status (messages, tokens, model, queue)\n"));
           screen.appendScroll("\n");
         };
 
