@@ -30,14 +30,14 @@ const BUILTIN_SKILLS_DIR = getBuiltinSkillsDir();
 export const SYSTEM_PROMPT = `You are spica, a coding agent CLI. You edit files, run commands, and help developers.
 
 ## Tool Usage
-- Read files before editing them. Use glob to find files, grep to search content.
+- Use read before editing files. Use glob to find files, grep to search content.
 - Run independent tools in parallel. Conflicting tools (same file) are sequenced automatically.
 - Use the task tool to dispatch sub-agents for isolated sub-tasks. Prefer sub-agents over inline execution when approaching context limits.
 - Prefer file-scoped commands over project-wide: \`npx tsc --noEmit <file>\` not \`npm run build\`.
 
 ## Tool Batching (Save Context Window)
 - Plan your reads BEFORE making any calls. When you need to read multiple files, request ALL of them in a single response — not one at a time. Each round-trip resends your entire message history, so interleaving reads with LLM calls wastes massive tokens.
-- Batch all independent reads together: [file_read(A), file_read(B), glob(...), grep(...)] in one response. Then process all results at once.
+- Batch all independent reads together: [read(A), read(B), glob(...), grep(...)] in one response. Then process all results at once.
 - Batch all independent writes together similarly. Only interleave when a write genuinely depends on a prior read.
 - Only serialize reads when the second read's path or pattern depends on the first read's output. If you know both paths upfront, batch them.
 
@@ -61,7 +61,12 @@ export const SYSTEM_PROMPT = `You are spica, a coding agent CLI. You edit files,
 // Load using-superpowers bootstrap skill
 function loadBootstrapSkill(): string {
   try {
-    const bootstrapPath = path.join(BUILTIN_SKILLS_DIR, 'superpowers', 'using-superpowers', 'SKILL.md');
+    const bootstrapPath = path.join(
+      BUILTIN_SKILLS_DIR,
+      'superpowers',
+      'using-superpowers',
+      'SKILL.md'
+    );
     if (fs.existsSync(bootstrapPath)) {
       const content = fs.readFileSync(bootstrapPath, 'utf-8');
       // Remove YAML frontmatter
@@ -95,17 +100,18 @@ function loadLearnings(workspacePath: string): string {
   try {
     const learningsDir = path.join(workspacePath, '.spica', 'learnings');
     if (!fs.existsSync(learningsDir)) return '';
-    
-    const files = fs.readdirSync(learningsDir)
+
+    const files = fs
+      .readdirSync(learningsDir)
       .filter(f => f.endsWith('.md'))
       .sort(); // chronological by filename (YYYY-MM-DD prefix)
-    
+
     if (files.length === 0) return '';
-    
+
     const contents = files
       .map(f => fs.readFileSync(path.join(learningsDir, f), 'utf-8'))
       .join('\n\n');
-    
+
     return `\n\n## Project Learnings (from .spica/learnings/)\n${contents}`;
   } catch {
     return ''; // never break system prompt for learnings issues
@@ -150,7 +156,9 @@ Always prefer file-scoped commands over project-wide. Token savings: 97%.
   // Project Guidelines — stable per project
   if (projectConfig) {
     if (projectConfig.rawContent) {
-      prompt += '\n\n## Project Guidelines (from AGENTS.md) - Highest Priority\n' + projectConfig.rawContent;
+      prompt +=
+        '\n\n## Project Guidelines (from AGENTS.md) - Highest Priority\n' +
+        projectConfig.rawContent;
     } else {
       const parts = [projectConfig.type];
       if (projectConfig.language) parts.push(projectConfig.language);
@@ -165,25 +173,25 @@ Always prefer file-scoped commands over project-wide. Token savings: 97%.
         prompt += `\nConstraints: ${projectConfig.constraints.slice(0, 3).join(', ')}`;
       }
     }
-    
+
     if (projectConfig.ruleLayers) {
       const { critical, important, preferences } = projectConfig.ruleLayers;
       if (critical.length > 0 || important.length > 0 || preferences.length > 0) {
         prompt += '\n\n## Rule Layers (from AGENTS.md)\n';
-        
+
         if (critical.length > 0) {
           prompt += '\n### CRITICAL Rules (Must Follow)\n';
-          critical.forEach(rule => prompt += `- ${rule}\n`);
+          critical.forEach(rule => (prompt += `- ${rule}\n`));
         }
-        
+
         if (important.length > 0) {
           prompt += '\n### IMPORTANT Rules (Should Follow)\n';
-          important.forEach(rule => prompt += `- ${rule}\n`);
+          important.forEach(rule => (prompt += `- ${rule}\n`));
         }
-        
+
         if (preferences.length > 0) {
           prompt += '\n### Preferences (Nice to Have)\n';
-          preferences.forEach(rule => prompt += `- ${rule}\n`);
+          preferences.forEach(rule => (prompt += `- ${rule}\n`));
         }
       }
     }
@@ -217,8 +225,14 @@ export function getSystemPromptVariable(skillsMetadata?: string, workspacePath?:
  * Legacy: single-string system prompt for backward compatibility.
  * Prefer getSystemPromptStable + getSystemPromptVariable for cache-optimized split.
  */
-export function getSystemPrompt(projectConfig?: ProjectConfig, skillsMetadata?: string, workspacePath?: string): string {
-  return getSystemPromptStable(projectConfig) + getSystemPromptVariable(skillsMetadata, workspacePath);
+export function getSystemPrompt(
+  projectConfig?: ProjectConfig,
+  skillsMetadata?: string,
+  workspacePath?: string
+): string {
+  return (
+    getSystemPromptStable(projectConfig) + getSystemPromptVariable(skillsMetadata, workspacePath)
+  );
 }
 export function getCompactPrompt(messagesText: string): string {
   return `You are summarizing conversation history for YOUR OWN future reference. You will read this summary later to continue working. Be precise — vague summaries waste your future context window.

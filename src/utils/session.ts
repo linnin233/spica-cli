@@ -6,9 +6,9 @@ import type { ChatMessage } from '../llm/providers/BaseProvider';
 import { cleanMessages } from './messageCleaner';
 
 // Session size limits (prevent huge session files that cause API timeouts)
-const MAX_SESSION_MESSAGES = 50;  // 最多保存50条消息
-const MAX_MESSAGE_LENGTH = 2000;  // 每条消息最多2000字符
-const MAX_SUMMARY_LENGTH = 8000;  // 历史摘要消息最多8000字符（压缩后的重要历史）
+const MAX_SESSION_MESSAGES = 50; // 最多保存50条消息
+const MAX_MESSAGE_LENGTH = 2000; // 每条消息最多2000字符
+const MAX_SUMMARY_LENGTH = 8000; // 历史摘要消息最多8000字符（压缩后的重要历史）
 const SESSIONS_DIR = '.spica/sessions';
 
 export interface SessionMeta {
@@ -28,7 +28,7 @@ export interface SessionState {
   id: string;
   name: string;
   createdAt: string;
-  summary?: string;  // 归档时的摘要
+  summary?: string; // 归档时的摘要
 }
 
 // Generate unique session ID
@@ -113,7 +113,7 @@ function truncateMessages(messages: ChatMessage[]): ChatMessage[] {
           truncatedToolCalls.push({
             id: 'truncated',
             name: `...(${m.toolCalls.length - 5} more)`,
-            arguments: {}
+            arguments: {},
           });
         }
         msg.toolCalls = truncatedToolCalls;
@@ -131,7 +131,11 @@ function truncateMessages(messages: ChatMessage[]): ChatMessage[] {
 }
 
 // Save current session
-export function saveSession(workspacePath: string, messages: ChatMessage[], sessionName?: string): void {
+export function saveSession(
+  workspacePath: string,
+  messages: ChatMessage[],
+  sessionName?: string
+): void {
   const spicaDir = join(workspacePath, '.spica');
 
   try {
@@ -193,7 +197,7 @@ export function generateSessionSummary(messages: ChatMessage[]): string {
     if (m.toolCalls) {
       for (const tc of m.toolCalls) {
         const args = tc.arguments || {};
-        if (['file_write', 'file_edit', 'file_multi_edit'].includes(tc.name)) {
+        if (['write', 'edit', 'file_multi_edit'].includes(tc.name)) {
           if (args.path) filePaths.add(args.path as string);
         }
       }
@@ -206,7 +210,9 @@ export function generateSessionSummary(messages: ChatMessage[]): string {
   }
 
   if (filePaths.size > 0) {
-    const files = Array.from(filePaths).slice(0, 5).map(f => f.replace(/.*\//, ''));
+    const files = Array.from(filePaths)
+      .slice(0, 5)
+      .map(f => f.replace(/.*\//, ''));
     if (parts.length > 0) {
       parts[0] += ` — modified ${files.join(', ')}`;
     } else {
@@ -304,7 +310,8 @@ export function archiveSession(workspacePath: string, session: SessionState): vo
 // Clean up old sessions
 function cleanupOldSessions(sessionsDir: string, maxKeep: number): void {
   try {
-    const files = fs.readdirSync(sessionsDir)
+    const files = fs
+      .readdirSync(sessionsDir)
       .filter(f => f.endsWith('.json') && f.startsWith('sess_'))
       .map(f => ({
         name: f,
@@ -321,9 +328,9 @@ function cleanupOldSessions(sessionsDir: string, maxKeep: number): void {
         } catch {}
       });
     }
-} catch {
-      // 忽略清理错误
-    }
+  } catch {
+    // 忽略清理错误
+  }
 }
 
 // List all archived sessions
@@ -335,7 +342,8 @@ export function listSessions(workspacePath: string): SessionMeta[] {
       return [];
     }
 
-    const files = fs.readdirSync(sessionsDir)
+    const files = fs
+      .readdirSync(sessionsDir)
       .filter(f => f.endsWith('.json') && f.startsWith('sess_'))
       .map(f => {
         const session = fs.readJsonSync(join(sessionsDir, f));
@@ -347,7 +355,9 @@ export function listSessions(workspacePath: string): SessionMeta[] {
           // Persist the generated summary so we don't regenerate every time
           if (summary) {
             session.summary = summary;
-            try { fs.writeJsonSync(join(sessionsDir, f), session, { spaces: 2 }); } catch {}
+            try {
+              fs.writeJsonSync(join(sessionsDir, f), session, { spaces: 2 });
+            } catch {}
           }
         }
         return {
@@ -385,7 +395,8 @@ export function loadSessionById(workspacePath: string, sessionId: string): Sessi
 
     // Partial match: find file ending with the given ID
     if (fs.existsSync(sessionsDir)) {
-      const files = fs.readdirSync(sessionsDir)
+      const files = fs
+        .readdirSync(sessionsDir)
         .filter(f => f.endsWith('.json') && f.startsWith('sess_'));
       const match = files.find(f => f.replace('.json', '').endsWith(sessionId));
       if (match) {
@@ -449,14 +460,18 @@ export function renameSession(workspacePath: string, sessionId: string, newName:
     const currentSession = loadSession(workspacePath);
     if (currentSession?.id === sessionId) {
       currentSession.name = newName;
-      fs.writeJsonSync(join(workspacePath, '.spica', 'session.json'), currentSession, { spaces: 2 });
+      fs.writeJsonSync(join(workspacePath, '.spica', 'session.json'), currentSession, {
+        spaces: 2,
+      });
     }
 
     // Update archived session
     const session = loadSessionById(workspacePath, sessionId);
     if (session) {
       session.name = newName;
-      fs.writeJsonSync(join(workspacePath, SESSIONS_DIR, `${sessionId}.json`), session, { spaces: 2 });
+      fs.writeJsonSync(join(workspacePath, SESSIONS_DIR, `${sessionId}.json`), session, {
+        spaces: 2,
+      });
       return true;
     }
   } catch {}

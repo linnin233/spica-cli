@@ -19,29 +19,29 @@ export interface SubAgentTask {
 }
 
 export interface SubAgentConfig {
-  allowedTools: string[] | '*';  // Allowed tools, '*' means all
-  timeout: number;               // Timeout in milliseconds
-  description: string;           // Type description
+  allowedTools: string[] | '*'; // Allowed tools, '*' means all
+  timeout: number; // Timeout in milliseconds
+  description: string; // Type description
 }
 
 export const SUB_AGENT_CONFIGS: Record<SubAgentType, SubAgentConfig> = {
   explore: {
-    allowedTools: ['glob', 'grep', 'file_read', 'directory_list', 'file_exists'],
+    allowedTools: ['glob', 'grep', 'read', 'directory_list', 'file_exists'],
     timeout: 30000,
     description: 'Fast read-only exploration, locate files and code',
   },
   review: {
-    allowedTools: ['glob', 'grep', 'file_read', 'directory_list', 'lint', 'file_exists'],
+    allowedTools: ['glob', 'grep', 'read', 'directory_list', 'lint', 'file_exists'],
     timeout: 60000,
     description: 'Code review, find issues',
   },
   fix: {
-    allowedTools: ['file_read', 'file_edit', 'bash', 'lint'],
+    allowedTools: ['read', 'edit', 'bash', 'lint'],
     timeout: 120000,
     description: 'Fix specific issues, minimal changes',
   },
   build: {
-    allowedTools: '*',  // All tools
+    allowedTools: '*', // All tools
     timeout: 180000,
     description: 'Full feature implementation',
   },
@@ -63,7 +63,7 @@ export function getSubAgentConfig(type?: SubAgentType): SubAgentConfig {
 // 检查工具是否允许
 export function isToolAllowed(toolName: string, config: SubAgentConfig): boolean {
   if (config.allowedTools === '*') return true;
-  if (!config.allowedTools) return false;  // 保护
+  if (!config.allowedTools) return false; // 保护
   return config.allowedTools.includes(toolName);
 }
 
@@ -75,22 +75,43 @@ export function summarizeResult(result: string, maxLength: number = 400): string
 
   // Signal words that indicate important lines (case-insensitive)
   const signalPatterns = [
-    /✓/, /✗/, /✅/, /❌/, /⚠️/, /🔴/, /🟢/,
-    /error/i, /fail/i, /success/i, /done/i, /complete/i, /pass/i, /build/i,
-    /found/i, /result/i, /fix/i, /issue/i, /warning/i, /critical/i,
-    /完成/, /成功/, /失败/, /错误/, /找到/, /修复/, /通过/,
+    /✓/,
+    /✗/,
+    /✅/,
+    /❌/,
+    /⚠️/,
+    /🔴/,
+    /🟢/,
+    /error/i,
+    /fail/i,
+    /success/i,
+    /done/i,
+    /complete/i,
+    /pass/i,
+    /build/i,
+    /found/i,
+    /result/i,
+    /fix/i,
+    /issue/i,
+    /warning/i,
+    /critical/i,
+    /完成/,
+    /成功/,
+    /失败/,
+    /错误/,
+    /找到/,
+    /修复/,
+    /通过/,
   ];
 
-  const isSignalLine = (l: string): boolean =>
-    signalPatterns.some(p => p.test(l));
+  const isSignalLine = (l: string): boolean => signalPatterns.some(p => p.test(l));
 
   const keyLines = lines.filter(isSignalLine);
 
   if (keyLines.length > 0) {
     // Take up to 5 key lines, prefer first and last
-    const selected = keyLines.length <= 5
-      ? keyLines
-      : [...keyLines.slice(0, 3), ...keyLines.slice(-2)];
+    const selected =
+      keyLines.length <= 5 ? keyLines : [...keyLines.slice(0, 3), ...keyLines.slice(-2)];
     return selected.join('\n').slice(0, maxLength);
   }
 
@@ -111,7 +132,5 @@ export function summarizeResult(result: string, maxLength: number = 400): string
   const lastSpace = truncated.lastIndexOf(' ');
   const lastNewline = truncated.lastIndexOf('\n');
   const breakPoint = Math.max(lastSpace, lastNewline);
-  return breakPoint > maxLength * 0.7
-    ? truncated.slice(0, breakPoint) + '...'
-    : truncated + '...';
+  return breakPoint > maxLength * 0.7 ? truncated.slice(0, breakPoint) + '...' : truncated + '...';
 }
