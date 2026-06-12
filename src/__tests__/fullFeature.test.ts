@@ -75,7 +75,7 @@ describe('Tool System', () => {
   });
 
   describe('File Tools', () => {
-    it('file_read: should read file content', async () => {
+    it('read: should read file content', async () => {
       const testFile = path.join(TEST_DIR, 'test.txt');
       await fs.writeFile(testFile, 'Hello World');
 
@@ -86,7 +86,7 @@ describe('Tool System', () => {
       expect(result.content).toContain('Hello World');
     });
 
-    it('file_write: should write file with syntax check', async () => {
+    it('write: should write file with syntax check', async () => {
       setWorkspace(TEST_DIR);
 
       const result = await executeTool('write', {
@@ -97,7 +97,7 @@ describe('Tool System', () => {
       expect(result.syntaxErrors).toBeUndefined();
     });
 
-    it('file_write: should detect syntax errors', async () => {
+    it('write: should detect syntax errors', async () => {
       setWorkspace(TEST_DIR);
 
       const result = await executeTool('write', {
@@ -109,7 +109,7 @@ describe('Tool System', () => {
       expect(result.syntaxErrors!.length).toBeGreaterThan(0);
     });
 
-    it('file_edit: should edit file by exact replacement', async () => {
+    it('edit: should edit file by exact replacement', async () => {
       const testFile = path.join(TEST_DIR, 'edit.txt');
       await fs.writeFile(testFile, 'Hello World');
 

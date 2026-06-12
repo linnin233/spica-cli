@@ -107,7 +107,7 @@ describe('Tool Result Structure', () => {
 });
 
 describe('Tool Descriptions', () => {
-  it('should mention syntax check for file_write', () => {
+  it('should mention syntax check for write', () => {
     const writeTool = TOOLS_DEFINITIONS.find(t => t.name === 'write');
     expect(writeTool?.description).toContain('syntax');
   });
