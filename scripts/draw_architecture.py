@@ -1,19 +1,17 @@
 #!/usr/bin/env python3
-"""Spica CLI — academic-style system block diagram."""
+"""Spica CLI — academic block diagram with clean spacing."""
 
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle, FancyBboxPatch, FancyArrowPatch
-from matplotlib.patches import FancyArrowPatch as FAP
+from matplotlib.patches import FancyBboxPatch, Rectangle, FancyArrowPatch as FAP
 
-fig, ax = plt.subplots(figsize=(22, 16))
+fig, ax = plt.subplots(figsize=(22, 17))
 ax.set_xlim(0, 22)
-ax.set_ylim(0, 16)
+ax.set_ylim(0, 17)
 ax.set_aspect('equal')
 ax.axis('off')
 
-# Academic palette: white bg, black lines, muted fills
 BG   = '#ffffff'
 BOX  = '#f5f5f5'
 BOX2 = '#e8f0fe'
@@ -27,19 +25,16 @@ GRAY = '#666666'
 fig.set_facecolor(BG)
 ax.set_facecolor(BG)
 
-# ═══════════════════════════════════════════════
-# HELPERS
-# ═══════════════════════════════════════════════
+# ── helpers ────────────────────────────────────
 
 class Box:
-    """A labeled block. Coordinates are (left, bottom, width, height)."""
-    def __init__(self, x, y, w, h, label, color=BOX, fontsize=10, bold=False):
+    def __init__(self, x, y, w, h, label, color=BOX, fs=10, bold=False):
         self.x, self.y, self.w, self.h = x, y, w, h
         r = FancyBboxPatch((x, y), w, h, boxstyle='round,pad=0.1',
                            facecolor=color, edgecolor=LINE, lw=1.5)
         ax.add_patch(r)
         wt = 'bold' if bold else 'normal'
-        ax.text(x + w/2, y + h/2, label, color=TEXT, fontsize=fontsize,
+        ax.text(x + w/2, y + h/2, label, color=TEXT, fontsize=fs,
                 ha='center', va='center', fontweight=wt)
 
     def top(self):    return self.y + self.h
@@ -49,95 +44,91 @@ class Box:
     def cx(self):     return self.x + self.w/2
     def cy(self):     return self.y + self.h/2
 
-def arrow(x1, y1, x2, y2, color=LINE, lw=1.8, label='', fs=9, gap=0.15):
-    """Draw a clean arrow from (x1,y1) to (x2,y2), with gap from endpoints.
-    Supports horizontal or vertical arrows only."""
+def arrow(x1, y1, x2, y2, label='', fs=9, gap=0.15):
     dx, dy = x2 - x1, y2 - y1
-    dist = (dx**2 + dy**2)**0.5
-    if dist == 0:
-        return
-    ux, uy = dx/dist, dy/dist
-    # Apply gap
-    sx, sy = x1 + ux*gap, y1 + uy*gap
-    ex, ey = x2 - ux*gap, y2 - uy*gap
-    p = FAP((sx, sy), (ex, ey), arrowstyle='->', color=color, lw=lw,
-            mutation_scale=15, shrinkA=0, shrinkB=0)
+    d = (dx**2 + dy**2)**0.5
+    if d == 0: return
+    ux, uy = dx/d, dy/d
+    p = FAP((x1+ux*gap, y1+uy*gap), (x2-ux*gap, y2-uy*gap),
+            arrowstyle='->', color=LINE, lw=1.8, mutation_scale=15)
     ax.add_patch(p)
     if label:
-        mx, my = (sx+ex)/2, (sy+ey)/2
-        # Place label offset perpendicular to arrow direction
-        if abs(dx) > abs(dy):  # horizontal
-            ax.text(mx, my + 0.22, label, color=GRAY, fontsize=fs, ha='center', va='bottom')
-        else:  # vertical
-            ax.text(mx + 0.25, my, label, color=GRAY, fontsize=fs, ha='left', va='center')
+        mx, my = (x1+x2)/2, (y1+y2)/2
+        if abs(dx) > abs(dy):
+            ax.text(mx, my+0.22, label, color=GRAY, fontsize=fs, ha='center', va='bottom')
+        else:
+            ax.text(mx+0.25, my, label, color=GRAY, fontsize=fs, ha='left', va='center')
 
-def bidir_arrow(x1, y1, x2, y2, color=LINE, lw=1.8, label='', fs=9):
-    """Bidirectional arrow. Shows a single line with arrowheads at both ends."""
-    p = FAP((x1, y1), (x2, y2), arrowstyle='<->', color=color, lw=lw,
+def bidir(x1, y1, x2, y2, label='', fs=9):
+    p = FAP((x1, y1), (x2, y2), arrowstyle='<->', color=LINE, lw=1.8,
             mutation_scale=15, shrinkA=2, shrinkB=2)
     ax.add_patch(p)
     if label:
         mx, my = (x1+x2)/2, (y1+y2)/2
-        ax.text(mx + 0.3, my, label, color=GRAY, fontsize=fs, ha='left', va='center')
+        ax.text(mx+0.3, my, label, color=GRAY, fontsize=fs, ha='left', va='center')
 
-# ═══════════════════════════════════════════════
-# TITLE
-# ═══════════════════════════════════════════════
-ax.text(11, 15.5, 'Spica CLI — System Architecture', color=TEXT, fontsize=18,
+def layer(x, y, w, h, label):
+    r = Rectangle((x, y), w, h, facecolor='none', edgecolor=GRAY, lw=1.0, ls='--')
+    ax.add_patch(r)
+    ax.text(x+0.15, y+h/2, label, color=GRAY, fontsize=8, fontstyle='italic',
+            va='center', rotation=90)
+
+# ── title ──────────────────────────────────────
+
+ax.text(11, 16.4, 'Spica CLI — System Architecture', color=TEXT, fontsize=18,
         ha='center', fontweight='bold')
-ax.text(11, 15.1, 'AI Coding Agent  ·  Node.js + TypeScript  ·  Event-Driven',
+ax.text(11, 16.0, 'AI Coding Agent  ·  Node.js + TypeScript  ·  Event-Driven',
         color=GRAY, fontsize=10, ha='center')
 
-# ═══════════════════════════════════════════════
-# LAYER 1 — USER INTERFACE  (y=13.0, h=1.4)
-# ═══════════════════════════════════════════════
-ui_y, ui_h = 13.0, 1.4
-g = 0.6  # horizontal gap
+# ── layer 1: user interface ────────────────────
+# boxes at y=14.0, h=1.5  (14.0..15.5)
+# layer boundary: y=13.7..15.7
 
-tui    = Box(1.2, ui_y, 3.4, ui_h, 'TUI Mode\nfull-screen, streaming', BOX2, 9)
-simple = Box(tui.right()+g, ui_y, 3.4, ui_h, 'Simple Mode\nreadline, --no-tui', BOX2, 9)
-cmds   = Box(simple.right()+g, ui_y, 5.2, ui_h, 'CLI Commands\n/archive /history /compact /checkpoint\n/skill /mcp /status /init', BOX2, 8)
-iqueue = Box(cmds.right()+g, ui_y, 3.2, ui_h, 'Input Queue\nbuffers, auto-drains', BOX, 9)
-uicomp = Box(iqueue.right()+g, ui_y, 2.8, ui_h, 'UI\nspinner, diff,\nscrollback', BOX, 9)
+G = 0.6  # horizontal gap
 
-# ═══════════════════════════════════════════════
-# LAYER 2 — CORE AGENT  (y=8.8, h=3.4)
-# ═══════════════════════════════════════════════
-agent_y, agent_h = 8.8, 3.4
+tui    = Box(1.2, 14.0, 3.4, 1.5, 'TUI Mode\nfull-screen, streaming', BOX2, 9)
+simple = Box(tui.right()+G, 14.0, 3.4, 1.5, 'Simple Mode\nreadline, --no-tui', BOX2, 9)
+cmds   = Box(simple.right()+G, 14.0, 5.2, 1.5, 'CLI Commands\n/archive /history /compact /checkpoint\n/skill /mcp /status /init', BOX2, 8)
+iqueue = Box(cmds.right()+G, 14.0, 3.2, 1.5, 'Input Queue\nbuffers, auto-drains', BOX, 9)
+uicomp = Box(iqueue.right()+G, 14.0, 2.8, 1.5, 'UI\nspinner, diff,\nscrollback', BOX, 9)
 
-agent = Box(1.2, agent_y, 10.0, agent_h,
+# ── layer 2: core agent ────────────────────────
+# agent box at y=10.0, h=3.5  (10.0..13.5)
+# layer boundary: y=9.5..13.7
+
+agent = Box(1.2, 10.0, 10.0, 3.5,
             'SpicaAgent  (EventEmitter)\n\n'
             'processInput()  ·  runLoop()  ·  executeTools()  ·  compact()\n'
             '_fullHistory: append-only, never truncated\n'
             'provider.messages: LLM context, compressible',
             BOX3, 9)
 
-events = Box(agent.right()+g, 10.8, 3.2, 1.3,
+events = Box(agent.right()+G, agent.top()-1.5, 3.2, 1.5,
              'Events\ntool_call / tool_result\nmessage / interrupt / done', BOX, 8)
 
-interrupt = Box(events.right()+g, 10.8, 2.8, 1.3,
+interrupt = Box(events.right()+G, agent.top()-1.5, 2.8, 1.5,
                 'Interrupt\nAbortController\ncancelSeq', BOX, 8)
 
-session = Box(agent.right()+g, 8.8, interrupt.right()-agent.right()-g, 1.6,
+session = Box(agent.right()+G, agent.y+0.3,
+              interrupt.right() - agent.right() - G, 1.7,
               'Session & Archive  (two-state model)\n'
               'saveSession() → session.json (active)\narchiveSession() → sessions/<id>.json (historical)',
               BOX, 8)
 
-subagent = Box(interrupt.right()+g, 9.6, 2.2, 2.5,
+subagent = Box(interrupt.right()+G, agent.y+0.5, 2.2, 3.0,
                'Sub-Agents\nexplore\nreview\nfix\nbuild', BOX, 8)
 
-# ═══════════════════════════════════════════════
-# LAYER 3 — SERVICES  (y=3.8, h=4.2)
-# ═══════════════════════════════════════════════
-svc_y, svc_h = 3.8, 4.2
+# ── layer 3: services ──────────────────────────
+# boxes at y=5.5, h=4.0  (5.5..9.5)
+# layer boundary: y=5.0..9.8
 
-llm = Box(1.2, svc_y, 5.8, svc_h,
+llm = Box(1.2, 5.5, 5.8, 4.0,
           'LLMClient\n\nOpenAI-compatible streaming\n'
           'Providers: OpenAI, Anthropic,\nDeepSeek, Gemini, Groq\n'
           'RateLimiter  ·  TokenCounter\nFunctionCaller',
           BOX4, 8)
 
-tools = Box(llm.right()+g, svc_y, 6.4, svc_h,
+tools = Box(llm.right()+G, 5.5, 6.4, 4.0,
             'Tool System  (33 built-in + MCP)\n\n'
             'file: read, write, edit, multi_edit\n'
             'shell: bash, git\n'
@@ -146,68 +137,60 @@ tools = Box(llm.right()+g, svc_y, 6.4, svc_h,
             'sub_agent  ·  syntax-check',
             BOX4, 8)
 
-skills = Box(tools.right()+g, svc_y, 6.4, svc_h,
+skills = Box(tools.right()+G, 5.5, 6.4, 4.0,
              'Skills & Hooks\n\n'
              '14 built-in skills\nbrainstorming, TDD, debugging,\ncode-review, git-worktrees\n\n'
              'Hooks: PreToolUse / PostToolUse\nnone < warn < confirm < block',
              BOX4, 8)
 
-# ═══════════════════════════════════════════════
-# LAYER 4 — STORAGE  (y=1.0, h=2.2)
-# ═══════════════════════════════════════════════
-sto_y, sto_h = 1.0, 2.2
+# ── layer 4: storage ───────────────────────────
+# boxes at y=1.5, h=2.5  (1.5..4.0)
+# layer boundary: y=1.0..4.2
 
-global_cfg = Box(1.2, sto_y, 4.8, sto_h,
+global_cfg = Box(1.2, 1.5, 4.8, 2.5,
                  'Global Config\n~/.spica/\nconfig.json  ·  skills.json\nmcp.json  ·  hooks.json', BOX5, 8)
 
-active = Box(global_cfg.right()+g, sto_y, 4.8, sto_h,
+active = Box(global_cfg.right()+G, 1.5, 4.8, 2.5,
              'Active Session\n.spica/session.json\nappend-only full history\nnever truncated', BOX5, 8, bold=True)
 
-historical = Box(active.right()+g, sto_y, 4.8, sto_h,
+historical = Box(active.right()+G, 1.5, 4.8, 2.5,
                  'Historical Sessions\n.spica/sessions/<id>.json\none per archived session\nwith summary', BOX5, 8)
 
-project = Box(historical.right()+g, sto_y, 4.0, sto_h,
+project = Box(historical.right()+G, 1.5, 4.0, 2.5,
               'Project State\n.spica/\nstate.json\nsnapshots/\nbackups/\ntasks.json', BOX5, 8)
 
-# ═══════════════════════════════════════════════
-# ARROWS — precise edge-to-edge
-# ═══════════════════════════════════════════════
+# ── layer boundaries (Rectangle, no rounding) ──
 
-# 1. UI → Agent: user input enters the system
-arrow(agent.cx(), ui_y, agent.cx(), agent.top(), LINE, label='user input', fs=9)
+layer(0.3, 13.7, 21.4, 2.0, 'Presentation')
+layer(0.3,  9.5, 21.4, 4.2, 'Application')
+layer(0.3,  5.0, 21.4, 4.8, 'Domain')
+layer(0.3,  1.0, 21.4, 3.2, 'Infrastructure')
 
-# 2. Agent ↔ LLM: bidirectional stream request / response
-bidir_arrow(llm.cx(), agent.bottom(), llm.cx(), llm.top(), LINE, label='stream / response', fs=9)
+# Check: layer boundaries do not overlap because:
+#   Pres 13.7..15.7  → gap 0  →  App 9.5..13.7  (rect, shared edge ok)
+#   App   9.5..13.7  → gap 0  →  Dom 5.0..9.8   (rect, shared edge ok)
+#   Dom   5.0..9.8   → gap 0.8 →  Inf 1.0..4.2  (spacing for arrow)
 
-# 3. Agent → Tools: agent dispatches tool calls
-arrow(tools.cx(), agent.bottom(), tools.cx(), tools.top(), LINE, label='execute', fs=9)
+# ── arrows ─────────────────────────────────────
 
-# 4. Agent → Storage: save/load, passing through service-layer gap
+# 1. UI → Agent
+arrow(agent.cx(), 14.0, agent.cx(), agent.top(), 'user input')
+
+# 2. Agent ↔ LLM
+bidir(llm.cx(), agent.bottom(), llm.cx(), llm.top(), 'stream / response')
+
+# 3. Agent → Tools
+arrow(tools.cx(), agent.bottom(), tools.cx(), tools.top(), 'execute')
+
+# 4. Agent → Storage (through gap between LLM and Tools)
 mid_x = (llm.right() + tools.left()) / 2
-arrow(mid_x, agent.bottom(), mid_x, active.top(), LINE, label='save / load', fs=9, gap=0.2)
+arrow(mid_x, agent.bottom(), mid_x, active.top(), 'save / load', gap=0.2)
 
-# 5. Active → Historical: archive moves session rightward
-arrow(active.right(), active.cy(), historical.left(), historical.cy(), LINE, label='archive', fs=9, gap=0.08)
+# 5. Active → Historical
+arrow(active.right(), active.cy(), historical.left(), historical.cy(), 'archive', gap=0.08)
 
-# ═══════════════════════════════════════════════
-# LAYER BOUNDARIES (dashed)
-# ═══════════════════════════════════════════════
-def layer_box(x, y, w, h, label):
-    r = FancyBboxPatch((x, y), w, h, boxstyle='round,pad=0.2',
-                       facecolor='none', edgecolor=GRAY, lw=1.2, linestyle='--')
-    ax.add_patch(r)
-    ax.text(x + 0.2, y + h/2, label, color=GRAY, fontsize=9, fontstyle='italic',
-            va='center', rotation=90)
-
-layer_box(0.4, 12.7, 21.2, 2.0, 'Presentation')
-layer_box(0.4, 8.5,  21.2, 4.0, 'Application')
-layer_box(0.4, 3.5,  21.2, 4.8, 'Domain')
-layer_box(0.4, 0.7,  21.2, 2.8, 'Infrastructure')
-
-# ═══════════════════════════════════════════════
-# FOOTER
-# ═══════════════════════════════════════════════
-ax.text(10, 0.5, 'github.com/zisonzishen0415-stack/spica-cli  ·  MIT License',
+# ── footer ─────────────────────────────────────
+ax.text(11, 0.3, 'github.com/zisonzishen0415-stack/spica-cli  ·  MIT License',
         color=GRAY, fontsize=8, ha='center')
 
 plt.tight_layout(pad=0.5)
