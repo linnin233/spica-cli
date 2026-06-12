@@ -220,6 +220,12 @@ arrow(session.right(), session.cy(), subagent.left(), session.cy(), 'spawn', g=0
 # Interrupt → Sub-agents (interrupt signals to sub-agents)
 arrow(interrupt.right(), interrupt.cy(), subagent.left(), interrupt.cy(), 'abort', g=0.1)
 
+# Tools → Skills (skills extend tool capabilities)
+arrow(tools.right(), tools.cy(), skills.left(), tools.cy(), '', g=0.1)
+
+# Historical → Project State (project metadata stored alongside sessions)
+arrow(historical.right(), historical.cy(), project.left(), historical.cy(), '', g=0.1)
+
 # ═══════════════════════════════════════════════════════
 
 ax.text(11, 16.4, 'Spica CLI — System Architecture', color=TEXT, fontsize=18,
