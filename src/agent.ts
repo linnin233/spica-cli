@@ -1718,12 +1718,8 @@ export class SpicaAgent extends EventEmitter {
     messages.splice(sysCount, 0, summary);
     this.llm.setMessages(messages);
 
-    this.emit('context_compressed', {
-      before: messages.length - 1,
-      after: messages.length,
-      tokensBefore: 0,
-      tokensAfter: 0,
-    });
+    // Note: no 'context_compressed' emit here — Phase 1 truncation already reported
+    // the actual compression. Summary insertion is an internal detail (+1 message).
   }
 
   /**
