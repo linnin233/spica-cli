@@ -6,7 +6,6 @@ import {
   archiveSession,
   deleteSession,
   renameSession,
-  generateSessionSummary,
 } from '../../utils/session';
 import { clearInputQueue } from '../../cli/ui/queue';
 import type { SlashHandler } from './types';
@@ -27,42 +26,18 @@ export const sessionHandler: SlashHandler = async (args, ctx) => {
     const session = loadSession(workspacePath);
 
     if (session) {
-      let summary = session.summary;
-      let fallbackReason: string | undefined;
+      session.messages = currentMessages;
+      session.lastActivity = new Date().toISOString();
 
-      if (!summary) {
-        try {
-          const llm = ctx.agent.getLLM();
-          if (llm) {
-            const response = await llm.generateDirect(
-              `Summarize this coding session: ${generateSessionSummary(currentMessages)}`
-            );
-            summary = response.content || '';
-          }
-        } catch (err: unknown) {
-          fallbackReason = err instanceof Error ? err.message : String(err);
-        }
-      }
-
-      if (!summary) {
-        summary = generateSessionSummary(currentMessages);
-      }
-
-      session.summary = summary;
-      archiveSession(workspacePath, session);
+      const llm = ctx.agent.getLLM();
+      const summary = await archiveSession(workspacePath, session, llm || undefined);
 
       ctx.screen.appendScroll(
         COLORS.success(`\n[ARCHIVED] Saved ${currentMessages.length} messages\n`),
       );
       ctx.screen.appendScroll(COLORS.muted(`  ID: ${session.id}\n`));
       if (summary) {
-        if (fallbackReason) {
-          ctx.screen.appendScroll(COLORS.muted(`  Summary: ${summary}\n`));
-          ctx.screen.appendScroll(COLORS.warning(`  [!] LLM summarization failed: ${fallbackReason}\n`));
-          ctx.screen.appendScroll(COLORS.muted(`  Using local fallback instead.\n`));
-        } else {
-          ctx.screen.appendScroll(COLORS.muted(`  Summary: ${summary}\n`));
-        }
+        ctx.screen.appendScroll(COLORS.muted(`  Summary: ${summary}\n`));
       }
     }
 

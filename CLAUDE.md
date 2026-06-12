@@ -62,7 +62,8 @@ Note: Project is ESM (`"type": "module"` in package.json). Use `import`/`export`
 ├── hooks.json                 # Hook rules
 
 <project>/.spica/              # Project-specific
-├── session.json               # Current session messages
+├── session.json               # Current session messages (active)
+├── sessions/                  # Archived sessions (historical, one per session)
 ├── state.json                 # Project state (todos, checkpoints)
 ├── backups/                   # File backups before edits
 ├── tasks.json                 # Persisted task list
@@ -133,7 +134,7 @@ Returns `syntaxErrors` field if issues found.
 ### Sub-Agent Pattern
 
 `task` tool spawns parallel subagents:
-- Types: `explore` (30s, read-only), `review` (60s), `fix` (120s), `build` (180s, all tools)
+- Types: `explore` (90s, read-only), `review` (120s), `fix` (180s), `build` (300s, all tools)
 - Each subagent has tool whitelist per type
 - Max 3 concurrent tasks
 - Main agent handles failures (retry or take over)
@@ -175,6 +176,16 @@ Providers are configured in `~/.spica/config.json`. Any OpenAI-compatible API wo
 
 - **TUI mode** (default, interactive terminal): Full screen with scroll region, status bar, thinking animation, bracketed paste. Uses `src/cli/ui/`
 - **Simple mode** (`--no-tui` or non-TTY): Readline-based, plain text output. Same agent, simpler UI
+
+### Session & Archive (Two-State Model)
+
+`src/utils/session.ts` — manages session lifecycle:
+- **Active**: `session.json` holds current session with append-only full history
+- **Historical**: `sessions/<id>.json` — one file per archived session with summary
+- `saveSession()` writes only to `session.json` (active). Compression never touches `_fullHistory`.
+- `archiveSession()` moves active → historical, generates summary (LLM or local fallback).
+- `/archive`, `/clear`, `/reset`, `/new` all trigger archive if messages exist.
+- `/history` lists all archived sessions; `/view <id>` shows full content.
 
 ## Testing
 
@@ -225,7 +236,7 @@ Technical documentation:
 - `src/prompts/system.ts` - System prompt for LLM, builtin skills loading
 - `src/core/RuntimeState.ts` - Singleton session state (agent, processing, UI, interrupt)
 - `src/core/EventBus.ts` - Pub/sub event bus
-- `src/tools/index.ts` - 32 built-in tool definitions + executeTool dispatcher
+- `src/tools/index.ts` - 33 built-in tool definitions + executeTool dispatcher
 - `src/tools/subAgent.ts` - Sub-agent type configs (explore/review/fix/build)
 - `src/tools/codeHealth.ts` - Code health analysis tool
 - `src/tools/testQuality.ts` - Test quality analysis tool
@@ -236,7 +247,8 @@ Technical documentation:
 - `src/llm/providers/BaseProvider.ts` - Abstract LLM provider
 - `src/llm/providers/OpenAICompatible.ts` - Concrete OpenAI-compatible provider
 - `src/utils/settings.ts` - Provider config management, hooks config loading
-- `src/storage/projectState.ts` - Session persistence, project state
+- `src/storage/projectState.ts` - Project state (todos, decisions, phase)
+- `src/utils/session.ts` - Session persistence and archive (two-state model)
 - `src/storage/checkpointManager.ts` - File snapshot system (`.spica/snapshots/`)
 - `src/hooks/index.ts` - Tool interception hooks (PreToolUse/PostToolUse)
 - `src/skills/index.ts` - Skill loading and execution

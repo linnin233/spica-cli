@@ -1,7 +1,7 @@
 import { SpicaAgent } from "../agent";
 import { execSync } from "child_process";
 import { loadGlobalSettings, getProviderConfig, saveGlobalSettings, GLOBAL_SETTINGS_FILE } from "../utils/settings";
-import { loadSession, saveSession, archiveSession, listSessions, archiveSessionWithSummary, generateSessionSummary } from "../utils/session";
+import { loadSession, saveSession, archiveSession, listSessions } from "../utils/session";
 import { listSkills, installSkill, uninstallSkill, listInstalledPackages, saveSkill, deleteSkill, getSkill, buildSkillPrompt, parseSkillInput } from "../skills";
 import { listCheckpoints, getCheckpoint, restoreCheckpoint, cleanCheckpoints } from "../storage/checkpointManager";
 import { getMCPManager, generateExampleConfig, shutdownMCP } from "../mcp/client";
@@ -487,58 +487,17 @@ export async function runInteractiveMode(
                   session.messages = currentMessages;
                   session.lastActivity = new Date().toISOString();
 
-                  // 生成摘要（使用 LLM）
                   screen.appendScroll(COLORS.muted("\n[ARCHIVING] Generating summary...\n"));
 
-                  const { archiveSessionWithSummary, generateSessionSummary } = await import("../utils/session");
-                  let summary = '';
-                  let fallbackReason = '';
-
-                  // 尝试 LLM 摘要
-                  try {
-                    const llm = agent.getLLM();
-                    if (!llm) {
-                      fallbackReason = 'LLM not initialized';
-                    } else {
-                      const userMessages = currentMessages
-                        .filter(m => m.role === 'user')
-                        .map(m => m.content || '')
-                        .slice(0, 5);
-
-                      if (userMessages.length === 0) {
-                        fallbackReason = 'no user messages found';
-                      } else {
-                        const prompt = `Summarize this coding session in 50-100 words (Chinese or English). Focus on main tasks and files:\n\n${userMessages.join('\n')}`;
-                        const response = await llm.generateDirect(prompt);
-                        summary = response.content || '';
-                        if (!summary) {
-                          fallbackReason = 'LLM returned empty summary';
-                        }
-                      }
-                    }
-                  } catch (err: any) {
-                    fallbackReason = err?.message || String(err);
-                  }
-
-                  if (!summary) {
-                    summary = generateSessionSummary(currentMessages);
-                  }
-
-                  session.summary = summary;
-                  archiveSession(agent.getWorkspacePath(), session);
+                  const llm = agent.getLLM();
+                  const summary = await archiveSession(agent.getWorkspacePath(), session, llm || undefined);
 
                   screen.appendScroll(
                     COLORS.success(`\n[ARCHIVED] Saved ${currentMessages.length} messages\n`),
                   );
                   screen.appendScroll(COLORS.muted(`  ID: ${session.id}\n`));
                   if (summary) {
-                    if (fallbackReason) {
-                      screen.appendScroll(COLORS.muted(`  Summary: ${summary}\n`));
-                      screen.appendScroll(COLORS.warning(`  [!] LLM summarization failed: ${fallbackReason}\n`));
-                      screen.appendScroll(COLORS.muted(`  Using local fallback instead.\n`));
-                    } else {
-                      screen.appendScroll(COLORS.muted(`  Summary: ${summary}\n`));
-                    }
+                    screen.appendScroll(COLORS.muted(`  Summary: ${summary}\n`));
                   }
                 }
               }

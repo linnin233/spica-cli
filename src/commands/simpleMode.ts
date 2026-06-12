@@ -117,8 +117,11 @@ export async function runSimpleMode(agent: SpicaAgent, fresh?: boolean): Promise
             if (session) {
               session.messages = currentMessages;
               session.lastActivity = new Date().toISOString();
-              archiveSession(agent.getWorkspacePath(), session);
+              const summary = await archiveSession(agent.getWorkspacePath(), session);
               console.log(COLORS.success(`[ARCHIVED] Saved ${currentMessages.length} messages`));
+              if (summary) {
+                console.log(COLORS.muted(`  Summary: ${summary}`));
+              }
             }
           }
           agent.setMessages([]);

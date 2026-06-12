@@ -80,9 +80,6 @@ export function saveSession(
     };
 
     fs.writeJsonSync(join(spicaDir, 'session.json'), session, { spaces: 2 });
-
-    // Also save to sessions history (archive)
-    archiveSession(workspacePath, session);
   } catch {
     // 忽略保存错误
   }
@@ -92,21 +89,27 @@ export function saveSession(
 export function generateSessionSummary(messages: ChatMessage[]): string {
   if (messages.length === 0) return '';
 
-  // Extract actual user requests — skip skill prompts and system injections
+  // Extract actual user requests — skip skill prompts, system injections, emotional outbursts
   const userMessages = messages
     .filter(m => m.role === 'user')
     .map(m => (m.content || '').replace(/\n/g, ' ').trim())
     .filter(m => {
       if (m.length === 0) return false;
-      // Skip skill prompts (long markdown templates)
-      if (m.startsWith('#') || m.includes('## Overview')) return false;
+      // Skip injected skill prompts (long templates > 500 chars)
+      if (m.length > 500) return false;
+      // Skip messages starting with markdown headings or template markers
+      if (m.startsWith('#') || m.startsWith('##') || m.startsWith('<')) return false;
+      // Skip messages containing template section headers
+      if (/\b(Overview|Instructions|Guidelines|Prerequisites|Workflow)\b/i.test(m.slice(0, 100))) return false;
       // Skip system injections
       if (m.startsWith('[QUEUED') || m.startsWith('[SYSTEM]')) return false;
-      // Skip pure symbols like ？？？
-      if (/^[？?！!。.…]+$/.test(m)) return false;
+      // Skip pure symbols / emotional outbursts with no technical content
+      if (/^[？?！!。.…，,、\s]+$/.test(m)) return false;
+      // Skip emotional venting with no actionable content (short, question-heavy)
+      if (m.length < 80 && (m.includes('为什么') || m.includes('到底') || m.includes('怎么回事')) && !/[a-zA-Z_/.]+/.test(m)) return false;
       return true;
     })
-    .slice(0, 3);
+    .slice(0, 5);
 
   // Build a natural-language summary
   const parts: string[] = [];
@@ -116,7 +119,7 @@ export function generateSessionSummary(messages: ChatMessage[]): string {
     parts.push(cleaned.join('; '));
   }
 
-  // Add files modified
+  // Collect files modified
   const filePaths = new Set<string>();
   for (const m of messages) {
     if (m.toolCalls) {
@@ -129,8 +132,19 @@ export function generateSessionSummary(messages: ChatMessage[]): string {
     }
   }
 
+  // Try to extract the assistant's final conclusion (always last assistant message without tool calls)
+  const finalAssistantMsg = [...messages].reverse().find(
+    m => m.role === 'assistant' && !m.toolCalls && (m.content || '').trim().length > 0
+  );
+  if (finalAssistantMsg && parts.length === 0) {
+    // Use the first sentence of the final response as fallback summary
+    const firstSentence = (finalAssistantMsg.content || '').split(/[.。\n]/)[0].trim();
+    if (firstSentence.length > 10 && firstSentence.length < 200) {
+      parts.push(firstSentence);
+    }
+  }
+
   if (parts.length === 0 && filePaths.size === 0) {
-    // Nothing meaningful to summarize
     return `${messages.length} messages`;
   }
 
@@ -148,8 +162,9 @@ export function generateSessionSummary(messages: ChatMessage[]): string {
   return parts.join('. ').slice(0, 300);
 }
 
-// Archive session to sessions directory
-export async function archiveSessionWithSummary(
+// Archive session — moves active session to historical, generating a summary.
+// Uses LLM summary when an agent is provided; falls back to local extraction.
+export async function archiveSession(
   workspacePath: string,
   session: SessionState,
   agent?: { generateDirect: (prompt: string) => Promise<{ content?: string }> }
@@ -192,43 +207,6 @@ export async function archiveSessionWithSummary(
     return summary;
   } catch {
     return '';
-  }
-}
-
-// Archive session without LLM summary (simple version)
-export function archiveSession(workspacePath: string, session: SessionState): void {
-  try {
-    const sessionsDir = join(workspacePath, SESSIONS_DIR);
-    fs.ensureDirSync(sessionsDir);
-
-    const sessionPath = join(sessionsDir, `${session.id}.json`);
-
-    // Don't overwrite an existing archive with fewer messages
-    // (prevents saveSession from wiping /archive's LLM summary after clear)
-    if (fs.existsSync(sessionPath)) {
-      const existing = fs.readJsonSync(sessionPath);
-      const existingMsgs = existing.messages?.length || 0;
-      const newMsgs = session.messages?.length || 0;
-      if (existingMsgs > newMsgs) {
-        // Keep the richer archive — only update lastActivity
-        existing.lastActivity = session.lastActivity;
-        fs.writeJsonSync(sessionPath, existing, { spaces: 2 });
-        return;
-      }
-      // Preserve existing LLM summary if new one is empty
-      if (!session.summary && existing.summary) {
-        session.summary = existing.summary;
-      }
-    }
-
-    // Only generate simple summary if no LLM summary exists yet
-    if (!session.summary && session.messages?.length > 0) {
-      session.summary = generateSessionSummary(session.messages);
-    }
-
-    fs.writeJsonSync(sessionPath, session, { spaces: 2 });
-  } catch {
-    // 忽略归档错误
   }
 }
 

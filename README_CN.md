@@ -19,7 +19,7 @@
 ## 安装
 
 ```bash
-git clone https://github.com/wiliw/spica-cli
+git clone https://github.com/zisonzishen0415-stack/spica-cli
 cd spica-cli
 npm install && npm run build && npm link
 ```
@@ -49,6 +49,10 @@ spica run "fix the bug"                          # 单次任务
 - **Windows 兼容** — PowerShell 回退，跨平台 bin 脚本
 - **MCP 扩展** — Model Context Protocol 接入外部工具
 - **TUI** — 流式输出、思考动画、compact 模式、resize 处理
+
+## 架构
+
+![架构图](docs/architecture.png)
 
 ## 工具
 

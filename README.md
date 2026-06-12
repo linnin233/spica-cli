@@ -19,7 +19,7 @@ AI coding agent for the terminal. Write, edit, run commands — interactive or s
 ## Install
 
 ```bash
-git clone https://github.com/wiliw/spica-cli
+git clone https://github.com/zisonzishen0415-stack/spica-cli
 cd spica-cli
 npm install && npm run build && npm link
 ```
@@ -49,6 +49,10 @@ spica run "fix the bug"                          # single task
 - **Windows compatible** — PowerShell fallback, cross-platform bin scripts
 - **MCP extensible** — Model Context Protocol for external tools
 - **TUI** — streaming output, thinking animation, compact mode, resize handling
+
+## Architecture
+
+![Architecture](docs/architecture.png)
 
 ## Tools
 

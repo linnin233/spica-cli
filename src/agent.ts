@@ -21,7 +21,6 @@ import {
   loadProjectState,
   saveProjectState,
   updateProjectTodos,
-  saveProjectContext,
   ensureProjectDir,
 } from './storage/projectState';
 import { loadSession } from './utils/session';
@@ -1420,30 +1419,16 @@ export class SpicaAgent extends EventEmitter {
         this.emit('message', { role: 'assistant', content: assistantContent });
       }
 
-      if (this.llm) {
-        const allMessages = this.llm.getMessages();
-
-        // 结束时保存，只保留 user 和 assistant 消息，移除 toolCalls 防止 API 报错
-        const simplifiedMessages = allMessages
-          .filter(m => m.role === 'user' || m.role === 'assistant')
-          .map(m => ({
-            role: m.role,
-            content: m.content || '',
-          }));
-
-        saveProjectContext(this.workspacePath, simplifiedMessages);
-
-        if (this._todos.length > 0) {
-          const state = loadProjectState(this.workspacePath) || {
-            phase: 'unknown' as const,
-            todos: [],
-            decisions: [],
-            lastActivity: new Date().toISOString(),
-            recentFiles: [],
-          };
-          state.todos = this._todos;
-          saveProjectState(this.workspacePath, state);
-        }
+      if (this._todos.length > 0) {
+        const state = loadProjectState(this.workspacePath) || {
+          phase: 'unknown' as const,
+          todos: [],
+          decisions: [],
+          lastActivity: new Date().toISOString(),
+          recentFiles: [],
+        };
+        state.todos = this._todos;
+        saveProjectState(this.workspacePath, state);
       }
 
       return assistantContent;
