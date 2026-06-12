@@ -35,8 +35,19 @@ import { EventEmitter } from 'events';
 import simpleGit from 'simple-git';
 import type { ChatMessage } from './llm/providers/BaseProvider';
 
+// 解析向后兼容的工具别名
+function resolveAlias(toolName: string): string {
+  const ALIASES: Record<string, string> = {
+    'file_read': 'read',
+    'file_write': 'write',
+    'file_edit': 'edit',
+  };
+  return ALIASES[toolName] || toolName;
+}
+
 // 工具冲突检测：提取资源路径
 function extractResourcePath(toolName: string, args: Record<string, unknown>): string | null {
+  const resolved = resolveAlias(toolName);
   // 文件操作工具
   if (
     [
@@ -49,7 +60,7 @@ function extractResourcePath(toolName: string, args: Record<string, unknown>): s
       'file_move',
       'file_exists',
       'file_patch',
-    ].includes(toolName)
+    ].includes(resolved)
   ) {
     return (args.path || args.file_path || args.source || args.from) as string | null;
   }
@@ -186,6 +197,11 @@ export class SpicaAgent extends EventEmitter {
   // Full history — append-only, independent of LLM context compression
   // Used by getMessages() for session persistence. Never truncated by compression.
   private _fullHistory: ChatMessage[] = [];
+  // Track last synced index from provider to _fullHistory.
+  // Using index-based tracking instead of length comparison because cleanMessages()
+  // can reduce provider message count below _fullHistory.length, causing permanent
+  // desync where new user/assistant messages are never picked up.
+  private _lastSyncedProviderIndex: number = -1;
 
   // === Interrupt 机制（参考 Crush 设计）===
   // 当前活跃的 AbortController（每个请求独立）
@@ -722,6 +738,7 @@ export class SpicaAgent extends EventEmitter {
       // session.messages已经通过cleanMessages清理过了
       this.llm.setMessages(session.messages);
       this._fullHistory = [...session.messages];
+      this._lastSyncedProviderIndex = this.llm.getMessages().length - 1;
     }
 
     const projectState = loadProjectState(this.workspacePath);
@@ -796,6 +813,10 @@ export class SpicaAgent extends EventEmitter {
 
   setMessages(messages: ChatMessage[]) {
     this._fullHistory = [...messages];
+    // Reset sync tracker: assume all provider messages up to current count are synced.
+    // If the provider has fewer messages (due to cleaning), new messages will be
+    // picked up from (lastSyncedIndex + 1) regardless.
+    this._lastSyncedProviderIndex = this.llm ? this.llm.getMessages().length - 1 : messages.length - 1;
     if (this.llm) {
       // 保留系统提示词
       const currentMessages = this.llm.getMessages();
@@ -825,9 +846,14 @@ export class SpicaAgent extends EventEmitter {
   private syncFullHistory(): void {
     if (!this.llm) return;
     const providerMessages = this.llm.getMessages();
-    if (providerMessages.length > this._fullHistory.length) {
-      const newMessages = providerMessages.slice(this._fullHistory.length);
+    // Use index-based tracking: always sync from (lastSyncedIndex + 1).
+    // Length comparison is unreliable because cleanMessages() can shrink
+    // provider messages below _fullHistory.length, permanently preventing sync.
+    const startIdx = this._lastSyncedProviderIndex + 1;
+    if (startIdx < providerMessages.length) {
+      const newMessages = providerMessages.slice(startIdx);
       this._fullHistory.push(...newMessages);
+      this._lastSyncedProviderIndex = providerMessages.length - 1;
     }
   }
 
@@ -1077,13 +1103,13 @@ export class SpicaAgent extends EventEmitter {
         if (response.toolCalls && response.toolCalls.length > 0) {
           // Batch by hint: reads first (fully parallel), writes second (with conflict detection), neutrals last
           const readCalls = response.toolCalls.filter(
-            (tc: { name: string }) => getToolBatchHint(tc.name) === 'read'
+            (tc: { name: string }) => getToolBatchHint(resolveAlias(tc.name)) === 'read'
           );
           const writeCalls = response.toolCalls.filter(
-            (tc: { name: string }) => getToolBatchHint(tc.name) === 'write'
+            (tc: { name: string }) => getToolBatchHint(resolveAlias(tc.name)) === 'write'
           );
           const neutralCalls = response.toolCalls.filter(
-            (tc: { name: string }) => getToolBatchHint(tc.name) === 'neutral'
+            (tc: { name: string }) => getToolBatchHint(resolveAlias(tc.name)) === 'neutral'
           );
           // 执行单个工具的内部函数
           const executeSingleTool = async (tc: {
@@ -1120,13 +1146,7 @@ export class SpicaAgent extends EventEmitter {
             }
 
             // 工具白名单检查（先解析别名，确保旧名称也能通过白名单）
-            // TOOL_ALIASES 与 execute.ts 保持同步，用于向后兼容
-            const TOOL_ALIASES: Record<string, string> = {
-              'file_read': 'read',
-              'file_write': 'write',
-              'file_edit': 'edit',
-            };
-            const resolvedName = TOOL_ALIASES[tc.name] || tc.name;
+            const resolvedName = resolveAlias(tc.name);
 
             if (this.toolWhitelist && !this.toolWhitelist.includes(resolvedName)) {
               this.emit('tool_result', {
@@ -1455,6 +1475,7 @@ export class SpicaAgent extends EventEmitter {
       this.llm.setMessages([]);
     }
     this._fullHistory = [];
+    this._lastSyncedProviderIndex = -1;
 
     // 发送workspace变更事件
     this.emit('workspace_changed', { path: newPath });
