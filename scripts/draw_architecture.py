@@ -1,188 +1,218 @@
 #!/usr/bin/env python3
-"""Spica CLI architecture — larger fonts, same layout."""
+"""Spica CLI — academic-style system block diagram."""
 
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from matplotlib.patches import FancyBboxPatch
+from matplotlib.patches import Rectangle, FancyBboxPatch, FancyArrowPatch
+import matplotlib.patches as mpatches
 
-fig, ax = plt.subplots(figsize=(32, 26))
-ax.set_xlim(0, 32)
-ax.set_ylim(0, 26)
+fig, ax = plt.subplots(figsize=(20, 16))
+ax.set_xlim(0, 20)
+ax.set_ylim(0, 16)
 ax.set_aspect('equal')
 ax.axis('off')
 
-BG   = '#0d1117'
-W    = '#c9d1d9'
-M    = '#8b949e'
-BLU  = '#58a6ff'
-GRN  = '#3fb950'
-YLW  = '#d29922'
-PNK  = '#f778ba'
-PUR  = '#bc8cff'
-TITLE_C = '#f0f6fc'
+# Academic palette: white bg, black lines, muted fills
+BG   = '#ffffff'
+BOX  = '#f5f5f5'
+BOX2 = '#e8f0fe'
+BOX3 = '#e6f4ea'
+BOX4 = '#fef7e0'
+BOX5 = '#fce4ec'
+LINE = '#333333'
+TEXT = '#222222'
+GRAY = '#666666'
 
 fig.set_facecolor(BG)
 ax.set_facecolor(BG)
 
-def draw_region(x, y, w, h, label, color, fs=16):
-    r = FancyBboxPatch((x, y), w, h, boxstyle="round,pad=0.4",
-                       facecolor=color, edgecolor=color, alpha=0.04,
-                       linewidth=1.5, linestyle='--')
+# ═══════════════════════════════════════════════
+# HELPERS
+# ═══════════════════════════════════════════════
+
+class Box:
+    """A labeled block. Coordinates are (left, bottom, width, height)."""
+    def __init__(self, x, y, w, h, label, color=BOX, fontsize=10, bold=False):
+        self.x, self.y, self.w, self.h = x, y, w, h
+        r = FancyBboxPatch((x, y), w, h, boxstyle='round,pad=0.1',
+                           facecolor=color, edgecolor=LINE, lw=1.5)
+        ax.add_patch(r)
+        wt = 'bold' if bold else 'normal'
+        ax.text(x + w/2, y + h/2, label, color=TEXT, fontsize=fontsize,
+                ha='center', va='center', fontweight=wt)
+
+    def top(self):    return self.y + self.h
+    def bottom(self): return self.y
+    def left(self):   return self.x
+    def right(self):  return self.x + self.w
+    def cx(self):     return self.x + self.w/2
+    def cy(self):     return self.y + self.h/2
+
+def arrow(b1, b2, style='->', dir='down', color=LINE, lw=1.5, label='', fs=9):
+    """Draw arrow between two Box objects."""
+    if dir == 'down':
+        y1, y2 = b1.bottom(), b2.top()
+        x1 = x2 = b1.cx()
+    elif dir == 'up':
+        y1, y2 = b1.top(), b2.bottom()
+        x1 = x2 = b1.cx()
+    elif dir == 'right':
+        x1, x2 = b1.right(), b2.left()
+        y1 = y2 = b1.cy()
+    elif dir == 'left':
+        x1, x2 = b1.left(), b2.right()
+        y1 = y2 = b1.cy()
+    else:
+        return
+
+    if style == '<->':
+        ax.annotate('', xy=(x2, y2), xytext=(x1, y1),
+                    arrowprops=dict(arrowstyle='<->', color=color, lw=lw))
+    else:
+        ax.annotate('', xy=(x2, y2), xytext=(x1, y1),
+                    arrowprops=dict(arrowstyle='->', color=color, lw=lw))
+
+    if label:
+        mx, my = (x1+x2)/2, (y1+y2)/2
+        ax.text(mx + 0.2, my, label, color=GRAY, fontsize=fs, ha='left', va='center')
+
+# ═══════════════════════════════════════════════
+# TITLE
+# ═══════════════════════════════════════════════
+ax.text(10, 15.5, 'Spica CLI — System Architecture', color=TEXT, fontsize=18,
+        ha='center', fontweight='bold')
+ax.text(10, 15.1, 'AI Coding Agent  ·  Node.js + TypeScript  ·  Event-Driven',
+        color=GRAY, fontsize=10, ha='center')
+
+# ═══════════════════════════════════════════════
+# LAYER 1 — USER INTERFACE  (y~13.0..14.6)
+# ═══════════════════════════════════════════════
+ui_y = 13.0
+ui_h = 1.4
+
+tui    = Box(0.8, ui_y, 3.2, ui_h, 'TUI Mode\nfull-screen, streaming', BOX2, 9)
+simple = Box(4.4, ui_y, 3.2, ui_h, 'Simple Mode\nreadline, --no-tui', BOX2, 9)
+cmds   = Box(8.0, ui_y, 4.8, ui_h, 'CLI Commands\n/archive /history /compact /checkpoint\n/skill /mcp /status /init', BOX2, 8)
+iqueue = Box(13.2, ui_y, 3.0, ui_h, 'Input Queue\nbuffers, auto-drains', BOX, 9)
+uicomp = Box(16.6, ui_y, 2.6, ui_h, 'UI\nspinner, diff,\nscrollback', BOX, 9)
+
+# ═══════════════════════════════════════════════
+# LAYER 2 — CORE AGENT  (y~9.0..12.2)
+# ═══════════════════════════════════════════════
+agent_y = 9.0
+agent_h = 3.0
+
+agent = Box(0.8, agent_y, 9.5, agent_h,
+            'SpicaAgent  (EventEmitter)\n\n'
+            'processInput()  ·  runLoop()  ·  executeTools()  ·  compact()\n'
+            '_fullHistory: append-only, never truncated\n'
+            'provider.messages: LLM context, compressible',
+            BOX3, 9)
+
+events = Box(10.7, 10.5, 3.0, 1.3,
+             'Events\ntool_call / tool_result\nmessage / interrupt / done', BOX, 8)
+
+interrupt = Box(14.1, 10.5, 2.8, 1.3,
+                'Interrupt\nAbortController\ncancelSeq', BOX, 8)
+
+session = Box(10.7, 9.0, 6.2, 1.2,
+              'Session & Archive  (two-state model)\n'
+              'saveSession() → session.json (active)    ·    archiveSession() → sessions/<id>.json (historical)',
+              BOX, 8, bold=False)
+
+subagent = Box(17.3, 9.6, 2.0, 2.2,
+               'Sub-Agents\nexplore\nreview\nfix\nbuild', BOX, 8)
+
+# ═══════════════════════════════════════════════
+# LAYER 3 — SERVICES  (y~4.0..8.2)
+# ═══════════════════════════════════════════════
+svc_y = 4.0
+svc_h = 4.0
+
+llm = Box(0.8, svc_y, 5.5, svc_h,
+          'LLMClient\n\nOpenAI-compatible streaming\n'
+          'Providers: OpenAI, Anthropic,\nDeepSeek, Gemini, Groq\n'
+          'RateLimiter  ·  TokenCounter\nFunctionCaller',
+          BOX4, 8)
+
+tools = Box(6.7, svc_y, 6.0, svc_h,
+            'Tool System  (33 built-in + MCP)\n\n'
+            'file: read, write, edit, multi_edit\n'
+            'shell: bash, git\n'
+            'search: grep, glob, find, list\n'
+            'code: lint, test, code_health\n'
+            'sub_agent  ·  syntax-check',
+            BOX4, 8)
+
+skills = Box(13.1, svc_y, 6.1, svc_h,
+             'Skills & Hooks\n\n'
+             '14 built-in skills\nbrainstorming, TDD, debugging,\ncode-review, git-worktrees\n\n'
+             'Hooks: PreToolUse / PostToolUse\nnone < warn < confirm < block',
+             BOX4, 8)
+
+# ═══════════════════════════════════════════════
+# LAYER 4 — STORAGE  (y~1.0..3.2)
+# ═══════════════════════════════════════════════
+sto_y = 1.0
+sto_h = 2.2
+
+global_cfg = Box(0.8, sto_y, 4.5, sto_h,
+                 'Global Config\n~/.spica/\nconfig.json  ·  skills.json\nmcp.json  ·  hooks.json', BOX5, 8)
+
+active = Box(5.7, sto_y, 4.5, sto_h,
+             'Active Session\n.spica/session.json\nappend-only full history\nnever truncated', BOX5, 8, bold=True)
+
+historical = Box(10.6, sto_y, 4.5, sto_h,
+                 'Historical Sessions\n.spica/sessions/<id>.json\none per archived session\nwith summary', BOX5, 8)
+
+project = Box(15.5, sto_y, 3.7, sto_h,
+              'Project State\n.spica/\nstate.json\nsnapshots/\nbackups/\ntasks.json', BOX5, 8)
+
+# ═══════════════════════════════════════════════
+# ARROWS — data flow
+# ═══════════════════════════════════════════════
+
+# UI → Agent
+arrow(tui, agent, dir='down', label='user input')
+
+# Agent ↔ LLM (bidirectional)
+arrow(agent, llm, dir='down', style='<->', label='stream / response')
+
+# Agent → Tools
+arrow(agent, tools, dir='down', label='execute')
+
+# Agent → Storage
+arrow(agent, active, dir='down', label='save/load')
+
+# Storage: active → historical (archive)
+arrow(active, historical, dir='right', label='archive')
+
+# Agent events → UI
+arrow(events, uicomp, dir='up', label='events')
+
+# ═══════════════════════════════════════════════
+# LAYER BOUNDARIES (dashed)
+# ═══════════════════════════════════════════════
+def layer_box(x, y, w, h, label):
+    r = FancyBboxPatch((x, y), w, h, boxstyle='round,pad=0.2',
+                       facecolor='none', edgecolor=GRAY, lw=1.2, linestyle='--')
     ax.add_patch(r)
-    ax.text(x + 0.5, y + h - 0.7, label, color=color, fontsize=fs,
-            fontweight='bold')
+    ax.text(x + 0.15, y + h - 0.25, label, color=GRAY, fontsize=9, fontstyle='italic')
 
-def draw_solid_box(x, y, w, h, color, text, fs=13):
-    r = FancyBboxPatch((x, y), w, h, boxstyle="round,pad=0.2",
-                       facecolor=color, edgecolor=color, alpha=0.85, lw=1.8)
-    ax.add_patch(r)
-    lines = text.split('\n')
-    line_h = min(0.85, (h - 0.6) / max(len(lines), 1))
-    cy = y + h/2 + (len(lines) - 1) * line_h / 2
-    for line in lines:
-        ax.text(x + w/2, cy, line, color='white', fontsize=fs,
-                ha='center', va='center', fontweight='bold')
-        cy -= line_h
+layer_box(0.3, 12.7, 19.4, 2.0, 'Presentation')
+layer_box(0.3, 8.7,  19.4, 3.6, 'Application')
+layer_box(0.3, 3.7,  19.4, 4.5, 'Domain')
+layer_box(0.3, 0.7,  19.4, 2.8, 'Infrastructure')
 
-def draw_box(x, y, w, h, color, text, fs=13, alpha=0.12):
-    r = FancyBboxPatch((x, y), w, h, boxstyle="round,pad=0.2",
-                       facecolor=color, edgecolor=color, alpha=alpha, lw=1.8)
-    ax.add_patch(r)
-    lines = text.split('\n')
-    line_h = min(0.75, (h - 0.6) / max(len(lines), 1))
-    cy = y + h/2 + (len(lines) - 1) * line_h / 2
-    for line in lines:
-        ax.text(x + w/2, cy, line, color=W, fontsize=fs,
-                ha='center', va='center')
-        cy -= line_h
+# ═══════════════════════════════════════════════
+# FOOTER
+# ═══════════════════════════════════════════════
+ax.text(10, 0.5, 'github.com/zisonzishen0415-stack/spica-cli  ·  MIT License',
+        color=GRAY, fontsize=8, ha='center')
 
-def arrow(x1, y1, x2, y2, c=M, lw=3.5):
-    ax.annotate('', xy=(x2, y2), xytext=(x1, y1),
-                arrowprops=dict(arrowstyle='-|>', color=c, lw=lw,
-                               connectionstyle='arc3,rad=0'))
-
-# ── TITLE ──
-ax.text(16, 25.2, 'Spica CLI — System Architecture', color=TITLE_C, fontsize=30,
-        ha='center', va='center', fontweight='bold')
-ax.text(16, 24.5, 'AI Coding Agent  |  Node.js + TypeScript  |  ESM', color=M,
-        fontsize=14, ha='center', va='center')
-
-# ═══ LAYER 1: USER INTERFACE  y=19.5..24.0  h=4.5 ═══
-draw_region(0.5, 19.5, 31.0, 4.5, 'USER INTERFACE', BLU, fs=16)
-
-draw_solid_box(1.5, 20.2, 6.0, 2.8, BLU,
-               'TUI Mode\nfull screen\nbracketed paste', fs=13)
-
-draw_solid_box(8.3, 20.2, 6.0, 2.8, BLU,
-               'Simple Mode\n--no-tui\nreadline', fs=13)
-
-draw_solid_box(15.1, 20.2, 6.5, 2.8, BLU,
-               'CLI Commands\n/archive /history\n/compact /checkpoint\n/skill /mcp /status', fs=12)
-
-draw_box(22.5, 20.8, 4.5, 2.0, BLU,
-         'Input Queue\nmax 50, merge on drain', fs=13)
-
-draw_box(27.8, 20.8, 3.5, 2.0, BLU,
-         'UI Components\nspinner, diff\nscrollback', fs=13)
-
-# ═══ LAYER 2: CORE AGENT  y=12.0..19.0  h=7.0 ═══
-draw_region(0.5, 12.0, 24.3, 7.0, 'CORE — SpicaAgent Orchestrator', GRN, fs=16)
-
-draw_solid_box(1.8, 13.8, 9.5, 4.2, GRN,
-               'SpicaAgent\nEventEmitter-based\n\nprocessInput()  runLoop()\nexecuteTools()  compact()\ninterrupt()  setMessages()\n\n_fullHistory (append-only)\nprovider.messages (context)', fs=13)
-
-draw_box(12.8, 15.5, 4.5, 2.8, GRN,
-         'Events\ntool_call\ntool_result\nmessage\nreasoning\ninterrupt / done\ncontext_compressed', fs=12)
-
-draw_box(18.0, 16.2, 4.0, 2.0, GRN,
-         'Interrupt\nAbortController\ncancelSeq pattern', fs=12)
-
-draw_box(12.8, 12.5, 9.2, 2.5, PUR,
-         'Session & Archive\ntwo-state model\nsaveSession() → session.json (active)\narchiveSession() → sessions/<id>.json (historical)\nappend-only history, never truncated', fs=12, alpha=0.18)
-
-draw_box(25.2, 17.6, 3.2, 2.0, GRN,
-         'Sub-Agents\nexplore / review\nfix / build', fs=12)
-
-draw_box(25.2, 15.2, 3.2, 2.0, GRN,
-         'Compaction\n/compact\ncompressToTarget()', fs=12)
-
-draw_box(25.2, 13.0, 3.2, 1.7, GRN,
-         'Tool Conflict\nDetector', fs=12)
-
-# ═══ LAYER 3: SERVICES  y=4.0..11.5  h=7.5 ═══
-draw_region(0.5, 4.0, 24.3, 7.5, 'SERVICES', YLW, fs=16)
-
-draw_solid_box(1.5, 8.0, 8.0, 3.2, YLW,
-               'LLMClient\nOpenAI-compatible streaming\n\nFunctionCaller (tool dispatch)\nRateLimiter (req/tok per min)\nTokenCounter (context est.)', fs=13)
-
-draw_box(10.5, 9.2, 5.5, 2.0, YLW,
-         'Providers\nOpenAI / Anthropic\nDeepSeek / Gemini\nTogether AI / Groq', fs=12)
-
-draw_solid_box(1.5, 4.5, 8.0, 3.0, YLW,
-               'Tools (33 built-in)\nfile: read, write, edit\nshell: bash, git\nsearch: grep, glob\ncode: lint, test, code_health\nsub_agent (explore/review/fix/build)', fs=12)
-
-draw_box(10.5, 5.8, 5.5, 2.0, YLW,
-         'MCP Client\nModel Context Protocol\nexternal tool servers\nstdio / HTTP', fs=12)
-
-draw_box(17.0, 9.2, 6.0, 2.0, YLW,
-         'Hooks System\nPreToolUse / PostToolUse\nnone < warn < confirm < block\nglobal hooks take precedence', fs=12)
-
-draw_box(17.0, 6.8, 6.0, 2.0, YLW,
-         'Skills (14 built-in)\nbrainstorming, TDD\nsystematic-debugging\ngit-worktrees, code-review', fs=12)
-
-draw_box(17.0, 4.5, 6.0, 1.6, YLW,
-         'RuntimeState (Singleton)\n+ EventBus (pub/sub)', fs=12)
-
-draw_box(10.5, 4.5, 5.5, 0.8, YLW,
-         'Checkpoints  .spica/snapshots/', fs=11)
-
-# ═══ LAYER 4: STORAGE (right column)  y=4.0..11.5 ═══
-draw_region(25.2, 4.0, 6.3, 7.5, 'STORAGE', PNK, fs=16)
-
-draw_solid_box(25.8, 9.5, 5.0, 1.7, PNK,
-               '~/.spica/\nconfig.json  skills.json\nmcp.json  hooks.json', fs=12)
-
-draw_solid_box(25.8, 7.5, 5.0, 1.6, PNK,
-               'Active Session\n.spica/session.json\nappend-only full history', fs=12)
-
-draw_solid_box(25.8, 5.8, 5.0, 1.3, PNK,
-               'Historical Sessions\n.spica/sessions/<id>.json', fs=12)
-
-draw_box(25.8, 4.5, 5.0, 0.9, PNK,
-         'Project State  .spica/state.json', fs=12)
-
-# ═══ ARROWS — main data flow (left to right, top to bottom) ═══
-
-# 1. User Input → Agent (downward)
-arrow(5.5, 21.5, 5.5, 18.3, BLU)
-ax.text(7.8, 20.0, 'user\ninput', color=BLU, fontsize=12, ha='center')
-
-# 2. Agent → LLM: stream() request (down-left)
-arrow(3.5, 13.5, 3.5, 11.5, GRN)
-ax.text(2.3, 12.5, 'stream()', color=GRN, fontsize=11, ha='center')
-
-# 3. LLM → Agent: returns text or tool_calls (up-right)
-arrow(8.0, 11.5, 8.0, 13.5, YLW)
-ax.text(9.3, 12.5, 'response /\ntool_calls', color=YLW, fontsize=11, ha='center')
-
-# 4. Agent → Tools: execute (downward)
-arrow(11.0, 13.0, 5.0, 8.0, GRN)
-ax.text(8.0, 10.8, 'execute\ntools', color=GRN, fontsize=11, ha='center')
-
-# 5. Agent → Storage: save/load (rightward)
-arrow(22.0, 14.5, 25.6, 14.5, GRN)
-ax.text(23.8, 14.9, 'save / load', color=GRN, fontsize=11, ha='center')
-
-# 6. Agent events → UI display (upward)
-arrow(20.0, 14.0, 20.0, 20.5, M)
-ax.text(21.5, 17.5, 'events\n→ UI', color=M, fontsize=11, ha='center')
-
-ax.text(16, 0.3, 'github.com/zisonzishen0415-stack/spica-cli  •  MIT License', color=M,
-        fontsize=10, ha='center', va='center')
-
-plt.tight_layout(pad=0.3)
-plt.savefig('/home/zison/development/spica/spica-cli/docs/architecture.png', dpi=150,
-            facecolor=BG, bbox_inches='tight', pad_inches=0.3)
+plt.tight_layout(pad=0.5)
+plt.savefig('/home/zison/development/spica/spica-cli/docs/architecture.png', dpi=200,
+            facecolor=BG, bbox_inches='tight', pad_inches=0.5)
 plt.close()
 print('Done')
