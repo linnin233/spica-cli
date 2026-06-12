@@ -57,9 +57,9 @@ def draw_box(x, y, w, h, color, text, fs=13, alpha=0.12):
                 ha='center', va='center')
         cy -= line_h
 
-def arrow(x1, y1, x2, y2, c=M, lw=2.0):
+def arrow(x1, y1, x2, y2, c=M, lw=3.5):
     ax.annotate('', xy=(x2, y2), xytext=(x1, y1),
-                arrowprops=dict(arrowstyle='->', color=c, lw=lw,
+                arrowprops=dict(arrowstyle='-|>', color=c, lw=lw,
                                connectionstyle='arc3,rad=0'))
 
 # ── TITLE ──
