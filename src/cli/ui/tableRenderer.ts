@@ -39,7 +39,8 @@ function detectAndParseTable(lines: string[], startIdx: number): ParsedTable | n
   // Remove leading empty cell (before first |) and trailing empty cell (after last |)
   const cleanHeader = headerCells.filter((_, i, arr) => {
     if (i === 0 && headerLine.trimStart().startsWith('|') && arr[0] === '') return false;
-    if (i === arr.length - 1 && headerLine.trimEnd().endsWith('|') && arr[arr.length - 1] === '') return false;
+    if (i === arr.length - 1 && headerLine.trimEnd().endsWith('|') && arr[arr.length - 1] === '')
+      return false;
     return true;
   });
 
@@ -66,7 +67,8 @@ function detectAndParseTable(lines: string[], startIdx: number): ParsedTable | n
     // Trim leading/trailing empty cells like header
     const cleanRow = rowCells.filter((_, i, arr) => {
       if (i === 0 && rowLine.trimStart().startsWith('|') && arr[0] === '') return false;
-      if (i === arr.length - 1 && rowLine.trimEnd().endsWith('|') && arr[arr.length - 1] === '') return false;
+      if (i === arr.length - 1 && rowLine.trimEnd().endsWith('|') && arr[arr.length - 1] === '')
+        return false;
       return true;
     });
     rows.push(cleanRow);
@@ -139,9 +141,7 @@ function renderTable(table: ParsedTable): string {
 
   // Data rows
   for (const row of table.rows) {
-    const cells = row.map((cell, i) =>
-      padCell(cell, colWidths[i], table.alignments[i] || 'left')
-    );
+    const cells = row.map((cell, i) => padCell(cell, colWidths[i], table.alignments[i] || 'left'));
     lines.push(cells.join(COLORS.muted(SEP)));
   }
 

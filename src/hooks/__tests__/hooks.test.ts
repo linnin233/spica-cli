@@ -130,9 +130,7 @@ describe('Hooks System Integration', () => {
     it('should define PreToolUse hooks', () => {
       const config = {
         hooks: {
-          PreToolUse: [
-            { matcher: { tool: 'test' }, action: 'warn', message: 'Test' },
-          ],
+          PreToolUse: [{ matcher: { tool: 'test' }, action: 'warn', message: 'Test' }],
         },
       };
       expect(config.hooks.PreToolUse).toBeDefined();
@@ -142,9 +140,7 @@ describe('Hooks System Integration', () => {
     it('should define PostToolUse hooks', () => {
       const config = {
         hooks: {
-          PostToolUse: [
-            { matcher: { tool: 'test' }, message: 'Done' },
-          ],
+          PostToolUse: [{ matcher: { tool: 'test' }, message: 'Done' }],
         },
       };
       expect(config.hooks.PostToolUse).toBeDefined();
@@ -152,13 +148,14 @@ describe('Hooks System Integration', () => {
     });
 
     it('should merge global and project hooks', () => {
-      const globalHooks = { PreToolUse: [{ matcher: { tool: 'global' }, action: 'warn', message: 'G' }] };
-      const projectHooks = { PreToolUse: [{ matcher: { tool: 'project' }, action: 'block', message: 'P' }] };
+      const globalHooks = {
+        PreToolUse: [{ matcher: { tool: 'global' }, action: 'warn', message: 'G' }],
+      };
+      const projectHooks = {
+        PreToolUse: [{ matcher: { tool: 'project' }, action: 'block', message: 'P' }],
+      };
       const merged = {
-        PreToolUse: [
-          ...(globalHooks.PreToolUse || []),
-          ...(projectHooks.PreToolUse || []),
-        ],
+        PreToolUse: [...(globalHooks.PreToolUse || []), ...(projectHooks.PreToolUse || [])],
       };
       expect(merged.PreToolUse?.length).toBe(2);
     });

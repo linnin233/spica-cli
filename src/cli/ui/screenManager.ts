@@ -2,6 +2,7 @@ import { isFullWidth } from './stringWidth';
 import { COLORS } from './colors';
 import { getScrollbackBuffer, ScrollbackBuffer } from './scrollbackBuffer';
 import { renderMarkdownTables } from './tableRenderer';
+import { ansiStrip, ansiClean } from './ansiFilter';
 
 const ESC = '\x1b';
 
@@ -109,7 +110,7 @@ export class ScreenManager {
     if (codePoint < 32 || codePoint === 127 || (codePoint >= 128 && codePoint <= 159)) return 0;
 
     // Emoji 和其他复杂 grapheme cluster 宽度为 2
-    if (char.length > 1 || codePoint > 0xFFFF) return 2;
+    if (char.length > 1 || codePoint > 0xffff) return 2;
 
     if (isFullWidth(char)) return 2;
     return 1;
@@ -197,8 +198,8 @@ export class ScreenManager {
 
   // 直接输出（用于工具调用、thinking等非流式内容）
   appendScroll(text: string): void {
-    // 保存原始文本到历史缓冲区
-    this.state.scrollbackBuffer.append(text);
+    // 保存清洗后文本到历史缓冲区（strip ANSI for resize replay）
+    this.state.scrollbackBuffer.append(ansiClean(text));
 
     // 渲染 markdown 表格为 ANSI 对齐列
     const displayText = renderMarkdownTables(text);
@@ -223,8 +224,8 @@ export class ScreenManager {
   private tableLineBuffer: string[] = [];
 
   appendStreamChunk(text: string): void {
-    // 保存原始文本到历史缓冲区
-    this.state.scrollbackBuffer.append(text);
+    // 保存清洗后文本到历史缓冲区（strip ANSI for resize replay）
+    this.state.scrollbackBuffer.append(ansiClean(text));
 
     // 添加到流式缓冲
     this.streamBuffer += text;
@@ -250,8 +251,7 @@ export class ScreenManager {
   // 分隔行检测：|---|---|
   private isTableSepLine(line: string): boolean {
     const trimmed = line.trim();
-    return /^\|[\s:]*-{3,}[\s:]*\|/.test(trimmed) ||
-           /^\|[\s:]*-{3,}[\s:]*[\|:]/.test(trimmed);
+    return /^\|[\s:]*-{3,}[\s:]*\|/.test(trimmed) || /^\|[\s:]*-{3,}[\s:]*[\|:]/.test(trimmed);
   }
 
   private processStreamLine(line: string): void {
@@ -359,7 +359,8 @@ export class ScreenManager {
 
     // 定时更新动画帧
     this.thinkingAnimationTimer = setInterval(() => {
-      this.thinkingAnimationFrame = (this.thinkingAnimationFrame + 1) % this.thinkingAnimationFrames.length;
+      this.thinkingAnimationFrame =
+        (this.thinkingAnimationFrame + 1) % this.thinkingAnimationFrames.length;
       this.showThinkingFrame();
     }, 100);
   }
@@ -418,7 +419,7 @@ export class ScreenManager {
 
     const inputStartRow = this.state.statusRow + 1;
     const inputEndRow = this.state.terminalHeight;
-    
+
     // 清空输入区域
     for (let row = inputStartRow; row <= inputEndRow; row++) {
       writeStdout(`${ESC}[${row};1H${ESC}[2K`);
@@ -496,7 +497,7 @@ export class ScreenManager {
     // 边界情况：当 cursorDisplayWidth 正好是 width 的倍数时，光标在行末
     let physicalLinesInCurrentBeforeCursor: number;
     let cursorCol: number;
-    
+
     if (cursorDisplayWidth > 0 && cursorDisplayWidth % width === 0) {
       // 光标正好在行边界，应该在当前行的末尾
       physicalLinesInCurrentBeforeCursor = Math.floor(cursorDisplayWidth / width) - 1;
@@ -618,8 +619,8 @@ export class ScreenManager {
       if (this.state.cursorCol > 0) {
         const line = this.state.inputBuffer[0];
         const graphemes = line.match(/\P{M}\p{M}*/gu) || [];
-        this.state.inputBuffer[0] = 
-          graphemes.slice(0, this.state.cursorCol - 1).join('') + 
+        this.state.inputBuffer[0] =
+          graphemes.slice(0, this.state.cursorCol - 1).join('') +
           graphemes.slice(this.state.cursorCol).join('');
         this.state.cursorCol--;
         this.refreshInput();
@@ -642,9 +643,9 @@ export class ScreenManager {
     const line = this.state.inputBuffer[0];
     const graphemes = line.match(/\P{M}\p{M}*/gu) || [];
     const dataGraphemes = data.match(/\P{M}\p{M}*/gu) || [];
-    this.state.inputBuffer[0] = 
-      graphemes.slice(0, this.state.cursorCol).join('') + 
-      data + 
+    this.state.inputBuffer[0] =
+      graphemes.slice(0, this.state.cursorCol).join('') +
+      data +
       graphemes.slice(this.state.cursorCol).join('');
     this.state.cursorCol += dataGraphemes.length;
     this.updateLayout();
@@ -664,15 +665,15 @@ export class ScreenManager {
 
     const line = this.state.inputBuffer[0];
     const graphemes = line.match(/\P{M}\p{M}*/gu) || [];
-    
+
     if (seq === `${ESC}[C`) {
       if (this.state.cursorCol < graphemes.length) this.state.cursorCol++;
     } else if (seq === `${ESC}[D`) {
       if (this.state.cursorCol > 0) this.state.cursorCol--;
     } else if (seq === `${ESC}[3~`) {
       if (this.state.cursorCol < graphemes.length) {
-        this.state.inputBuffer[0] = 
-          graphemes.slice(0, this.state.cursorCol).join('') + 
+        this.state.inputBuffer[0] =
+          graphemes.slice(0, this.state.cursorCol).join('') +
           graphemes.slice(this.state.cursorCol + 1).join('');
       }
     }
@@ -728,18 +729,9 @@ export class ScreenManager {
     this.restoreCursor();
   }
 
-  // Strip bracketed paste markers AND any embedded ANSI escape sequences
-  // from pasted content. ANSI codes (CSI/OSC) can end up in clipboard when
-  // copying from terminals or IDEs; if not stripped they introduce invisible
-  // characters that throw off cursor positioning.
+  // Strip ANSI escape sequences from pasted content — delegates to ansiFilter.
   private cleanPastedContent(data: string): string {
-    // eslint-disable-next-line no-control-regex
-    return data
-      .replace(/\x1b\[200~/g, '')   // bracketed paste start
-      .replace(/\x1b\[201~/g, '')   // bracketed paste end
-      .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')  // CSI: colors, cursor moves (incl. ?25l/h), etc.
-      .replace(/\x1b\][^\x07]*\x07/g, '')     // OSC: title, link, etc.
-      .replace(/\x1b[PX^_][^\x1b]*\x1b\\/g, ''); // Other escape sequences
+    return ansiStrip(data);
   }
 
   getContent(): string {

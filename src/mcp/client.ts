@@ -5,10 +5,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { EventEmitter } from 'events';
-import {
-  MCPServerConfig,
-  loadGlobalSettings,
-} from '../utils/settings';
+import { MCPServerConfig, loadGlobalSettings } from '../utils/settings';
 
 // MCPTool 定义（仅在本模块使用）
 export interface MCPTool {
@@ -74,9 +71,8 @@ export class MCPManager extends EventEmitter {
         command: config.command,
         args: config.args || [],
         env: { ...safeEnv, ...config.env } as Record<string, string>,
-        stderr: 'pipe',  // 捕获stderr
+        stderr: 'pipe', // 捕获stderr
       });
-
     } else if (config.url) {
       // SSE模式 - HTTP连接，支持自定义 headers (OAuth token 等)
       const sseOptions: { requestInit?: { headers: Record<string, string> } } = {};
@@ -84,15 +80,11 @@ export class MCPManager extends EventEmitter {
         sseOptions.requestInit = { headers: config.headers };
       }
       transport = new SSEClientTransport(new URL(config.url), sseOptions);
-
     } else {
       throw new Error(`MCP server ${config.name} needs either command or url`);
     }
 
-    const client = new Client(
-      { name: 'spica-mcp-client', version: '1.0.0' },
-      { capabilities: {} }
-    );
+    const client = new Client({ name: 'spica-mcp-client', version: '1.0.0' }, { capabilities: {} });
 
     await client.connect(transport);
     this.clients.set(config.name, client);
@@ -100,8 +92,18 @@ export class MCPManager extends EventEmitter {
     // 监听stderr日志（通过transport.stderr获取，仅 Stdio 模式）
     if (transport instanceof StdioClientTransport) {
       const stdioTransport = transport as StdioClientTransport;
-      if ((stdioTransport as unknown as { stderr?: { on?: (event: string, cb: (data: Buffer) => void) => void } }).stderr) {
-        (stdioTransport as unknown as { stderr: { on: (event: string, cb: (data: Buffer) => void) => void } }).stderr.on('data', (data: Buffer) => {
+      if (
+        (
+          stdioTransport as unknown as {
+            stderr?: { on?: (event: string, cb: (data: Buffer) => void) => void };
+          }
+        ).stderr
+      ) {
+        (
+          stdioTransport as unknown as {
+            stderr: { on: (event: string, cb: (data: Buffer) => void) => void };
+          }
+        ).stderr.on('data', (data: Buffer) => {
           this.emit('server_log', { name: config.name, log: data.toString() });
         });
       }
@@ -131,7 +133,10 @@ export class MCPManager extends EventEmitter {
   }
 
   // 调用MCP工具
-  async callTool(fullName: string, args: Record<string, unknown>): Promise<{ success: boolean; output: string; error?: string }> {
+  async callTool(
+    fullName: string,
+    args: Record<string, unknown>
+  ): Promise<{ success: boolean; output: string; error?: string }> {
     // 解析服务器名和工具名
     const [serverName, toolName] = fullName.split('/');
     if (!serverName || !toolName) {

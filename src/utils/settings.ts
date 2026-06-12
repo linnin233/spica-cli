@@ -37,9 +37,9 @@ export interface SkillDefinition {
   promptTemplate: string;
   allowedTools?: string[];
   timeout?: number;
-  autoInvoke?: boolean;      // 是否允许AI自动调用
-  paths?: string[];          // 路径匹配
-  argumentHint?: string;     // 参数提示，如 "[name]"
+  autoInvoke?: boolean; // 是否允许AI自动调用
+  paths?: string[]; // 路径匹配
+  argumentHint?: string; // 参数提示，如 "[name]"
 }
 
 // Hooks 配置
@@ -108,7 +108,7 @@ const BUILTIN_MCP_SERVERS: MCPServerConfig[] = [
 export async function loadGlobalSettings(): Promise<Settings> {
   await fs.ensureDir(GLOBAL_DIR);
 
-  if (!await fs.pathExists(GLOBAL_SETTINGS_FILE)) {
+  if (!(await fs.pathExists(GLOBAL_SETTINGS_FILE))) {
     // 首次运行：写入内置 MCP 配置
     const defaultSettings: Settings = {
       mcp: {
@@ -120,8 +120,8 @@ export async function loadGlobalSettings(): Promise<Settings> {
     return settingsCache;
   }
 
-  const loaded = await fs.readJson(GLOBAL_SETTINGS_FILE) as Settings;
-  
+  const loaded = (await fs.readJson(GLOBAL_SETTINGS_FILE)) as Settings;
+
   // 确保内置 MCP 存在（用户可能手动删除了）
   if (!loaded.mcp?.servers?.some(s => s.name === 'playwright')) {
     loaded.mcp = {
@@ -129,7 +129,7 @@ export async function loadGlobalSettings(): Promise<Settings> {
     };
     await fs.writeJson(GLOBAL_SETTINGS_FILE, loaded, { spaces: 2 });
   }
-  
+
   settingsCache = loaded;
   return loaded;
 }
@@ -152,8 +152,12 @@ export async function saveGlobalSettings(settings: Settings): Promise<void> {
 
   // 确保 .gitignore 保护 settings.json（防止意外提交 API keys）
   const gitignorePath = join(GLOBAL_DIR, '.gitignore');
-  if (!await fs.pathExists(gitignorePath)) {
-    await fs.writeFile(gitignorePath, '# Protect API keys from accidental commit\nsettings.json\naudit.log\n', 'utf-8');
+  if (!(await fs.pathExists(gitignorePath))) {
+    await fs.writeFile(
+      gitignorePath,
+      '# Protect API keys from accidental commit\nsettings.json\naudit.log\n',
+      'utf-8'
+    );
   }
 
   settingsCache = settings;
@@ -260,14 +264,8 @@ export async function loadEffectiveSettings(workspacePath: string): Promise<Sett
 
   if (projectHooks) {
     effectiveHooks = {
-      PreToolUse: [
-        ...(effectiveHooks?.PreToolUse || []),
-        ...(projectHooks.PreToolUse || []),
-      ],
-      PostToolUse: [
-        ...(effectiveHooks?.PostToolUse || []),
-        ...(projectHooks.PostToolUse || []),
-      ],
+      PreToolUse: [...(effectiveHooks?.PreToolUse || []), ...(projectHooks.PreToolUse || [])],
+      PostToolUse: [...(effectiveHooks?.PostToolUse || []), ...(projectHooks.PostToolUse || [])],
     };
   }
 
@@ -286,17 +284,20 @@ export async function getProviderConfig(providerName?: string): Promise<Provider
   const fileConfig = settings.providers?.[name];
 
   const upperName = name.toUpperCase().replace(/-/g, '_');
-  const envApiKey = process.env[`SPICA_${upperName}_API_KEY`] ||
-                    process.env[`${upperName}_API_KEY`] ||
-                    process.env.OPENAI_API_KEY;
+  const envApiKey =
+    process.env[`SPICA_${upperName}_API_KEY`] ||
+    process.env[`${upperName}_API_KEY`] ||
+    process.env.OPENAI_API_KEY;
 
-  const envModel = process.env[`SPICA_${upperName}_MODEL`] ||
-                   process.env[`${upperName}_MODEL`] ||
-                   process.env.MODEL;
+  const envModel =
+    process.env[`SPICA_${upperName}_MODEL`] ||
+    process.env[`${upperName}_MODEL`] ||
+    process.env.MODEL;
 
-  const envBaseUrl = process.env[`SPICA_${upperName}_BASE_URL`] ||
-                     process.env[`${upperName}_BASE_URL`] ||
-                     process.env.OPENAI_BASE_URL;
+  const envBaseUrl =
+    process.env[`SPICA_${upperName}_BASE_URL`] ||
+    process.env[`${upperName}_BASE_URL`] ||
+    process.env.OPENAI_BASE_URL;
 
   const apiKey = envApiKey || fileConfig?.apiKey;
   const model = envModel || fileConfig?.model || DEFAULT_MODELS[name] || 'gpt-4o';
@@ -309,7 +310,9 @@ export async function getProviderConfig(providerName?: string): Promise<Provider
     try {
       new URL(baseUrl);
     } catch {
-      throw new Error(`Provider '${name}' has invalid baseUrl '${baseUrl}'. Fix with: spica providers set ${name} <api-key> --url https://api.example.com/v1 --model <model>`);
+      throw new Error(
+        `Provider '${name}' has invalid baseUrl '${baseUrl}'. Fix with: spica providers set ${name} <api-key> --url https://api.example.com/v1 --model <model>`
+      );
     }
   } else {
     // Use default if not provided
@@ -317,7 +320,9 @@ export async function getProviderConfig(providerName?: string): Promise<Provider
   }
 
   if (!apiKey) {
-    throw new Error(`Provider '${name}' not configured. Run: spica providers set ${name} <api-key> --url <base-url> --model <model-name>`);
+    throw new Error(
+      `Provider '${name}' not configured. Run: spica providers set ${name} <api-key> --url <base-url> --model <model-name>`
+    );
   }
 
   return {

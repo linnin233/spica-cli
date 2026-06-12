@@ -9,7 +9,11 @@ vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
     close: vi.fn().mockResolvedValue(undefined),
     listTools: vi.fn().mockResolvedValue({
       tools: [
-        { name: 'test_tool', description: 'A test tool', inputSchema: { type: 'object', properties: {} } },
+        {
+          name: 'test_tool',
+          description: 'A test tool',
+          inputSchema: { type: 'object', properties: {} },
+        },
       ],
     }),
     callTool: vi.fn().mockResolvedValue({

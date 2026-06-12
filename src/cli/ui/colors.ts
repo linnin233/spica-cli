@@ -65,7 +65,7 @@ export const BG = {
 
     BG._bannerStopSignal = false;
 
-    return new Promise<void>((resolve) => {
+    return new Promise<void>(resolve => {
       // Use chalk colors to follow terminal theme
       const bright = chalk.cyanBright;
       const normal = chalk.cyan;
@@ -103,7 +103,7 @@ export const BG = {
 
     BG._compressStopSignal = false;
 
-    return new Promise<void>((resolve) => {
+    return new Promise<void>(resolve => {
       let frameIndex = 0;
 
       const spin = async () => {
@@ -172,17 +172,21 @@ ${COLORS.primary.bold('Current Status:')}
   dim: (text: string) => COLORS.dim(text),
   // 表格格式化（支持中英文对齐）
   tableRow: (columns: string[], widths: number[]) => {
-    return columns.map((col, i) => {
-      const padded = padRight(col, widths[i] || 10);
-      return COLORS.muted(padded);
-    }).join(' | ');
+    return columns
+      .map((col, i) => {
+        const padded = padRight(col, widths[i] || 10);
+        return COLORS.muted(padded);
+      })
+      .join(' | ');
   },
   // 状态表格
   statusTable: (items: Array<{ label: string; value: string }>) => {
     const maxLabelWidth = Math.max(...items.map(i => getStringWidth(i.label))) + 2;
-    return items.map(i => {
-      const label = padRight(i.label + ':', maxLabelWidth);
-      return `  ${COLORS.muted(label)} ${COLORS.primary(i.value)}`;
-    }).join('\n');
+    return items
+      .map(i => {
+        const label = padRight(i.label + ':', maxLabelWidth);
+        return `  ${COLORS.muted(label)} ${COLORS.primary(i.value)}`;
+      })
+      .join('\n');
   },
 };

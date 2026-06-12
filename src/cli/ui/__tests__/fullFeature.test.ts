@@ -189,7 +189,7 @@ describe('TUI ScreenManager Tests', () => {
       const completions = screen.state.completer('/h');
       expect(completions).toContain('/help');
       expect(completions).toContain('/h');
-      expect(completions).toContain('/history');  // /history also starts with /h
+      expect(completions).toContain('/history'); // /history also starts with /h
       expect(completions.length).toBe(3);
     });
 

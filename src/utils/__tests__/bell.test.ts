@@ -91,10 +91,7 @@ describe('playBell', () => {
     mockPlatform.mockReturnValue('darwin');
     const { playBell } = await import('../bell');
     playBell('done', { env: {} });
-    expect(mockExec).toHaveBeenCalledWith(
-      expect.stringContaining('afplay'),
-      expect.any(Function)
-    );
+    expect(mockExec).toHaveBeenCalledWith(expect.stringContaining('afplay'), expect.any(Function));
   });
 });
 

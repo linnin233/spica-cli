@@ -33,17 +33,17 @@ export function loadHooks(workspacePath?: string): HooksConfig {
   if (projectHooks) {
     // 构建全局 PreToolUse actions 映射（key: tool pattern）
     const globalPreActions = new Map<string, string>();
-    for (const hook of (hooks.PreToolUse || [])) {
+    for (const hook of hooks.PreToolUse || []) {
       const key = hook.matcher.tool || '*';
       globalPreActions.set(key, hook.action);
     }
 
     // 严格程度排序：none < warn < confirm < block
     const strictnessOrder: Record<string, number> = {
-      'none': 0,
-      'warn': 1,
-      'confirm': 2,
-      'block': 3,
+      none: 0,
+      warn: 1,
+      confirm: 2,
+      block: 3,
     };
 
     // 过滤项目 PreToolUse hooks：不能比全局更宽松
@@ -60,14 +60,8 @@ export function loadHooks(workspacePath?: string): HooksConfig {
     });
 
     hooks = {
-      PreToolUse: [
-        ...(hooks.PreToolUse || []),
-        ...filteredProjectPre,
-      ],
-      PostToolUse: [
-        ...(hooks.PostToolUse || []),
-        ...(projectHooks.PostToolUse || []),
-      ],
+      PreToolUse: [...(hooks.PreToolUse || []), ...filteredProjectPre],
+      PostToolUse: [...(hooks.PostToolUse || []), ...(projectHooks.PostToolUse || [])],
     };
   }
 
@@ -75,7 +69,9 @@ export function loadHooks(workspacePath?: string): HooksConfig {
 }
 
 // 同步加载全局 settings
-function loadGlobalSettingsSync(): { hooks?: { PreToolUse?: HookDefinition[]; PostToolUse?: HookDefinition[] } } {
+function loadGlobalSettingsSync(): {
+  hooks?: { PreToolUse?: HookDefinition[]; PostToolUse?: HookDefinition[] };
+} {
   const globalPath = join(GLOBAL_DIR, 'settings.json');
   if (fs.existsSync(globalPath)) {
     try {
@@ -88,7 +84,11 @@ function loadGlobalSettingsSync(): { hooks?: { PreToolUse?: HookDefinition[]; Po
 }
 
 // 检查匹配
-function matchesMatcher(toolName: string, args: Record<string, unknown>, matcher: HookMatcher): boolean {
+function matchesMatcher(
+  toolName: string,
+  args: Record<string, unknown>,
+  matcher: HookMatcher
+): boolean {
   // 检查工具名匹配
   if (matcher.tool) {
     const toolPattern = matcher.tool || '';
@@ -119,7 +119,7 @@ function matchesMatcher(toolName: string, args: Record<string, unknown>, matcher
 
 // 执行PreToolUse hooks
 export function runPreHooks(toolName: string, args: Record<string, unknown>): HookResult {
-  const safeArgs = args || {};  // 保护 args 参数
+  const safeArgs = args || {}; // 保护 args 参数
   const hooks = loadHooks();
   const preHooks = hooks.hooks.PreToolUse || [];
 
@@ -137,8 +137,12 @@ export function runPreHooks(toolName: string, args: Record<string, unknown>): Ho
 }
 
 // 执行PostToolUse hooks（返回日志消息）
-export function runPostHooks(toolName: string, args: Record<string, unknown>, _result: unknown): string | null {
-  const safeArgs = args || {};  // 保护 args 参数
+export function runPostHooks(
+  toolName: string,
+  args: Record<string, unknown>,
+  _result: unknown
+): string | null {
+  const safeArgs = args || {}; // 保护 args 参数
   const hooks = loadHooks();
   const postHooks = hooks.hooks.PostToolUse || [];
 

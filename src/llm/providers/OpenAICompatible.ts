@@ -1,14 +1,27 @@
 import OpenAI from 'openai';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
-import { BaseProvider, ToolDefinition, LLMResponse, LLMProviderConfig, ChatMessage, ToolCall } from './BaseProvider';
+import {
+  BaseProvider,
+  ToolDefinition,
+  LLMResponse,
+  LLMProviderConfig,
+  ChatMessage,
+  ToolCall,
+} from './BaseProvider';
 import { cleanMessages } from '../../utils/messageCleaner';
 
 // Error types and hints
 const ERROR_MESSAGES: Record<string, { type: string; hint: string }> = {
   // Network errors
-  ECONNREFUSED: { type: 'Connection refused', hint: 'Check if API URL is correct and server is online' },
+  ECONNREFUSED: {
+    type: 'Connection refused',
+    hint: 'Check if API URL is correct and server is online',
+  },
   ENOTFOUND: { type: 'Domain not found', hint: 'Check if API URL is correct' },
-  ETIMEDOUT: { type: 'Connection timeout', hint: 'Network unstable or server slow, try again later' },
+  ETIMEDOUT: {
+    type: 'Connection timeout',
+    hint: 'Network unstable or server slow, try again later',
+  },
   ECONNRESET: { type: 'Connection reset', hint: 'Network unstable, try again later' },
   ENETUNREACH: { type: 'Network unreachable', hint: 'Check network connection' },
   EHOSTUNREACH: { type: 'Host unreachable', hint: 'Check network connection or firewall settings' },
@@ -19,9 +32,15 @@ const ERROR_MESSAGES: Record<string, { type: string; hint: string }> = {
   '403': { type: 'Permission denied', hint: 'No access to this model' },
   '404': { type: 'Resource not found', hint: 'Model name error or incorrect API URL' },
   '429': { type: 'Rate limited', hint: 'Wait for a while before retrying' },
-  '500': { type: 'Server internal error', hint: 'API service temporarily unavailable, try again later' },
+  '500': {
+    type: 'Server internal error',
+    hint: 'API service temporarily unavailable, try again later',
+  },
   '502': { type: 'Gateway error', hint: 'API service temporarily unavailable, try again later' },
-  '503': { type: 'Service unavailable', hint: 'API service maintenance or overload, try again later' },
+  '503': {
+    type: 'Service unavailable',
+    hint: 'API service maintenance or overload, try again later',
+  },
 };
 
 // Default context window when model is unknown
@@ -40,9 +59,9 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'gpt-4': 8192,
   'gpt-3.5-turbo': 16385,
   'o4-mini': 200000,
-  'o3': 200000,
+  o3: 200000,
   'o3-mini': 200000,
-  'o1': 200000,
+  o1: 200000,
   'o1-mini': 128000,
   // Anthropic
   'claude-4': 200000,
@@ -68,9 +87,9 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // Groq
   'llama-4': 128000,
   'llama-3': 128000,
-  'mixtral': 32000,
+  mixtral: 32000,
   // Qwen
-  'qwen3': 128000,
+  qwen3: 128000,
   'qwen-max': 128000,
   'qwen-plus': 128000,
 };
@@ -88,7 +107,11 @@ function resolveContextWindow(model: string): number {
 // 解析错误并返回友好提示
 function parseError(error: unknown): { type: string; message: string; hint: string } {
   const errorObj = error instanceof Error ? error : { message: String(error) };
-  const code = String((error as { code?: unknown; status?: unknown }).code || (error as { code?: unknown; status?: unknown }).status || '');
+  const code = String(
+    (error as { code?: unknown; status?: unknown }).code ||
+      (error as { code?: unknown; status?: unknown }).status ||
+      ''
+  );
   const message = errorObj.message || '';
 
   // 查找预定义的错误
@@ -152,8 +175,8 @@ export class OpenAICompatibleProvider extends BaseProvider {
     this.client = new OpenAI({
       apiKey: config.apiKey,
       baseURL: config.baseUrl,
-      timeout: 120000,  // 120秒超时（支持较慢的 API 如阿里云 GLM）
-      maxRetries: 0,  // Spica handles retries via callLLMWithRetry
+      timeout: 120000, // 120秒超时（支持较慢的 API 如阿里云 GLM）
+      maxRetries: 0, // Spica handles retries via callLLMWithRetry
     });
   }
 
@@ -180,16 +203,21 @@ export class OpenAICompatibleProvider extends BaseProvider {
   }
 
   // 快速连接检测（支持中断）
-  async checkConnection(signal?: AbortSignal): Promise<{ success: boolean; type?: string; error?: string; hint?: string }> {
+  async checkConnection(
+    signal?: AbortSignal
+  ): Promise<{ success: boolean; type?: string; error?: string; hint?: string }> {
     try {
-      const response = await this.client.chat.completions.create({
-        model: this.config.model,
-        messages: [{ role: 'user', content: 'ping' }],
-        max_tokens: 1,
-      }, {
-        timeout: 15000,
-        signal: signal,
-      });
+      const response = await this.client.chat.completions.create(
+        {
+          model: this.config.model,
+          messages: [{ role: 'user', content: 'ping' }],
+          max_tokens: 1,
+        },
+        {
+          timeout: 15000,
+          signal: signal,
+        }
+      );
       return { success: true };
     } catch (error: unknown) {
       if (signal?.aborted) {
@@ -209,7 +237,11 @@ export class OpenAICompatibleProvider extends BaseProvider {
     this.onChunk = handler;
   }
 
-async generate(prompt: string, tools?: ToolDefinition[], signal?: AbortSignal): Promise<LLMResponse> {
+  async generate(
+    prompt: string,
+    tools?: ToolDefinition[],
+    signal?: AbortSignal
+  ): Promise<LLMResponse> {
     // 关键修复：在添加新用户消息前，清理不完整的消息序列
     // 防止出现 assistant toolCalls 没有对应 tool messages 的情况
     // 但保护缓存前缀（system prompt + early stable messages）不被 cleanMessages 破坏
@@ -232,7 +264,9 @@ async generate(prompt: string, tools?: ToolDefinition[], signal?: AbortSignal): 
     // DEBUG: 检查消息序列是否正确（清理后应该总是正确）
     const converted = this.convertMessages();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- OpenAI API message type is complex
-    const lastAssistantWithToolCalls = converted.filter(m => m.role === 'assistant' && m.tool_calls && m.tool_calls.length > 0).pop() as any;
+    const lastAssistantWithToolCalls = converted
+      .filter(m => m.role === 'assistant' && m.tool_calls && m.tool_calls.length > 0)
+      .pop() as any;
     if (lastAssistantWithToolCalls) {
       const lastIndex = converted.indexOf(lastAssistantWithToolCalls);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- OpenAI tool_calls structure
@@ -244,7 +278,9 @@ async generate(prompt: string, tools?: ToolDefinition[], signal?: AbortSignal): 
       const foundIds = toolMessagesFollowing.map((m: any) => m.tool_call_id);
 
       if (expectedIds.some((id: string) => !foundIds.includes(id))) {
-        console.error('[DEBUG] Invalid message sequence detected AFTER cleaning (should not happen):');
+        console.error(
+          '[DEBUG] Invalid message sequence detected AFTER cleaning (should not happen):'
+        );
         console.error('[DEBUG] Expected tool_call_ids:', expectedIds);
         console.error('[DEBUG] Found tool_call_ids:', foundIds);
         console.error('[DEBUG] Last assistant message index:', lastIndex);
@@ -255,20 +291,23 @@ async generate(prompt: string, tools?: ToolDefinition[], signal?: AbortSignal): 
     }
 
     try {
-      const stream = await this.client.chat.completions.create({
-        model: this.config.model,
-        messages: converted,
-        tools: tools?.map(t => ({
-          type: 'function',
-          function: {
-            name: t.name,
-            description: t.description,
-            parameters: t.parameters,
-          },
-        })),
-        stream: true,
-        temperature: 0.3,  // 低温度加速响应
-      }, { signal });
+      const stream = await this.client.chat.completions.create(
+        {
+          model: this.config.model,
+          messages: converted,
+          tools: tools?.map(t => ({
+            type: 'function',
+            function: {
+              name: t.name,
+              description: t.description,
+              parameters: t.parameters,
+            },
+          })),
+          stream: true,
+          temperature: 0.3, // 低温度加速响应
+        },
+        { signal }
+      );
 
       let fullContent = '';
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- OpenAI tool_calls structure is complex
@@ -277,20 +316,20 @@ async generate(prompt: string, tools?: ToolDefinition[], signal?: AbortSignal): 
 
       for await (const chunk of stream) {
         if (signal?.aborted) break;
-        
+
         const delta = chunk.choices[0]?.delta;
-        
+
         if (delta?.content) {
           fullContent += delta.content;
           this.emit('chunk', delta.content);
         }
-        
+
         // eslint-disable-next-line @typescript-eslint/no-explicit-any -- DeepSeek reasoning_content field
         if ((delta as any)?.reasoning_content) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any -- DeepSeek reasoning_content field
           this.emit('reasoning', (delta as any).reasoning_content);
         }
-        
+
         if (delta?.tool_calls) {
           hasToolCalls = true;
           // eslint-disable-next-line @typescript-eslint/no-explicit-any -- OpenAI tool_calls delta structure
@@ -320,7 +359,15 @@ async generate(prompt: string, tools?: ToolDefinition[], signal?: AbortSignal): 
         const parsedToolCalls: ToolCall[] = toolCalls.map(tc => ({
           id: tc.id,
           name: tc.name || '',
-          arguments: tc.arguments ? ((): Record<string, any> => { try { return JSON.parse(tc.arguments); } catch { return {}; } })() : {},
+          arguments: tc.arguments
+            ? ((): Record<string, any> => {
+                try {
+                  return JSON.parse(tc.arguments);
+                } catch {
+                  return {};
+                }
+              })()
+            : {},
         }));
 
         this.messages.push({
@@ -352,12 +399,15 @@ async generate(prompt: string, tools?: ToolDefinition[], signal?: AbortSignal): 
   // 直接生成（不添加到历史，用于摘要等）
   async generateDirect(prompt: string, signal?: AbortSignal): Promise<LLMResponse> {
     try {
-      const response = await this.client.chat.completions.create({
-        model: this.config.model,
-        messages: [{ role: 'user', content: prompt }],
-        stream: false,
-        temperature: 0.3,
-      }, { signal });
+      const response = await this.client.chat.completions.create(
+        {
+          model: this.config.model,
+          messages: [{ role: 'user', content: prompt }],
+          stream: false,
+          temperature: 0.3,
+        },
+        { signal }
+      );
 
       const content = response.choices[0]?.message?.content || '';
       return { content, finished: true };
@@ -368,8 +418,11 @@ async generate(prompt: string, tools?: ToolDefinition[], signal?: AbortSignal): 
       throw new Error(`${this.providerName} API error: ${error.message}`);
     }
   }
-  
-  private async generateNonStreaming(prompt: string, tools?: ToolDefinition[]): Promise<LLMResponse> {
+
+  private async generateNonStreaming(
+    prompt: string,
+    tools?: ToolDefinition[]
+  ): Promise<LLMResponse> {
     this.messages.pop();
     this.messages.push({ role: 'user', content: prompt });
 
@@ -402,7 +455,7 @@ async generate(prompt: string, tools?: ToolDefinition[], signal?: AbortSignal): 
         content: message.content || '',
         toolCalls: toolCalls,
       });
-      
+
       return { toolCalls, finished: false };
     }
 
@@ -443,16 +496,16 @@ async generate(prompt: string, tools?: ToolDefinition[], signal?: AbortSignal): 
 
   // 添加tool结果消息
   addToolMessage(toolCallId: string, result: string): void {
-    const exists = this.messages.some(m =>
-      m.role === 'tool' && m.toolCallId === toolCallId
-    );
+    const exists = this.messages.some(m => m.role === 'tool' && m.toolCallId === toolCallId);
     if (exists) return;
 
     let trimmedResult = result;
     if (result.length > this.toolResultMaxChars) {
       const truncated = result.slice(0, this.toolResultMaxChars);
       const omitted = result.length - this.toolResultMaxChars;
-      trimmedResult = truncated + `\n\n[TRUNCATED: ${omitted} chars omitted from tool result. Request the full output if needed with a more specific query.]`;
+      trimmedResult =
+        truncated +
+        `\n\n[TRUNCATED: ${omitted} chars omitted from tool result. Request the full output if needed with a more specific query.]`;
     }
 
     this.messages.push({
@@ -487,20 +540,23 @@ async generate(prompt: string, tools?: ToolDefinition[], signal?: AbortSignal): 
     }
 
     try {
-      const stream = await this.client.chat.completions.create({
-        model: this.config.model,
-        messages: this.convertMessages(),
-        tools: tools?.map(t => ({
-          type: 'function',
-          function: {
-            name: t.name,
-            description: t.description,
-            parameters: t.parameters,
-          },
-        })),
-        stream: true,
-        temperature: 0.3,  // 低温度加速响应
-      }, { signal });
+      const stream = await this.client.chat.completions.create(
+        {
+          model: this.config.model,
+          messages: this.convertMessages(),
+          tools: tools?.map(t => ({
+            type: 'function',
+            function: {
+              name: t.name,
+              description: t.description,
+              parameters: t.parameters,
+            },
+          })),
+          stream: true,
+          temperature: 0.3, // 低温度加速响应
+        },
+        { signal }
+      );
 
       let fullContent = '';
       const toolCalls: any[] = [];
@@ -547,7 +603,15 @@ async generate(prompt: string, tools?: ToolDefinition[], signal?: AbortSignal): 
         const parsedToolCalls: ToolCall[] = toolCalls.map(tc => ({
           id: tc.id,
           name: tc.name || '',
-          arguments: tc.arguments ? ((): Record<string, any> => { try { return JSON.parse(tc.arguments); } catch { return {}; } })() : {},
+          arguments: tc.arguments
+            ? ((): Record<string, any> => {
+                try {
+                  return JSON.parse(tc.arguments);
+                } catch {
+                  return {};
+                }
+              })()
+            : {},
         }));
 
         this.messages.push({

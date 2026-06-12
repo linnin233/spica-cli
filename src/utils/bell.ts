@@ -36,10 +36,9 @@ function tryPlay(commands: string[]): void {
   if (commands.length === 0) return;
   const [cmd, ...rest] = commands;
   // Use sh -c so 2>/dev/null works cross-shell on Linux/macOS
-  const shellCmd = currentPlatform === 'win32'
-    ? cmd
-    : `sh -c '${cmd.replace(/'/g, "'\\''")}' 2>/dev/null`;
-  exec(shellCmd, (err) => {
+  const shellCmd =
+    currentPlatform === 'win32' ? cmd : `sh -c '${cmd.replace(/'/g, "'\\''")}' 2>/dev/null`;
+  exec(shellCmd, err => {
     if (err && rest.length > 0) {
       tryPlay(rest);
     }
@@ -53,11 +52,7 @@ function playFile(filePath: string): void {
     tryPlay([`afplay "${filePath}"`]);
   } else if (currentPlatform === 'linux') {
     // Try PipeWire first, then PulseAudio, then ALSA
-    tryPlay([
-      `pw-play "${filePath}"`,
-      `paplay "${filePath}"`,
-      `aplay "${filePath}"`,
-    ]);
+    tryPlay([`pw-play "${filePath}"`, `paplay "${filePath}"`, `aplay "${filePath}"`]);
   } else if (currentPlatform === 'win32') {
     // PlaySync blocks — use a detached powershell
     exec(
@@ -73,11 +68,12 @@ export function playBell(reason: BellReason, opts?: BellOptions): void {
   if (env.SPICA_BELL === 'false') return;
 
   // Custom sound file from env (overrides defaults)
-  const envKey = reason === 'permission'
-    ? 'SPICA_BELL_PERMISSION'
-    : reason === 'done'
-      ? 'SPICA_BELL_DONE'
-      : 'SPICA_BELL_ERROR';
+  const envKey =
+    reason === 'permission'
+      ? 'SPICA_BELL_PERMISSION'
+      : reason === 'done'
+        ? 'SPICA_BELL_DONE'
+        : 'SPICA_BELL_ERROR';
 
   const customSound = env[envKey];
   if (customSound && existsSync(customSound)) {

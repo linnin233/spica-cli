@@ -1,9 +1,7 @@
 import { WORKSPACE } from '../helpers';
 import type { ToolResult } from '../helpers';
 
-export async function executeSkill(
-  args: Record<string, unknown>,
-): Promise<ToolResult> {
+export async function executeSkill(args: Record<string, unknown>): Promise<ToolResult> {
   const { loadSkills } = await import('../../skills/index');
   const skills = loadSkills(WORKSPACE);
   const skillName = String(args.name || '');

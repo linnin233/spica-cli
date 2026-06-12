@@ -39,18 +39,18 @@ export function parseRuleLayers(content: string): RuleLayers {
 
   // Match ## [TAG] Section Title patterns
   const sectionPattern = /##\s*\[(CRITICAL|IMPORTANT|PREF)\]\s*[^\n]*\n([\s\S]*?)(?=##\s*\[|$)/gi;
-  
+
   let match;
   while ((match = sectionPattern.exec(content)) !== null) {
     const tag = match[1].toUpperCase();
     const sectionContent = match[2].trim();
-    
+
     // Extract bullet points (lines starting with -)
     const bullets = sectionContent
       .split('\n')
       .filter(line => line.trim().startsWith('-'))
       .map(line => line.trim().substring(1).trim());
-    
+
     if (tag === 'CRITICAL') {
       result.critical.push(...bullets);
     } else if (tag === 'IMPORTANT') {
@@ -72,9 +72,9 @@ export function loadProjectConfig(workspace: string): ProjectConfig | null {
   if (existsSync(filepath)) {
     const content = readFileSync(filepath, 'utf-8');
     const ruleLayers = parseRuleLayers(content);
-    return { 
+    return {
       rawContent: content,
-      ruleLayers
+      ruleLayers,
     };
   }
   return null;
@@ -107,17 +107,29 @@ export function autoDetectProject(workspace: string): ProjectConfig {
 
   const goModPath = join(workspace, 'go.mod');
   if (existsSync(goModPath)) {
-    return { type: 'Go', language: 'Go', commands: { build: 'go build', test: 'go test ./...', dev: 'go run .' } };
+    return {
+      type: 'Go',
+      language: 'Go',
+      commands: { build: 'go build', test: 'go test ./...', dev: 'go run .' },
+    };
   }
 
   const pyprojectPath = join(workspace, 'pyproject.toml');
   if (existsSync(pyprojectPath) || existsSync(join(workspace, 'requirements.txt'))) {
-    return { type: 'Python', language: 'Python', commands: { test: 'pytest', dev: 'python main.py' } };
+    return {
+      type: 'Python',
+      language: 'Python',
+      commands: { test: 'pytest', dev: 'python main.py' },
+    };
   }
 
   const cargoPath = join(workspace, 'Cargo.toml');
   if (existsSync(cargoPath)) {
-    return { type: 'Rust', language: 'Rust', commands: { build: 'cargo build', test: 'cargo test', dev: 'cargo run' } };
+    return {
+      type: 'Rust',
+      language: 'Rust',
+      commands: { build: 'cargo build', test: 'cargo test', dev: 'cargo run' },
+    };
   }
 
   return { type: 'Unknown', language: 'Unknown' };

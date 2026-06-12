@@ -20,9 +20,11 @@ function calculateWidth(str: string): number {
   for (const c of str) {
     const code = c.codePointAt(0) || 0;
     // 全角字符宽度为2
-    if ((code >= 0x4E00 && code <= 0x9FFF) ||
-        (code >= 0xFF01 && code <= 0xFF5E) ||
-        (code >= 0x3000 && code <= 0x303F)) {
+    if (
+      (code >= 0x4e00 && code <= 0x9fff) ||
+      (code >= 0xff01 && code <= 0xff5e) ||
+      (code >= 0x3000 && code <= 0x303f)
+    ) {
       w += 2;
     } else if (c !== '\n') {
       w += 1;

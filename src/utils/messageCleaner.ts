@@ -39,7 +39,12 @@ export function cleanMessages(messages: ChatMessage[], debug = false): ChatMessa
       const prev = validMessages[i - 1];
       if (prev.role === 'tool' && prev.toolCallId === m.toolCallId && prev.content === m.content) {
         if (debug) {
-          console.error('[cleanMessages] Removing duplicate tool message at index', i, 'toolCallId:', m.toolCallId);
+          console.error(
+            '[cleanMessages] Removing duplicate tool message at index',
+            i,
+            'toolCallId:',
+            m.toolCallId
+          );
         }
         return false;
       }
@@ -62,8 +67,8 @@ export function cleanMessages(messages: ChatMessage[], debug = false): ChatMessa
         j++;
       }
 
-      const missingOrReused = expectedIds.filter(id =>
-        !foundIds.includes(id) || usedToolCallIds.has(id)
+      const missingOrReused = expectedIds.filter(
+        id => !foundIds.includes(id) || usedToolCallIds.has(id)
       );
 
       if (missingOrReused.length === 0) {
@@ -79,7 +84,7 @@ export function cleanMessages(messages: ChatMessage[], debug = false): ChatMessa
             expectedIds,
             foundIds,
             missingOrReused,
-            assistantContent: m.content?.slice(0, 50)
+            assistantContent: m.content?.slice(0, 50),
           });
         }
         result.push({ role: 'assistant', content: m.content || '' });

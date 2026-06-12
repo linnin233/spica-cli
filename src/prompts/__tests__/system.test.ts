@@ -28,7 +28,10 @@ describe('getSystemPrompt learnings', () => {
 
   it('includes learnings content when .md files exist', () => {
     fs.mkdirpSync(path.join(tmpDir, '.spica', 'learnings'));
-    fs.writeFileSync(path.join(tmpDir, '.spica', 'learnings', '2026-01-01-test.md'), '# Test Learning\nAlways use fs-extra.');
+    fs.writeFileSync(
+      path.join(tmpDir, '.spica', 'learnings', '2026-01-01-test.md'),
+      '# Test Learning\nAlways use fs-extra.'
+    );
     const prompt = getSystemPrompt(undefined, undefined, tmpDir);
     expect(prompt).toContain('Project Learnings');
     expect(prompt).toContain('# Test Learning');

@@ -36,7 +36,7 @@ export async function initSkills(): Promise<void> {
       for (const pkgName of packages) {
         const srcDir = join(DEFAULT_PACKAGE_DIR, pkgName);
         const destDir = join(SKILLS_DIR, pkgName);
-        await fs.copy(srcDir, destDir, { overwrite: false });  // 不覆盖已有
+        await fs.copy(srcDir, destDir, { overwrite: false }); // 不覆盖已有
       }
     }
   }
@@ -133,7 +133,10 @@ export function getSkill(name: string, workspacePath?: string): SkillDefinition 
 }
 
 // 检查输入是否是skill调用
-export function parseSkillInput(input: string, workspacePath?: string): { skillName: string; args: Record<string, any> } | null {
+export function parseSkillInput(
+  input: string,
+  workspacePath?: string
+): { skillName: string; args: Record<string, any> } | null {
   const trimmed = input.trim();
 
   if (trimmed.startsWith('/')) {
@@ -189,7 +192,9 @@ export function buildSkillPrompt(skill: SkillDefinition, args: Record<string, an
   }
 
   if (!skill.promptTemplate) {
-    return Object.entries(args).map(([k, v]) => `${k}: ${v}`).join('\n');
+    return Object.entries(args)
+      .map(([k, v]) => `${k}: ${v}`)
+      .join('\n');
   }
 
   return prompt;
@@ -238,7 +243,9 @@ function getPackageSkills(pkgName: string): string[] {
 }
 
 // 安装 skill 包（从 GitHub 或本地目录，不覆盖已有）
-export async function installSkill(source: string): Promise<{ success: boolean; message: string; skills?: string[] }> {
+export async function installSkill(
+  source: string
+): Promise<{ success: boolean; message: string; skills?: string[] }> {
   try {
     await fs.ensureDir(SKILLS_DIR);
 
@@ -267,7 +274,10 @@ export async function installSkill(source: string): Promise<{ success: boolean; 
       // 不覆盖已有的包
       if (fs.existsSync(destDir)) {
         await fs.remove(tempDir);
-        return { success: false, message: `Package "${pkgName}" already exists. Delete it first to reinstall.` };
+        return {
+          success: false,
+          message: `Package "${pkgName}" already exists. Delete it first to reinstall.`,
+        };
       }
 
       await fs.copy(sourceDir, destDir, { overwrite: false });
@@ -280,12 +290,14 @@ export async function installSkill(source: string): Promise<{ success: boolean; 
       const destDir = join(SKILLS_DIR, pkgName);
 
       if (fs.existsSync(destDir)) {
-        return { success: false, message: `Package "${pkgName}" already exists. Delete it first to reinstall.` };
+        return {
+          success: false,
+          message: `Package "${pkgName}" already exists. Delete it first to reinstall.`,
+        };
       }
 
       await fs.copy(sourceDir, destDir, { overwrite: false });
-    }
-    else {
+    } else {
       return { success: false, message: 'Source must be GitHub URL or local directory' };
     }
 
@@ -301,7 +313,9 @@ export async function installSkill(source: string): Promise<{ success: boolean; 
 }
 
 // 卸载 skill 包
-export async function uninstallSkill(packageName: string): Promise<{ success: boolean; message: string }> {
+export async function uninstallSkill(
+  packageName: string
+): Promise<{ success: boolean; message: string }> {
   try {
     const pkgDir = join(SKILLS_DIR, packageName);
 
@@ -317,7 +331,11 @@ export async function uninstallSkill(packageName: string): Promise<{ success: bo
 }
 
 // 保存单个 skill（写入到指定包目录）
-export async function saveSkill(skillName: string, skill: SkillDefinition, pkgName: string = 'custom'): Promise<boolean> {
+export async function saveSkill(
+  skillName: string,
+  skill: SkillDefinition,
+  pkgName: string = 'custom'
+): Promise<boolean> {
   try {
     const pkgDir = join(SKILLS_DIR, pkgName);
     await fs.ensureDir(pkgDir);

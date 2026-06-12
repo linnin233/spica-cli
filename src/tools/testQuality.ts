@@ -5,7 +5,12 @@ import fs from 'fs-extra';
 import { resolve as pathResolve } from 'path';
 
 export interface TestQualityIssue {
-  type: 'over-mocking' | 'happy-path-only' | 'assertion-free' | 'incomplete-mock' | 'test-only-method';
+  type:
+    | 'over-mocking'
+    | 'happy-path-only'
+    | 'assertion-free'
+    | 'incomplete-mock'
+    | 'test-only-method';
   location: string;
   severity: 'low' | 'medium' | 'high';
   message: string;
@@ -13,25 +18,25 @@ export interface TestQualityIssue {
 }
 
 export interface TestQualityResult {
-  score: number;           // 0-10
+  score: number; // 0-10
   issues: TestQualityIssue[];
-  passed: boolean;         // score >= threshold
+  passed: boolean; // score >= threshold
   stats: {
     totalTests: number;
     mockCount: number;
     assertionCount: number;
     errorPathTests: number;
     happyPathTests: number;
-    mockRatio: number;     // mock calls / total calls
+    mockRatio: number; // mock calls / total calls
   };
 }
 
 // Thresholds based on industry research
 const THRESHOLDS = {
-  maxMockRatio: 0.7,           // Max 70% mock calls (TST-004)
-  minAssertionPerTest: 1,      // At least 1 assertion per test (TST-008)
-  minErrorPathRatio: 0.3,      // At least 30% error path tests (TST-005)
-  targetScore: 7.0,            // Minimum acceptable score
+  maxMockRatio: 0.7, // Max 70% mock calls (TST-004)
+  minAssertionPerTest: 1, // At least 1 assertion per test (TST-008)
+  minErrorPathRatio: 0.3, // At least 30% error path tests (TST-005)
+  targetScore: 7.0, // Minimum acceptable score
 };
 
 // Count mock calls in test code
@@ -46,7 +51,7 @@ function countMockCalls(code: string): number {
     /\.mock\(/g,
     /sinon\.mock\(/g,
   ];
-  
+
   let count = 0;
   for (const pattern of mockPatterns) {
     const matches = code.match(pattern);
@@ -54,7 +59,7 @@ function countMockCalls(code: string): number {
       count += matches.length;
     }
   }
-  
+
   return count;
 }
 
@@ -72,7 +77,7 @@ function countAssertions(code: string): number {
     /\.toContain\(/g,
     /\.toMatch\(/g,
   ];
-  
+
   let count = 0;
   for (const pattern of assertionPatterns) {
     const matches = code.match(pattern);
@@ -80,7 +85,7 @@ function countAssertions(code: string): number {
       count += matches.length;
     }
   }
-  
+
   return count;
 }
 
@@ -88,18 +93,18 @@ function countAssertions(code: string): number {
 function extractTestBlocks(code: string): { name: string; code: string; startLine: number }[] {
   const blocks: { name: string; code: string; startLine: number }[] = [];
   const lines = code.split('\n');
-  
+
   // Match test patterns: it(), test() blocks (with optional leading whitespace)
   const testPattern = /^\s*(?:it|test)\s*\(\s*['"`]([^'"`]+)['"`]/;
-  
+
   let braceCount = 0;
   let inTest = false;
   let testStart = 0;
   let testName = '';
-  
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    
+
     // Detect test start
     const match = line.match(testPattern);
     if (match && !inTest) {
@@ -108,11 +113,11 @@ function extractTestBlocks(code: string): { name: string; code: string; startLin
       testStart = i;
       braceCount = 0;
     }
-    
+
     if (inTest) {
       braceCount += (line.match(/{/g) || []).length;
       braceCount -= (line.match(/}/g) || []).length;
-      
+
       if (braceCount === 0 && line.includes('}')) {
         blocks.push({
           name: testName,
@@ -123,7 +128,7 @@ function extractTestBlocks(code: string): { name: string; code: string; startLin
       }
     }
   }
-  
+
   return blocks;
 }
 
@@ -143,13 +148,13 @@ function isHappyPathOnly(testCode: string): boolean {
     /boundary/g,
     /edge/g,
   ];
-  
+
   for (const pattern of errorPatterns) {
     if (pattern.test(testCode)) {
       return false;
     }
   }
-  
+
   return true;
 }
 
@@ -157,35 +162,36 @@ function isHappyPathOnly(testCode: string): boolean {
 async function analyzeTestFile(filePath: string): Promise<TestQualityIssue[]> {
   const issues: TestQualityIssue[] = [];
   const content = await fs.readFile(filePath, 'utf-8');
-  
+
   // Count mocks and assertions globally
   const mockCount = countMockCalls(content);
-  const _assertionCount = countAssertions(content);  // Used for stats
-  
+  const _assertionCount = countAssertions(content); // Used for stats
+
   // Check over-mocking (TST-004)
   if (mockCount > 5) {
     // Count non-mock function calls (rough estimate)
     const functionCalls = (content.match(/\w+\.\w+\(/g) || []).length;
     const mockRatio = mockCount / (functionCalls || mockCount);
-    
+
     if (mockRatio > THRESHOLDS.maxMockRatio) {
       issues.push({
         type: 'over-mocking',
         location: `${filePath}:1`,
         severity: mockRatio > 0.9 ? 'high' : 'medium',
         message: `Mock ratio: ${Math.round(mockRatio * 100)}% (${mockCount} mocks, ${functionCalls} total calls)`,
-        suggestion: 'Reduce mocking. Only mock external services (APIs, payment gateways). Use real implementations for internal code.',
+        suggestion:
+          'Reduce mocking. Only mock external services (APIs, payment gateways). Use real implementations for internal code.',
       });
     }
   }
-  
+
   // Extract individual tests
   const testBlocks = extractTestBlocks(content);
-  
+
   for (const test of testBlocks) {
     const testAssertions = countAssertions(test.code);
-    const _testMocks = countMockCalls(test.code);  // Used for stats
-    
+    const _testMocks = countMockCalls(test.code); // Used for stats
+
     // Check assertion-free tests (TST-008)
     if (testAssertions < THRESHOLDS.minAssertionPerTest) {
       issues.push({
@@ -193,10 +199,11 @@ async function analyzeTestFile(filePath: string): Promise<TestQualityIssue[]> {
         location: `${filePath}:${test.startLine}`,
         severity: 'high',
         message: `Test "${test.name}" has no assertions`,
-        suggestion: 'Add expect() or assert() calls. Use expect.hasAssertions() to enforce assertions.',
+        suggestion:
+          'Add expect() or assert() calls. Use expect.hasAssertions() to enforce assertions.',
       });
     }
-    
+
     // Check happy-path only (TST-005)
     if (isHappyPathOnly(test.code) && testAssertions > 0) {
       issues.push({
@@ -204,10 +211,11 @@ async function analyzeTestFile(filePath: string): Promise<TestQualityIssue[]> {
         location: `${filePath}:${test.startLine}`,
         severity: 'medium',
         message: `Test "${test.name}" only tests success path`,
-        suggestion: 'Add tests for error cases: invalid inputs, null values, network failures, edge cases.',
+        suggestion:
+          'Add tests for error cases: invalid inputs, null values, network failures, edge cases.',
       });
     }
-    
+
     // Check incomplete mocks (mock returns partial data)
     const mockReturns = test.code.match(/mockResolvedValue\(\s*{([^}]+)}\s*\)/g) || [];
     for (const mockReturn of mockReturns) {
@@ -220,17 +228,18 @@ async function analyzeTestFile(filePath: string): Promise<TestQualityIssue[]> {
           location: `${filePath}:${test.startLine}`,
           severity: 'low',
           message: `Mock returns minimal data: ${mockObj}`,
-          suggestion: 'Mirror real API response structure. Include all fields that downstream code might use.',
+          suggestion:
+            'Mirror real API response structure. Include all fields that downstream code might use.',
         });
       }
     }
   }
-  
+
   // Check for test-only methods in production code (if source file exists)
   const sourceFilePath = filePath.replace('.test.', '.').replace('.spec.', '.');
   if (await fs.pathExists(sourceFilePath)) {
     const sourceContent = await fs.readFile(sourceFilePath, 'utf-8');
-    
+
     // Look for methods that might be test-only (common patterns)
     const testOnlyPatterns = [
       /_test\w*\(/g,
@@ -239,7 +248,7 @@ async function analyzeTestFile(filePath: string): Promise<TestQualityIssue[]> {
       /clearForTest\(/g,
       /setupForTest\(/g,
     ];
-    
+
     for (const pattern of testOnlyPatterns) {
       if (pattern.test(sourceContent)) {
         issues.push({
@@ -247,12 +256,13 @@ async function analyzeTestFile(filePath: string): Promise<TestQualityIssue[]> {
           location: sourceFilePath,
           severity: 'medium',
           message: 'Found potential test-only method in production code',
-          suggestion: 'Move test utilities to separate test helper files. Never add test-only methods to production classes.',
+          suggestion:
+            'Move test utilities to separate test helper files. Never add test-only methods to production classes.',
         });
       }
     }
   }
-  
+
   return issues;
 }
 
@@ -260,31 +270,31 @@ async function analyzeTestFile(filePath: string): Promise<TestQualityIssue[]> {
 function calculateScore(issues: TestQualityIssue[], stats: TestQualityResult['stats']): number {
   // Base score
   let score = 10.0;
-  
+
   // Penalty for over-mocking
   if (stats.mockRatio > THRESHOLDS.maxMockRatio) {
     score -= (stats.mockRatio - THRESHOLDS.maxMockRatio) * 5;
   }
-  
+
   // Penalty for assertion-free tests
   const assertionFreeCount = issues.filter(i => i.type === 'assertion-free').length;
   if (stats.totalTests > 0) {
     score -= (assertionFreeCount / stats.totalTests) * 3;
   }
-  
+
   // Penalty for happy-path only tests
   const happyPathRatio = stats.happyPathTests / (stats.totalTests || 1);
   if (happyPathRatio > 1 - THRESHOLDS.minErrorPathRatio) {
     score -= (happyPathRatio - (1 - THRESHOLDS.minErrorPathRatio)) * 2;
   }
-  
+
   // Penalty from issue severity
   const issueWeight = issues.reduce((sum, issue) => {
     const weight = issue.severity === 'high' ? 2 : issue.severity === 'medium' ? 1 : 0.3;
     return sum + weight;
   }, 0);
   score -= issueWeight * 0.2;
-  
+
   return Math.max(0, Math.min(10, Math.round(score * 10) / 10));
 }
 
@@ -295,54 +305,63 @@ export async function analyzeTestQuality(
 ): Promise<TestQualityResult> {
   const resolvedPath = pathResolve(targetPath);
   const issues: TestQualityIssue[] = [];
-  
+
   // Stats tracking
   let totalTests = 0;
   let mockCount = 0;
   let assertionCount = 0;
   let happyPathTests = 0;
   let errorPathTests = 0;
-  
+
   // Check if path exists
-  if (!await fs.pathExists(resolvedPath)) {
+  if (!(await fs.pathExists(resolvedPath))) {
     return {
       score: 0,
-      issues: [{ 
-        type: 'assertion-free', 
-        location: resolvedPath, 
-        severity: 'high', 
-        message: 'Test file does not exist', 
-        suggestion: 'Check the file path' 
-      }],
+      issues: [
+        {
+          type: 'assertion-free',
+          location: resolvedPath,
+          severity: 'high',
+          message: 'Test file does not exist',
+          suggestion: 'Check the file path',
+        },
+      ],
       passed: false,
-      stats: { totalTests: 0, mockCount: 0, assertionCount: 0, errorPathTests: 0, happyPathTests: 0, mockRatio: 0 },
+      stats: {
+        totalTests: 0,
+        mockCount: 0,
+        assertionCount: 0,
+        errorPathTests: 0,
+        happyPathTests: 0,
+        mockRatio: 0,
+      },
     };
   }
-  
+
   // Analyze test file
   const fileIssues = await analyzeTestFile(resolvedPath);
   issues.push(...fileIssues);
-  
+
   // Get stats from file
   const content = await fs.readFile(resolvedPath, 'utf-8');
   const testBlocks = extractTestBlocks(content);
   totalTests = testBlocks.length;
-  
+
   for (const test of testBlocks) {
     mockCount += countMockCalls(test.code);
     assertionCount += countAssertions(test.code);
-    
+
     if (isHappyPathOnly(test.code)) {
       happyPathTests++;
     } else {
       errorPathTests++;
     }
   }
-  
+
   // Calculate mock ratio
   const functionCalls = (content.match(/\w+\.\w+\(/g) || []).length;
   const mockRatio = functionCalls > 0 ? mockCount / functionCalls : 0;
-  
+
   const stats: TestQualityResult['stats'] = {
     totalTests,
     mockCount,
@@ -351,10 +370,10 @@ export async function analyzeTestQuality(
     happyPathTests,
     mockRatio: Math.round(mockRatio * 100) / 100,
   };
-  
+
   // Calculate score
   const score = calculateScore(issues, stats);
-  
+
   return {
     score,
     issues,
@@ -366,7 +385,7 @@ export async function analyzeTestQuality(
 // Format result for display
 export function formatTestQualityResult(result: TestQualityResult): string {
   const lines: string[] = [];
-  
+
   lines.push(`Test Quality Score: ${result.score}/10 (target: >= 7.0)`);
   lines.push(`Status: ${result.passed ? '[PASS]' : '[FAIL]'}`);
   lines.push('');
@@ -377,25 +396,27 @@ export function formatTestQualityResult(result: TestQualityResult): string {
   lines.push(`  Mock ratio: ${Math.round(result.stats.mockRatio * 100)}%`);
   lines.push(`  Happy-path tests: ${result.stats.happyPathTests}`);
   lines.push(`  Error-path tests: ${result.stats.errorPathTests}`);
-  
+
   if (result.issues.length > 0) {
     lines.push('');
     lines.push('Issues (Anti-Patterns):');
     for (const issue of result.issues) {
-      const severityIcon = issue.severity === 'high' ? '[HIGH]' : issue.severity === 'medium' ? '[MED]' : '[LOW]';
-      const typeLabel = {
-        'over-mocking': 'TST-004',
-        'happy-path-only': 'TST-005',
-        'assertion-free': 'TST-008',
-        'incomplete-mock': 'TST-006',
-        'test-only-method': 'TST-007',
-      }[issue.type] || issue.type;
-      
+      const severityIcon =
+        issue.severity === 'high' ? '[HIGH]' : issue.severity === 'medium' ? '[MED]' : '[LOW]';
+      const typeLabel =
+        {
+          'over-mocking': 'TST-004',
+          'happy-path-only': 'TST-005',
+          'assertion-free': 'TST-008',
+          'incomplete-mock': 'TST-006',
+          'test-only-method': 'TST-007',
+        }[issue.type] || issue.type;
+
       lines.push(`  ${severityIcon} [${typeLabel}] ${issue.location}`);
       lines.push(`     ${issue.message}`);
       lines.push(`     Suggestion: ${issue.suggestion}`);
     }
   }
-  
+
   return lines.join('\n');
 }

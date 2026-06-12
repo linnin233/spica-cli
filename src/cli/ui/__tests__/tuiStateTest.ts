@@ -82,7 +82,8 @@ function handleAnsiSequence(seq: string): void {
   // Backspace: BS (0x08) 或 DEL (0x7f)
   if (seq === '\x7f' || seq === '\b' || seq.charCodeAt(0) === 127 || seq.charCodeAt(0) === 8) {
     if (screen.state.cursorCol > 0) {
-      screen.state.inputBuffer[0] = screen.state.inputBuffer[0].slice(0, screen.state.cursorCol - 1) +
+      screen.state.inputBuffer[0] =
+        screen.state.inputBuffer[0].slice(0, screen.state.cursorCol - 1) +
         screen.state.inputBuffer[0].slice(screen.state.cursorCol);
       screen.state.cursorCol--;
     }
@@ -104,9 +105,17 @@ process.stdin.on('data', (data: Buffer) => {
 
   // 处理粘贴序列（Bracketed Paste Mode）
   // PTY 发送的格式可能是 ^[[200~ 或 \x1b[200~
-  if (pendingInput.includes('\x1b[200~') || pendingInput.includes('[200~') || pendingInput.includes('[200~')) {
+  if (
+    pendingInput.includes('\x1b[200~') ||
+    pendingInput.includes('[200~') ||
+    pendingInput.includes('[200~')
+  ) {
     // 等待粘贴结束序列
-    if (pendingInput.includes('\x1b[201~') || pendingInput.includes('[201~') || pendingInput.includes('[201~')) {
+    if (
+      pendingInput.includes('\x1b[201~') ||
+      pendingInput.includes('[201~') ||
+      pendingInput.includes('[201~')
+    ) {
       // 提取粘贴内容
       let content = pendingInput;
       // 移除粘贴序列标记

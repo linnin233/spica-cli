@@ -44,10 +44,7 @@ interface InputState {
 }
 
 // 创建稳定的输入处理器
-export function createInputHandler(
-  onSubmit: (text: string) => void,
-  onInterrupt: () => void
-) {
+export function createInputHandler(onSubmit: (text: string) => void, onInterrupt: () => void) {
   const state: InputState = {
     buffer: '',
     cursorPos: 0,

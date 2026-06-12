@@ -18,7 +18,10 @@ export function getWorkspace(): string {
 }
 
 // Active monitors (used by monitor + task_stop)
-export let activeMonitors: Map<string, { process: any; command: string; description: string; startTime: number }> = new Map();
+export let activeMonitors: Map<
+  string,
+  { process: any; command: string; description: string; startTime: number }
+> = new Map();
 
 /**
  * Link an external AbortSignal to a local AbortController.
@@ -27,7 +30,7 @@ export let activeMonitors: Map<string, { process: any; command: string; descript
  */
 export function linkAbortSignals(
   externalSignal: AbortSignal | undefined,
-  localController: AbortController,
+  localController: AbortController
 ): () => void {
   if (!externalSignal) return () => {};
 
@@ -187,7 +190,12 @@ export function validateUrl(url: string): void {
 
   const hostname = parsed.hostname.toLowerCase();
 
-  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '0.0.0.0') {
+  if (
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    hostname === '::1' ||
+    hostname === '0.0.0.0'
+  ) {
     throw new Error(`Access denied: requests to localhost are not allowed`);
   }
 
@@ -224,14 +232,30 @@ export async function detectProjectType(workspace: string): Promise<string> {
 export function detectFileType(filePath: string): string {
   const ext = filePath.split('.').pop()?.toLowerCase() || '';
   const typeMap: Record<string, string> = {
-    'ts': 'typescript', 'tsx': 'typescript', 'mts': 'typescript',
-    'js': 'javascript', 'jsx': 'javascript', 'mjs': 'javascript',
-    'py': 'python', 'go': 'go', 'rs': 'rust',
-    'java': 'java', 'kt': 'kotlin',
-    'c': 'c', 'cpp': 'cpp', 'cc': 'cpp', 'cxx': 'cpp',
-    'h': 'c', 'hpp': 'cpp', 'cs': 'csharp', 'rb': 'ruby',
-    'php': 'php', 'swift': 'swift',
-    'sh': 'shell', 'bash': 'shell', 'zsh': 'shell',
+    ts: 'typescript',
+    tsx: 'typescript',
+    mts: 'typescript',
+    js: 'javascript',
+    jsx: 'javascript',
+    mjs: 'javascript',
+    py: 'python',
+    go: 'go',
+    rs: 'rust',
+    java: 'java',
+    kt: 'kotlin',
+    c: 'c',
+    cpp: 'cpp',
+    cc: 'cpp',
+    cxx: 'cpp',
+    h: 'c',
+    hpp: 'cpp',
+    cs: 'csharp',
+    rb: 'ruby',
+    php: 'php',
+    swift: 'swift',
+    sh: 'shell',
+    bash: 'shell',
+    zsh: 'shell',
   };
   return typeMap[ext] || 'unknown';
 }
@@ -262,7 +286,9 @@ export function checkBracketMatching(content: string, filePath: string): string[
         if (!last) {
           errors.push(`${filePath}:${i + 1}:${j + 1}: Unexpected closing '${ch}'`);
         } else if (last.char !== closing[ch]) {
-          errors.push(`${filePath}:${i + 1}:${j + 1}: Mismatched bracket '${ch}' (expected '${pairs[last.char]}' from line ${last.line})`);
+          errors.push(
+            `${filePath}:${i + 1}:${j + 1}: Mismatched bracket '${ch}' (expected '${pairs[last.char]}' from line ${last.line})`
+          );
         }
       }
     }
@@ -296,12 +322,13 @@ export async function runSyntaxCheck(filePath: string): Promise<SyntaxCheckResul
   const fileType = detectFileType(filePath);
   const absolutePath = resolvePath(filePath);
 
-  if (!await fs.pathExists(absolutePath)) {
+  if (!(await fs.pathExists(absolutePath))) {
     return result;
   }
 
-  const isProjectFile = await fs.pathExists(join(WORKSPACE, 'package.json')) ||
-                        await fs.pathExists(join(WORKSPACE, 'tsconfig.json'));
+  const isProjectFile =
+    (await fs.pathExists(join(WORKSPACE, 'package.json'))) ||
+    (await fs.pathExists(join(WORKSPACE, 'tsconfig.json')));
 
   try {
     switch (fileType) {
@@ -311,13 +338,19 @@ export async function runSyntaxCheck(filePath: string): Promise<SyntaxCheckResul
 
         if (isProjectFile) {
           const checkResult = await execa('npx tsc --noEmit --skipLibCheck', {
-            shell: true, cwd: WORKSPACE, timeout: 30000, reject: false,
+            shell: true,
+            cwd: WORKSPACE,
+            timeout: 30000,
+            reject: false,
           });
           const output = (checkResult.stdout || '') + '\n' + (checkResult.stderr || '');
           if (output.trim()) {
             const lines = output.split('\n');
             for (const line of lines) {
-              if ((line.includes(relativePath) || line.includes(filePath)) && line.includes('error TS')) {
+              if (
+                (line.includes(relativePath) || line.includes(filePath)) &&
+                line.includes('error TS')
+              ) {
                 result.errors.push(line.trim());
                 result.hasErrors = true;
                 fileErrorsFoundInProjectCheck = true;
@@ -334,11 +367,18 @@ export async function runSyntaxCheck(filePath: string): Promise<SyntaxCheckResul
         }
 
         if (!fileErrorsFoundInProjectCheck) {
-          const tscCwd = await fs.pathExists(join(WORKSPACE, 'node_modules', 'typescript'))
-            ? WORKSPACE : process.cwd();
-          const singleFileCheck = await execa(`npx tsc --noEmit --skipLibCheck --esModuleInterop --target ES2020 --module ESNext "${absolutePath}" 2>&1`, {
-            shell: true, cwd: tscCwd, timeout: 15000, reject: false,
-          });
+          const tscCwd = (await fs.pathExists(join(WORKSPACE, 'node_modules', 'typescript')))
+            ? WORKSPACE
+            : process.cwd();
+          const singleFileCheck = await execa(
+            `npx tsc --noEmit --skipLibCheck --esModuleInterop --target ES2020 --module ESNext "${absolutePath}" 2>&1`,
+            {
+              shell: true,
+              cwd: tscCwd,
+              timeout: 15000,
+              reject: false,
+            }
+          );
           if (singleFileCheck.exitCode !== 0) {
             const errorOutput = singleFileCheck.stderr || singleFileCheck.stdout;
             if (errorOutput && errorOutput.includes('error TS')) {
@@ -353,7 +393,10 @@ export async function runSyntaxCheck(filePath: string): Promise<SyntaxCheckResul
 
       case 'javascript': {
         const nodeCheck = await execa(`node --check "${absolutePath}" 2>&1`, {
-          shell: true, cwd: WORKSPACE, timeout: 10000, reject: false,
+          shell: true,
+          cwd: WORKSPACE,
+          timeout: 10000,
+          reject: false,
         });
         if (nodeCheck.exitCode !== 0) {
           const errorOutput = nodeCheck.stderr || nodeCheck.stdout;
@@ -367,11 +410,17 @@ export async function runSyntaxCheck(filePath: string): Promise<SyntaxCheckResul
 
       case 'python': {
         const pyCheck = await execa(`python3 -m py_compile "${absolutePath}" 2>&1`, {
-          shell: true, cwd: WORKSPACE, timeout: 15000, reject: false,
+          shell: true,
+          cwd: WORKSPACE,
+          timeout: 15000,
+          reject: false,
         });
         if (pyCheck.exitCode !== 0) {
           const errorOutput = pyCheck.stderr || pyCheck.stdout;
-          if (errorOutput && (errorOutput.includes('SyntaxError') || errorOutput.includes('IndentationError'))) {
+          if (
+            errorOutput &&
+            (errorOutput.includes('SyntaxError') || errorOutput.includes('IndentationError'))
+          ) {
             result.errors.push(errorOutput);
             result.hasErrors = true;
           }
@@ -381,7 +430,10 @@ export async function runSyntaxCheck(filePath: string): Promise<SyntaxCheckResul
 
       case 'go': {
         const goCheck = await execa(`go vet "${absolutePath}" 2>&1`, {
-          shell: true, cwd: WORKSPACE, timeout: 30000, reject: false,
+          shell: true,
+          cwd: WORKSPACE,
+          timeout: 30000,
+          reject: false,
         });
         if (goCheck.exitCode !== 0) {
           result.errors.push(goCheck.stderr || goCheck.stdout);
@@ -392,7 +444,10 @@ export async function runSyntaxCheck(filePath: string): Promise<SyntaxCheckResul
 
       case 'rust': {
         const rustCheck = await execa(`rustc --edition 2021 --check "${absolutePath}" 2>&1`, {
-          shell: true, cwd: WORKSPACE, timeout: 30000, reject: false,
+          shell: true,
+          cwd: WORKSPACE,
+          timeout: 30000,
+          reject: false,
         });
         if (rustCheck.exitCode !== 0) {
           const errorOutput = rustCheck.stderr || rustCheck.stdout;
@@ -406,7 +461,10 @@ export async function runSyntaxCheck(filePath: string): Promise<SyntaxCheckResul
 
       case 'shell': {
         const shellCheck = await execa(`bash -n "${absolutePath}" 2>&1`, {
-          shell: true, cwd: WORKSPACE, timeout: 10000, reject: false,
+          shell: true,
+          cwd: WORKSPACE,
+          timeout: 10000,
+          reject: false,
         });
         if (shellCheck.exitCode !== 0) {
           const errorOutput = shellCheck.stderr || shellCheck.stdout;
@@ -435,7 +493,9 @@ export interface PatchResult {
   hunksApplied?: number;
 }
 
-export function parseHunkHeader(header: string): { oldStart: number; oldCount: number; newStart: number; newCount: number } | null {
+export function parseHunkHeader(
+  header: string
+): { oldStart: number; oldCount: number; newStart: number; newCount: number } | null {
   const match = header.match(/^@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@/);
   if (!match) return null;
   return {

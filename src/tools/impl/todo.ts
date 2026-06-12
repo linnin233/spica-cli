@@ -3,9 +3,7 @@ import type { ToolResult } from '../helpers';
 import type { PersistedTask } from '../../storage/taskPersistence';
 import type { Todo } from '../../agent';
 
-export async function executeTodoRead(
-  _args: Record<string, unknown>,
-): Promise<ToolResult> {
+export async function executeTodoRead(_args: Record<string, unknown>): Promise<ToolResult> {
   const { loadPersistedTasks, getTaskStats } = await import('../../storage/taskPersistence');
   const tasks = loadPersistedTasks(WORKSPACE);
   const stats = getTaskStats(WORKSPACE);
@@ -32,9 +30,7 @@ export async function executeTodoRead(
   return { success: true, output: lines.join('\n') };
 }
 
-export async function executeTodoWrite(
-  args: Record<string, unknown>,
-): Promise<ToolResult> {
+export async function executeTodoWrite(args: Record<string, unknown>): Promise<ToolResult> {
   const todos = (args.todos || []) as Todo[];
   const total = todos.length;
   const completed = todos.filter(t => t.status === 'completed').length;
@@ -59,7 +55,9 @@ export async function executeTodoWrite(
     pending: '[PEND]',
   };
 
-  const lines = [`\nTask List (${completed}/${total} done, ${inProgress} active, ${pending} pending)`];
+  const lines = [
+    `\nTask List (${completed}/${total} done, ${inProgress} active, ${pending} pending)`,
+  ];
   lines.push('---------------------------------');
   todos.forEach((t: Todo, i: number) => {
     const label = statusLabels[t.status] || '[PEND]';

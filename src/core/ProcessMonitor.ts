@@ -37,11 +37,7 @@ export class ProcessMonitor {
     this.processDir = processDir;
   }
 
-  async start(
-    command: string,
-    args: string[],
-    id?: string
-  ): Promise<ProcessInfo> {
+  async start(command: string, args: string[], id?: string): Promise<ProcessInfo> {
     const processId = id || randomUUID();
 
     return new Promise((resolve, reject) => {
@@ -71,7 +67,7 @@ export class ProcessMonitor {
       childProcess.stdout?.on('data', logHandler('stdout'));
       childProcess.stderr?.on('data', logHandler('stderr'));
 
-      childProcess.on('error', (err) => {
+      childProcess.on('error', err => {
         const stored = this.processes.get(processId);
         if (stored) {
           stored.info.status = ProcessStatus.FAILED;
@@ -86,7 +82,7 @@ export class ProcessMonitor {
         resolve(info);
       });
 
-      childProcess.on('close', (code) => {
+      childProcess.on('close', code => {
         const stored = this.processes.get(processId);
         if (stored) {
           stored.info.status = ProcessStatus.EXITED;
@@ -109,9 +105,9 @@ export class ProcessMonitor {
     const stored = this.processes.get(id);
     if (!stored?.process) return false;
 
-    return new Promise((resolve) => {
+    return new Promise(resolve => {
       const process = stored.process!;
-      
+
       process.on('close', () => {
         resolve(true);
       });
@@ -136,7 +132,11 @@ export class ProcessMonitor {
         const sigkillTimer = setTimeout(() => {
           if (stored.info.status === ProcessStatus.KILLED) {
             // 进程未被 SIGTERM 终止，强制 SIGKILL
-            try { process.kill('SIGKILL'); } catch { /* 进程可能已退出 */ }
+            try {
+              process.kill('SIGKILL');
+            } catch {
+              /* 进程可能已退出 */
+            }
           }
         }, 5000);
 
@@ -184,7 +184,7 @@ export class ProcessMonitor {
   private async persistLogs(id: string): Promise<void> {
     const logs = this.logs.get(id);
     if (!logs) return;
-    
+
     try {
       await fs.ensureDir(this.processDir);
       const logPath = path.join(this.processDir, `${id}.log`);

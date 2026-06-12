@@ -16,14 +16,14 @@ export function isCJK(char: string): boolean {
   // Hangul Syllables: U+AC00 - U+D7AF
 
   return (
-    (codePoint >= 0x4E00 && codePoint <= 0x9FFF) ||
-    (codePoint >= 0x3400 && codePoint <= 0x4DBF) ||
-    (codePoint >= 0x20000 && codePoint <= 0x2A6DF) ||
-    (codePoint >= 0xF900 && codePoint <= 0xFAFF) ||
-    (codePoint >= 0x3000 && codePoint <= 0x303F) ||
-    (codePoint >= 0x3040 && codePoint <= 0x309F) ||
-    (codePoint >= 0x30A0 && codePoint <= 0x30FF) ||
-    (codePoint >= 0xAC00 && codePoint <= 0xD7AF)
+    (codePoint >= 0x4e00 && codePoint <= 0x9fff) ||
+    (codePoint >= 0x3400 && codePoint <= 0x4dbf) ||
+    (codePoint >= 0x20000 && codePoint <= 0x2a6df) ||
+    (codePoint >= 0xf900 && codePoint <= 0xfaff) ||
+    (codePoint >= 0x3000 && codePoint <= 0x303f) ||
+    (codePoint >= 0x3040 && codePoint <= 0x309f) ||
+    (codePoint >= 0x30a0 && codePoint <= 0x30ff) ||
+    (codePoint >= 0xac00 && codePoint <= 0xd7af)
   );
 }
 
@@ -34,10 +34,7 @@ export function isFullWidth(char: string): boolean {
 
   // Fullwidth ASCII variants: U+FF01 - U+FF5E
   // Fullwidth symbol variants: various ranges
-  return (
-    (codePoint >= 0xFF01 && codePoint <= 0xFF5E) ||
-    isCJK(char)
-  );
+  return (codePoint >= 0xff01 && codePoint <= 0xff5e) || isCJK(char);
 }
 
 // 获取字符串显示宽度（终端列数）
@@ -49,7 +46,7 @@ export function getStringWidth(str: string): number {
     if (!codePoint) continue;
 
     // 忽略控制字符 (0-31) 和零宽字符
-    if (codePoint < 32 || (codePoint >= 0x200B && codePoint <= 0x200F)) {
+    if (codePoint < 32 || (codePoint >= 0x200b && codePoint <= 0x200f)) {
       continue;
     }
 
@@ -110,7 +107,7 @@ export function formatTableRow(columns: string[], widths: number[]): string {
 
 // 获取字符串中每个字符的宽度数组
 export function getCharWidths(str: string): number[] {
-  return Array.from(str).map(char => isFullWidth(char) ? 2 : 1);
+  return Array.from(str).map(char => (isFullWidth(char) ? 2 : 1));
 }
 
 // 在指定宽度位置分割字符串

@@ -70,7 +70,7 @@ export class InputQueue {
     if (pending.length === 0) return '';
 
     // 标记为已处理
-    pending.forEach(i => i.processed = true);
+    pending.forEach(i => (i.processed = true));
 
     // 发送合并事件
     this.emitEvent({ type: 'merged', count: pending.length, items: pending });
@@ -79,7 +79,7 @@ export class InputQueue {
     if (pending.length === 1) {
       return pending[0].content;
     }
-    
+
     // 多个输入时，使用分隔符
     return pending.map(i => i.content).join('\n\n---\n\n');
   }
@@ -121,11 +121,11 @@ export class InputQueue {
   clearProcessed(): number {
     const count = this.queue.filter(i => i.processed).length;
     this.queue = this.queue.filter(i => !i.processed);
-    
+
     if (count > 0) {
       this.emitEvent({ type: 'cleared', count });
     }
-    
+
     return count;
   }
 
@@ -152,9 +152,9 @@ export class InputQueue {
       total: this.queue.length,
       pending: pending.length,
       processed: processed,
-      pendingPreview: pending.slice(-5).map(i =>
-        i.content.length > 30 ? i.content.slice(0, 30) + '...' : i.content
-      ),
+      pendingPreview: pending
+        .slice(-5)
+        .map(i => (i.content.length > 30 ? i.content.slice(0, 30) + '...' : i.content)),
       droppedWarning: this.queue.length >= this.maxSize - 5, // 接近上限时警告
     };
   }

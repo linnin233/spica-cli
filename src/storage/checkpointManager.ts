@@ -40,7 +40,10 @@ async function getTrackedChangedFiles(workspacePath: string): Promise<string[]> 
   const trackedFiles = new Set<string>();
   try {
     const lsResult = await git.raw(['ls-files', '--cached', '--exclude-standard']);
-    lsResult.split('\n').filter(Boolean).forEach(f => trackedFiles.add(f));
+    lsResult
+      .split('\n')
+      .filter(Boolean)
+      .forEach(f => trackedFiles.add(f));
   } catch {
     // 非 git 仓库或出错，返回空
     return [];
@@ -108,7 +111,7 @@ export async function createCheckpoint(
 
     // 更新 checkpoints.json
     const jsonPath = getCheckpointsJsonPath(workspacePath);
-    const checkpoints: CheckpointMeta[] = await fs.pathExists(jsonPath)
+    const checkpoints: CheckpointMeta[] = (await fs.pathExists(jsonPath))
       ? await fs.readJson(jsonPath)
       : [];
     checkpoints.push(meta);
@@ -129,7 +132,7 @@ export async function listCheckpoints(
 ): Promise<CheckpointMeta[]> {
   try {
     const jsonPath = getCheckpointsJsonPath(workspacePath);
-    if (!await fs.pathExists(jsonPath)) {
+    if (!(await fs.pathExists(jsonPath))) {
       return [];
     }
 
@@ -145,8 +148,8 @@ export async function listCheckpoints(
     }));
 
     // 按时间倒序
-    const sorted = checkpoints.sort((a, b) =>
-      new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    const sorted = checkpoints.sort(
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
     );
 
     return limit ? sorted.slice(0, limit) : sorted;
@@ -164,7 +167,7 @@ export async function getCheckpoint(
     const checkpointDir = path.join(getSnapshotsDir(workspacePath), checkpointId);
     const metaPath = path.join(checkpointDir, 'metadata.json');
 
-    if (!await fs.pathExists(metaPath)) {
+    if (!(await fs.pathExists(metaPath))) {
       return null;
     }
 
@@ -182,11 +185,11 @@ export async function restoreCheckpoint(
   try {
     const checkpointDir = path.join(getSnapshotsDir(workspacePath), checkpointId);
 
-    if (!await fs.pathExists(checkpointDir)) {
+    if (!(await fs.pathExists(checkpointDir))) {
       return { success: false, restoredFiles: [], error: `Checkpoint not found: ${checkpointId}` };
     }
 
-    const meta = await fs.readJson(path.join(checkpointDir, 'metadata.json')) as CheckpointMeta;
+    const meta = (await fs.readJson(path.join(checkpointDir, 'metadata.json'))) as CheckpointMeta;
     const restoredFiles: string[] = [];
 
     for (const filePath of meta.filesBackedUp) {
@@ -257,7 +260,7 @@ export async function showCheckpointFile(
 ): Promise<string | null> {
   try {
     const snapshotPath = path.join(getSnapshotsDir(workspacePath), checkpointId, filePath);
-    if (!await fs.pathExists(snapshotPath)) {
+    if (!(await fs.pathExists(snapshotPath))) {
       return null;
     }
     return await fs.readFile(snapshotPath, 'utf-8');

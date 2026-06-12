@@ -19,7 +19,7 @@ const shouldSkipPty = isWindows && process.env.CI === 'true';
 // 键盘输入序列
 const Keys = {
   Enter: '\r',
-  Backspace: '\b',     // 使用 BS (0x08) 而不是 DEL (0x7f)，因为 PTY 会转换 DEL
+  Backspace: '\b', // 使用 BS (0x08) 而不是 DEL (0x7f)，因为 PTY 会转换 DEL
   BackspaceDel: '\x7f', // DEL (127) - 某些终端使用这个
   Tab: '\t',
   Escape: '\x1b',
@@ -68,7 +68,7 @@ async function runPTYTest(
       cols,
       rows,
       cwd: process.cwd(),
-      env: { ...process.env, FORCE_COLOR: '0' } as Record<string, string>,  // 禁用颜色减少干扰
+      env: { ...process.env, FORCE_COLOR: '0' } as Record<string, string>, // 禁用颜色减少干扰
     });
 
     // 捕获输出
@@ -102,7 +102,7 @@ async function runPTYTest(
     const maxWait = 5000;
     const checkReady = () => {
       if (output.includes('=== TUI State Test Start ===')) {
-        setTimeout(sendNext, 200);  // 确认后再等待200ms
+        setTimeout(sendNext, 200); // 确认后再等待200ms
       } else if (Date.now() - startTime < maxWait) {
         setTimeout(checkReady, 100);
       } else {
@@ -148,9 +148,7 @@ function cleanANSI(text: string): string {
  */
 function extractInputContent(output: string): string[] {
   const lines = cleanANSI(output).split('\n');
-  return lines
-    .filter(line => line.startsWith('> '))
-    .map(line => line.slice(2).trim());
+  return lines.filter(line => line.startsWith('> ')).map(line => line.slice(2).trim());
 }
 
 describe.skipIf(shouldSkipPty)('TUI Automated Tests with PTY', () => {
@@ -209,8 +207,8 @@ describe.skipIf(shouldSkipPty)('TUI Automated Tests with PTY', () => {
       // test + left => tes|t => backspace 删除 s => tet
       const result = await runPTYTest(scriptPath, [
         'test',
-        Keys.ArrowLeft,  // 光标从4移到3，在 'tes|t'
-        Keys.Backspace,   // 删除位置2的 's'
+        Keys.ArrowLeft, // 光标从4移到3，在 'tes|t'
+        Keys.Backspace, // 删除位置2的 's'
         Keys.Enter,
       ]);
 
@@ -234,20 +232,14 @@ describe.skipIf(shouldSkipPty)('TUI Automated Tests with PTY', () => {
   describe('Paste Tests', () => {
     it('should handle paste content', async () => {
       const pasteContent = '粘贴测试';
-      const result = await runPTYTest(scriptPath, [
-        Keys.paste(pasteContent),
-        Keys.Enter,
-      ]);
+      const result = await runPTYTest(scriptPath, [Keys.paste(pasteContent), Keys.Enter]);
 
       expect(result.output).toContain('粘贴测试');
     });
 
     it('should handle mixed paste content', async () => {
       const pasteContent = 'Hello世界！';
-      const result = await runPTYTest(scriptPath, [
-        Keys.paste(pasteContent),
-        Keys.Enter,
-      ]);
+      const result = await runPTYTest(scriptPath, [Keys.paste(pasteContent), Keys.Enter]);
 
       expect(result.output).toContain('Hello世界！');
       expect(result.output).toContain('CharCount: 8');
@@ -262,7 +254,7 @@ describe.skipIf(shouldSkipPty)('TUI Automated Tests with PTY', () => {
       // 测试脚本输出光标状态信息，而不是 ANSI 光标定位序列
       expect(result.output).toContain('你好');
       expect(result.output).toContain('CharCount: 2');
-      expect(result.output).toContain('DisplayWidth: 4');  // 中文每个字符宽度为 2
+      expect(result.output).toContain('DisplayWidth: 4'); // 中文每个字符宽度为 2
     });
 
     it('should calculate display width correctly for complex content', async () => {

@@ -3,9 +3,7 @@ import fastGlob from 'fast-glob';
 import { WORKSPACE, resolvePath } from '../helpers';
 import type { ToolResult } from '../helpers';
 
-export async function executeGrep(
-  args: Record<string, unknown>,
-): Promise<ToolResult> {
+export async function executeGrep(args: Record<string, unknown>): Promise<ToolResult> {
   const grepPath = args.path ? resolvePath(args.path as string) : WORKSPACE;
   const includePattern = (args.include as string) || '*';
   const maxLines = (args.maxLines as number) || 100;
@@ -42,9 +40,10 @@ export async function executeGrep(
 
     return {
       success: true,
-      output: matches.length > 0
-        ? `Found ${matches.length} matches:\n${matches.join('\n')}`
-        : 'No matches found',
+      output:
+        matches.length > 0
+          ? `Found ${matches.length} matches:\n${matches.join('\n')}`
+          : 'No matches found',
       content: matches.join('\n'),
     };
   } catch (error: any) {

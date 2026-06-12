@@ -44,7 +44,7 @@ describe('ScreenManager FullWidth Cursor', () => {
     });
 
     it('should handle fullwidth space correctly', () => {
-      screen.state.inputBuffer[0] = '　';  // 全角空格
+      screen.state.inputBuffer[0] = '　'; // 全角空格
       expect([...screen.state.inputBuffer[0]].length).toBe(1);
       // 显示宽度应该是 2
     });

@@ -62,12 +62,12 @@ export function parseCursorPosition(output: string): Array<{ row: number; col: n
 export function parseScreenContent(output: string): string {
   // 移除所有 ANSI 控制序列
   return output
-    .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')  // CSI 序列
-    .replace(/\x1b\][^\x07]*\x07/g, '')      // OSC 序列
-    .replace(/\x1b[()][AB012]/g, '')          // 字符集选择
-    .replace(/\x1b[78]/g, '')                 // 保存/恢复光标
-    .replace(/\x07/g, '')                     // BEL
-    .replace(/\x1b\[\?[\d;]*[hl]/g, '')       // 私有模式设置
+    .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '') // CSI 序列
+    .replace(/\x1b\][^\x07]*\x07/g, '') // OSC 序列
+    .replace(/\x1b[()][AB012]/g, '') // 字符集选择
+    .replace(/\x1b[78]/g, '') // 保存/恢复光标
+    .replace(/\x07/g, '') // BEL
+    .replace(/\x1b\[\?[\d;]*[hl]/g, '') // 私有模式设置
     .trim();
 }
 
@@ -137,7 +137,7 @@ export async function runTUITest(options: TUITestOptions): Promise<TUITestResult
     expectedOutputPatterns,
   } = options;
 
-  return new Promise((resolve) => {
+  return new Promise(resolve => {
     let output = '';
     let timeoutId: NodeJS.Timeout;
 
@@ -199,9 +199,14 @@ export async function runTUITest(options: TUITestOptions): Promise<TUITestResult
         success: exitCode === 0 && cursorMatch && outputMatch,
         output,
         cursorPositions,
-        error: exitCode !== 0 ? `Exit code: ${exitCode}` :
-               !cursorMatch ? 'Cursor position mismatch' :
-               !outputMatch ? 'Output pattern not found' : undefined,
+        error:
+          exitCode !== 0
+            ? `Exit code: ${exitCode}`
+            : !cursorMatch
+              ? 'Cursor position mismatch'
+              : !outputMatch
+                ? 'Output pattern not found'
+                : undefined,
       });
     });
 

@@ -5,28 +5,35 @@
 spica-cli is an AI coding agent CLI with interactive and single-task modes. It supports multiple LLM providers, MCP servers, and a skill system for extending capabilities.
 
 **Entry points:**
-- `src/index.ts` - CLI entry, command parsing, interactive mode (~1584 lines)
-- `src/agent.ts` - Core agent loop (`SpicaAgent` class), tool execution dispatch, message handling, conflict detection, compression (~1577 lines)
-- `src/tools/execute.ts` - All tool execution logic (~1891 lines)
-- `src/tools/registry.ts` - All tool definitions (names, descriptions, parameters)
-- `src/prompts/system.ts` - System prompt assembly, AGENTS.md loading, learnings injection (~233 lines)
-- `src/cli/ui/screenManager.ts` - TUI rendering, input handling, thinking animation (~790 lines)
+- `src/index.ts` — CLI entry (166 lines), commander setup, delegates to mode-specific modules
+- `src/commands/interactive.ts` — Full interactive TUI mode (slash commands, session mgmt, agent loop)
+- `src/commands/simpleMode.ts` — Single-task mode (one-shot prompt → exit)
+- `src/commands/providers.ts` — Provider management commands (`set`, `use`, `list`, `show`, `remove`)
+- `src/agent.ts` — Core agent loop (`SpicaAgent` class), tool execution dispatch, message handling, conflict detection, compression
+- `src/tools/execute.ts` — All tool execution logic
+- `src/tools/registry.ts` — All tool definitions (names, descriptions, parameters)
+- `src/prompts/system.ts` — System prompt assembly, AGENTS.md loading, learnings injection
+- `src/cli/ui/screenManager.ts` — TUI rendering, input handling, thinking animation
 
 **Key directories:**
-- `src/llm/` - LLM client, providers (BaseProvider, OpenAICompatible), rate limiter, token counter
-- `src/tools/` - Tool definitions (`registry.ts`), execution (`execute.ts`), helpers (`helpers.ts`), subagents (`subAgent.ts`), and type-specific impls (`impl/`)
-- `src/skills/` - Skill loading and invocation (`index.ts`, ~371 lines)
-- `src/cli/` - TUI (`ui/`), events, input handling, diff rendering, skill gate
-- `src/core/RuntimeState.ts` - Single source of truth for runtime state (~231 lines)
-- `src/core/EventBus.ts` - Event system
-- `src/core/ProcessMonitor.ts` - Background process monitoring
-- `src/storage/` - Checkpoint manager, project state persistence, task persistence
-- `src/mcp/` - MCP client (`client.ts`)
-- `src/hooks/` - Pre/post hook execution (`index.ts`)
-- `src/utils/` - Settings, project config, session, history, platform, message cleaner, logger, bell
-- `src/builtin-skills/superpowers/` - Built-in skills (14 skills)
+- `src/commands/` — CLI mode modules (`interactive.ts`, `simpleMode.ts`, `providers.ts`) and slash command subsystem
+- `src/commands/slash/` — Slash command handlers (10 modules + dispatch `index.ts` + `types.ts`)
+- `src/llm/` — LLM client, providers (BaseProvider, OpenAICompatible), rate limiter, token counter
+- `src/tools/` — Tool definitions (`registry.ts`), execution (`execute.ts`), helpers (`helpers.ts`), subagents (`subAgent.ts`), and type-specific impls (`impl/`)
+- `src/skills/` — Skill loading and invocation
+- `src/cli/` — TUI (`ui/`), events, input handling, diff rendering, skill gate
+- `src/core/` — RuntimeState (singleton), EventBus (pub/sub), ProcessMonitor
+- `src/storage/` — Checkpoint manager, project state persistence, task persistence
+- `src/mcp/` — MCP client (`client.ts`)
+- `src/hooks/` — Pre/post hook execution
+- `src/utils/` — Settings, project config, session, history, platform, message cleaner, logger, bell
+- `src/builtin-skills/superpowers/` — 14 built-in skills
 
-**Stats:** 74 source files, 61 test files (135 `.ts` files total)
+**Stats:** ~125 source files, 30 test files (git tracked `.ts` only)
+
+## Existing Instruction Files
+
+- `CLAUDE.md` — Detailed architecture reference covering agent internals, event system, interrupt handling, compaction, hooks, sub-agents, input queue, and LLM provider architecture. Complement to this file.
 
 ## Build
 
@@ -40,8 +47,8 @@ npx tsc --noEmit      # Type check without building (0 errors)
 **Build pipeline:** `npm run build` → `npm run build:cli` → `node scripts/build-bin.js`
 
 **Build outputs:**
-- `bin/spica` - Unix/macOS/Windows Node.js wrapper that resolves tsconfig path and runs via `npx tsx`
-- `bin/spica.cmd` - Windows cmd wrapper (alternative entry point)
+- `bin/spica` — Unix/macOS/Windows Node.js wrapper that resolves tsconfig path and runs via `npx tsx`
+- `bin/spica.cmd` — Windows cmd wrapper (alternative entry point)
 
 **Runtime:** The project uses `tsx` (TypeScript runner) — there is no compiled `dist/` output from `npm run build`. TypeScript declarations output to `dist/` but are not part of the build pipeline.
 
@@ -50,11 +57,12 @@ npx tsc --noEmit      # Type check without building (0 errors)
 ## Test
 
 ```bash
-npm run test:run                    # Run all 649 tests (61 files, vitest)
+npm test                          # Run tests in watch mode (vitest)
+npm run test:run                  # Run all tests once
 npm run test:run -- src/__tests__/  # Run only src tests (exclude dist)
-npx vitest run <file-pattern>       # Run specific test file
-npx vitest run -t "<test name>"     # Run specific test by name
-npm run test:run -- --coverage      # Run with coverage (requires @vitest/coverage-v8)
+npx vitest run <file-pattern>     # Run specific test file
+npx vitest run -t "<test name>"   # Run specific test by name
+npm run test:run -- --coverage    # Run with coverage (requires @vitest/coverage-v8)
 ```
 
 **Test locations:** `src/__tests__/` and `src/**/__tests__/`
@@ -63,18 +71,21 @@ npm run test:run -- --coverage      # Run with coverage (requires @vitest/covera
 
 **Coverage:** Uses v8 provider. Coverage excludes `src/builtin-skills/`.
 
-**Known issues:** 3 tests fail (as of last run):
-- `src/tools/__tests__/toolsCore.test.ts` — syntax check timeout at 5000ms
-- `src/__tests__/boundaryCases.test.ts` — parallel tool conflict detection hook timeout at 10000ms
-- `src/__tests__/state/initCleanup.test.ts` — init error cleanup race condition
+**Known Windows-only failures (~40 tests across 6 files):**
+- `src/cli/ui/__tests__/tuiPty.test.ts` — PTY tests (14 tests): `node-pty` Windows agent unavailable for `npx tsx`
+- `src/tools/__tests__/monitor.test.ts` — Monitor tests (14 tests): process management timing on Windows
+- `src/__tests__/security/resolvePath.test.ts` — Symlink tests (6 tests): Windows symlink permissions
+- `src/__tests__/fullFeature.test.ts` — TUI tests (4 tests): Chinese input encoding on Windows
+- `src/tools/__tests__/toolsCore.test.ts` — occasional syntax check timeout
+- `src/utils/__tests__/session.test.ts` — Session persistence (2 tests): filesystem write timing
 
-CI sets `SKIP_API_TESTS: true` and `CI: true`.
+CI (ubuntu) typically passes all tests. CI sets `SKIP_API_TESTS: true` and `CI: true`.
 
 ## Lint
 
 ```bash
-npm run lint         # Run ESLint on src/**/*.ts (0 errors, ~79 warnings)
-npm run lint:fix     # Auto-fix lint issues (~3 warnings fixable)
+npm run lint         # Run ESLint on src/**/*.ts (0 errors, ~126 warnings)
+npm run lint:fix     # Auto-fix lint issues (~6 warnings fixable)
 npm run lint:strict  # Fail on warnings (--max-warnings 0, not used in CI)
 ```
 
@@ -105,13 +116,12 @@ npx prettier --check <file>   # Check formatting only
 
 **Also see `.editorconfig`:** utf-8, lf, 2-space indent, insert_final_newline, trim_trailing_whitespace (except markdown)
 
-**Note:** `src/index.ts` currently has prettier formatting warnings — run `npx prettier --write src/index.ts` if needed.
-
 ## Code Style
 
 - TypeScript `ES2022` target, `ESNext` modules, `"type": "module"` in package.json
 - `moduleResolution: "bundler"`, `jsx: "react"` (for ink/react in some paths)
-- `noImplicitAny: false` — explicit `any` allowed (warning only via ESLint)
+- `strict: true` in tsconfig but `noImplicitAny: false` — explicit `any` allowed (warning only via ESLint)
+- `tsconfig.json` excludes `src/builtin-skills/superpowers/**/*.ts` from typecheck
 - No comments unless explicitly requested
 - Import style: `import { x } from 'y'` (ESM named imports)
 - Tool results: `{ success, output?, error?, content?, diff?, syntaxErrors? }`
@@ -127,32 +137,46 @@ npx prettier --check <file>   # Check formatting only
 4. CI runs on: Node 18, 20, 22 on ubuntu-latest and windows-latest
 
 **CI checks (in order):** `npm ci` → `npx tsc --noEmit` → `npm run lint` (Node >= 20 only) → `npm run test:run` (CI=true, SKIP_API_TESTS=true) → `npm run build`
-See `.github/workflows/ci.yml` for full details.
+**CI workflow files:**
+- `.github/workflows/ci.yml` — Primary: matrix (Node 18/20/22 on ubuntu-latest, windows-latest)
+- `.github/workflows/test.yml` — Legacy: simpler ubuntu-only on Node 18/20
+
+## Commands Architecture
+
+Refactored from a monolithic `src/index.ts` (~1400 lines) into modular components:
+
+```
+src/commands/
+├── interactive.ts    # runInteractiveMode() — TUI, agent init, stdin handler, slash dispatch
+├── simpleMode.ts     # runSimpleMode() — one-shot prompt execution
+├── providers.ts      # registerProviderCommands() — set/use/list/show/remove providers
+└── slash/            # Slash command subsystem
+    ├── index.ts      # dispatchSlash() — routes commands to handlers
+    ├── types.ts      # SlashContext, SlashHandler type definitions
+    ├── help.ts       # /help, /init, /history (message history)
+    ├── session.ts    # /history(sessions), /view, /rename, /delete, /archive, /clear, /reset, /new
+    ├── checkpoint.ts # /checkpoint list|show|restore|clean
+    ├── skill.ts      # /skill list|install|uninstall|add|remove|edit, /<skill_name> (invoke)
+    ├── mcp.ts        # /mcp status|init|tools|disconnect
+    ├── compact.ts    # /summary, /compact
+    ├── queue.ts      # /queue, /q, /undo
+    └── status.ts     # /status
+```
+
+**Slash command dispatch flow:**
+1. `interactive.ts` `handleInput()` detects leading `/`
+2. Calls `dispatchSlash(trimmed, ctx)` from `slash/index.ts`
+3. If dispatch returns `false`, treats input as regular message (send to agent)
+4. Each handler follows the `SlashHandler` type: `(args: string, ctx: SlashContext) => Promise<void>`
 
 ## Architecture Notes
-
-### System Prompt Layers (in order, highest priority first)
-1. **AGENTS.md content** — injected as raw prose, parsed for rule layers (CRITICAL > IMPORTANT > PREFERENCES)
-2. **Bootstrap skill** — `using-superpowers` auto-injected to guide skill usage
-3. **Base identity** — `SYSTEM_PROMPT` constant in `src/prompts/system.ts`
-4. **File-scoped commands** — table of preferred scoped commands
-5. **Learnings** — from `.spica/learnings/` markdown files
-6. **Skills metadata** — brief listing of available skills
 
 ### Tool Architecture
 - **Definitions:** `src/tools/registry.ts` — all tool schemas (`TOOLS_DEFINITIONS` array)
 - **Execution:** `src/tools/execute.ts` — giant switch statement dispatching to impl modules
 - **Barrel:** `src/tools/index.ts` — re-exports (12 lines only)
-- **Impl modules:** `src/tools/impl/` — `file_read.ts`, `file_manage.ts`, `glob.ts`, `grep.ts`, `directory.ts`, `workspace.ts`, `todo.ts`, `question.ts`, `skill.ts`, `web.ts`, `lint_test.ts`
+- **Impl modules (11):** `src/tools/impl/` — `file_read.ts`, `file_manage.ts`, `glob.ts`, `grep.ts`, `directory.ts`, `workspace.ts`, `todo.ts`, `question.ts`, `skill.ts`, `web.ts`, `lint_test.ts`
 - **Specialized tools:** `codeHealth.ts`, `testQuality.ts`, `subAgent.ts`
-
-### Key Mechanisms
-- **Tool conflict detection:** `detectToolConflicts()` in `agent.ts` — tools operating on same resource path are sequenced
-- **Message cleaning:** Orphaned tool messages (result without call or vice versa) are auto-cleaned before API calls
-- **Context compression:** Triggers at token threshold, preserves recent messages, uses compact prompt
-- **Interrupt handling:** ESC ESC triggers graceful interrupt via `AbortController`, preserves tool results
-- **Subagent early exit:** When one subagent finds a definitive result, siblings are signaled to stop (saves tokens)
-- **Stuck detection:** Bash commands are killed after `stuckWarningMs` (default 120s) with `SIGKILL` to the process group
 
 ### Subagent Types
 | Type | Allowed Tools | Timeout | Description |
@@ -162,6 +186,14 @@ See `.github/workflows/ci.yml` for full details.
 | `fix` | file_read, file_edit, bash, lint | 120s | Fix specific issues |
 | `build` | * (all tools) | 180s | Full feature implementation |
 
+### Key Mechanisms
+- **Tool conflict detection:** `detectToolConflicts()` in `agent.ts` — tools operating on same resource path are sequenced
+- **Message cleaning:** Orphaned tool messages (result without call or vice versa) are auto-cleaned before API calls
+- **Context compression:** Triggers at token threshold, preserves recent messages, uses compact prompt
+- **Interrupt handling:** ESC ESC triggers graceful interrupt via `AbortController`, preserves tool results
+- **Subagent early exit:** When one subagent finds a definitive result, siblings are signaled to stop (saves tokens)
+- **Stuck detection:** Bash commands are killed after `stuckWarningMs` (default 120s) with `SIGKILL` to the process group
+
 ### Git Safety
 - `checkout` checks for uncommitted changes before switching, suggests stash workflow
 - `reset` (hard/mixed) checks for uncommitted changes, requires user confirmation
@@ -169,11 +201,11 @@ See `.github/workflows/ci.yml` for full details.
 
 ## Skills System
 
-**Built-in skills (14 total):**
+**Built-in skills (14):**
 `brainstorming`, `systematic-debugging`, `test-driven-development`, `verification-before-completion`, `requesting-code-review`, `receiving-code-review`, `executing-plans`, `writing-plans`, `subagent-driven-development`, `dispatching-parallel-agents`, `finishing-a-development-branch`, `using-git-worktrees`, `writing-skills`, `using-superpowers`
 
 **Skill locations:**
-- Built-in: `src/builtin-skills/superpowers/` (each skill is a subdirectory)
+- Built-in: `src/builtin-skills/superpowers/` (each skill is a subdirectory with `SKILL.md`)
 - Project: `.spica/skills/`
 
 **Installation:**

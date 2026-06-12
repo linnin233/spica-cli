@@ -15,11 +15,11 @@ export class EventBus {
   }
 
   once<T = unknown>(event: string, handler: EventHandler<T>): void {
-    const wrapper: EventHandler = (payload) => {
+    const wrapper: EventHandler = payload => {
       this.handlers.get(event)?.delete(wrapper);
       (handler as EventHandler)(payload);
     };
-    
+
     if (!this.handlers.has(event)) {
       this.handlers.set(event, new Set());
     }

@@ -33,7 +33,7 @@ describe('Session Persistence', () => {
     const longContent = 'A'.repeat(5000);
     const messages: ChatMessage[] = [
       { role: 'user', content: longContent },
-      { role: 'assistant', content: 'short' }
+      { role: 'assistant', content: 'short' },
     ];
 
     saveSession(testWorkspace, messages);
@@ -52,11 +52,9 @@ describe('Session Persistence', () => {
       {
         role: 'assistant',
         content: 'using tool',
-        toolCalls: [
-          { id: 'call_1', name: 'test_tool', arguments: { arg: 'value' } }
-        ]
+        toolCalls: [{ id: 'call_1', name: 'test_tool', arguments: { arg: 'value' } }],
       },
-      { role: 'tool', content: 'tool result', toolCallId: 'call_1' }
+      { role: 'tool', content: 'tool result', toolCallId: 'call_1' },
     ];
 
     saveSession(testWorkspace, messages);
@@ -77,10 +75,8 @@ describe('Session Persistence', () => {
       {
         role: 'assistant',
         content: 'using tool',
-        toolCalls: [
-          { id: 'call_1', name: 'test_tool', arguments: {} }
-        ]
-      }
+        toolCalls: [{ id: 'call_1', name: 'test_tool', arguments: {} }],
+      },
       // Missing tool response!
     ];
 
@@ -101,12 +97,12 @@ describe('Session Persistence', () => {
         content: '',
         toolCalls: [
           { id: 'call_1', name: 'tool1', arguments: {} },
-          { id: 'call_2', name: 'tool2', arguments: {} }
-        ]
+          { id: 'call_2', name: 'tool2', arguments: {} },
+        ],
       },
       { role: 'tool', content: 'result1', toolCallId: 'call_1' },
       { role: 'tool', content: 'result2', toolCallId: 'call_2' },
-      { role: 'assistant', content: 'done' }
+      { role: 'assistant', content: 'done' },
     ];
 
     saveSession(testWorkspace, messages);
@@ -122,7 +118,7 @@ describe('Session Persistence', () => {
     const messages: ChatMessage[] = [
       { role: 'user', content: 'test' },
       { role: 'tool', content: 'orphaned', toolCallId: 'call_x' },
-      { role: 'assistant', content: 'response' }
+      { role: 'assistant', content: 'response' },
     ];
 
     saveSession(testWorkspace, messages);

@@ -61,7 +61,12 @@ process.stdin.on('data', (data: Buffer) => {
   }
 
   // 检测 Enter（PTY 发送 \r 或 \r\n）
-  if (str === '\r' || str === '\n' || (str.includes('\r') && str.length === 1) || (str.includes('\n') && str.length === 1)) {
+  if (
+    str === '\r' ||
+    str === '\n' ||
+    (str.includes('\r') && str.length === 1) ||
+    (str.includes('\n') && str.length === 1)
+  ) {
     const content = screen.state.inputBuffer[0];
     if (content) {
       outputTestResult(content);

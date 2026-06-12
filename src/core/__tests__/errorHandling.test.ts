@@ -21,7 +21,7 @@ describe('Error Handling Tests', () => {
         '401': 'API Key 无效或已过期',
         '429': '请求过于频繁',
         '500': '服务器内部错误',
-        'ECONNREFUSED': '连接被拒绝',
+        ECONNREFUSED: '连接被拒绝',
       };
 
       for (const [code, hint] of Object.entries(errorHints)) {
