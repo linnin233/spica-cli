@@ -1125,10 +1125,13 @@ export function setupAgentEvents(
     const importantTools = ['bash', 'write', 'edit', 'web_fetch', 'web_search'];
     if (importantTools.includes(data.name)) {
       const args = data.arguments || {};
-      const argsDisplay =
+      const termWidth = getTerminalWidth();
+      const maxDisplay = Math.min(termWidth - 15, 80);
+      const raw =
         data.name === 'bash'
-          ? String(args.command || '').slice(0, 30)
-          : String(args.path || args.url || '').slice(0, 30);
+          ? String(args.command || '')
+          : String(args.path || args.url || '');
+      const argsDisplay = truncateToWidth(raw, maxDisplay);
       screen.appendScroll(COLORS.muted(`  ${data.name} ${argsDisplay} → `));
     }
 
@@ -1449,6 +1452,15 @@ export function setupAgentEvents(
       COLORS.secondary(`\n[compress] ${data.before}→${data.after}${tokensInfo}\n`)
     );
     screen.restoreCursor();
+  });
+
+  // Monitor 工具输出事件
+  on('monitor_event', (data: { task_id: string; description: string; line: string }) => {
+    screen.appendScroll(COLORS.muted(`[monitor:${data.description}] ${data.line}\n`));
+  });
+
+  on('monitor_error', (data: { task_id: string; error: string }) => {
+    screen.appendScroll(COLORS.error(`[monitor error] ${data.error}\n`));
   });
 
   // 返回 cleanup 函数

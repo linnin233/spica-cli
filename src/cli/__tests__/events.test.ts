@@ -120,3 +120,39 @@ describe('Tool Summary Format', () => {
     });
   });
 });
+
+describe('Monitor Event Format', () => {
+  describe('formatMonitorEvent', () => {
+    const formatMonitorEvent = (description: string, line: string): string =>
+      `[monitor:${description}] ${line}`;
+
+    it('should format monitor event with description and line', () => {
+      const result = formatMonitorEvent('watching logs', 'ERROR: something broke');
+      expect(result).toBe('[monitor:watching logs] ERROR: something broke');
+    });
+
+    it('should handle empty line', () => {
+      const result = formatMonitorEvent('build', '');
+      expect(result).toBe('[monitor:build] ');
+    });
+
+    it('should handle multiline content as single line', () => {
+      const result = formatMonitorEvent('test', 'line1\nline2');
+      expect(result).toBe('[monitor:test] line1\nline2');
+    });
+  });
+
+  describe('formatMonitorError', () => {
+    const formatMonitorError = (error: string): string => `[monitor error] ${error}`;
+
+    it('should format monitor error message', () => {
+      const result = formatMonitorError('process crashed');
+      expect(result).toBe('[monitor error] process crashed');
+    });
+
+    it('should handle empty error message', () => {
+      const result = formatMonitorError('');
+      expect(result).toBe('[monitor error] ');
+    });
+  });
+});

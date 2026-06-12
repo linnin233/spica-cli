@@ -773,6 +773,12 @@ Write-Output $proc.Id;
             .filter(l => l.trim());
           for (const line of lines) {
             outputLines.push(`[stderr] ${line}`);
+            eventCallback?.('monitor_event', {
+              task_id: taskId,
+              description,
+              line: `[stderr] ${line}`,
+              timestamp: Date.now(),
+            });
           }
         });
 
