@@ -1236,7 +1236,7 @@ Write-Output $proc.Id;
               );
             };
 
-            const MAX_RETRIES = 1;
+            const MAX_RETRIES = 2;
             let lastError: string = 'Unknown error';
 
             for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -1256,11 +1256,17 @@ Write-Output $proc.Id;
               }
 
               // 监听器引用，用于清理
+              const toolCallHandler = (data: any) => {
+                if (eventCallback) {
+                  eventCallback('sub_agent_tool_call', { id: subTaskId, ...data });
+                }
+              };
               const toolResultHandler = (data: any) => {
                 if (eventCallback) {
                   eventCallback('sub_agent_tool_result', { id: subTaskId, ...data });
                 }
               };
+              taskAgent.on('tool_call', toolCallHandler);
               taskAgent.on('tool_result', toolResultHandler);
 
               // 创建超时 AbortController
@@ -1275,6 +1281,7 @@ Write-Output $proc.Id;
               let siblingAbortHandler: (() => void) | null = null;
               if (externalSignal) {
                 if (externalSignal.aborted) {
+                  taskAgent.off('tool_call', toolCallHandler);
                   taskAgent.off('tool_result', toolResultHandler);
                   taskAgent.interrupt();
                   taskAgent.dispose();
@@ -1297,6 +1304,7 @@ Write-Output $proc.Id;
                 };
                 siblingAbortController.signal.addEventListener('abort', siblingAbortHandler);
               } else {
+                taskAgent.off('tool_call', toolCallHandler);
                 taskAgent.off('tool_result', toolResultHandler);
                 taskAgent.interrupt();
                 taskAgent.dispose();
@@ -1329,6 +1337,7 @@ Write-Output $proc.Id;
 
                 // Success — cleanup and return
                 clearTimeout(timeoutId);
+                taskAgent.off('tool_call', toolCallHandler);
                 taskAgent.off('tool_result', toolResultHandler);
                 if (abortHandler && externalSignal) {
                   externalSignal.removeEventListener('abort', abortHandler);
@@ -1381,6 +1390,7 @@ Write-Output $proc.Id;
               } catch (err: any) {
                 // Cleanup
                 clearTimeout(timeoutId);
+                taskAgent.off('tool_call', toolCallHandler);
                 taskAgent.off('tool_result', toolResultHandler);
                 if (abortHandler && externalSignal) {
                   externalSignal.removeEventListener('abort', abortHandler);
@@ -1427,7 +1437,7 @@ Write-Output $proc.Id;
         const succeededTasks = results.filter(r => r.startsWith('[PASS]'));
 
         // Cap total output size to prevent context pollution
-        const MAX_TOTAL_OUTPUT = 2000;
+        const MAX_TOTAL_OUTPUT = 4000;
         let output = results.join('\n');
         const warningSuffix =
           failedTasks.length > 0

@@ -639,14 +639,14 @@ export class SpicaAgent extends EventEmitter {
     // Inject recent context summary — so sub-agent knows what's happening
     const recentUserMessages = parentMessages
       .filter(m => m.role === 'user')
-      .slice(-3)
-      .map(m => (m.content || '').slice(0, 200));
+      .slice(-5)
+      .map(m => (m.content || '').slice(0, 300));
     const recentAssistantActions = parentMessages
       .filter(m => m.role === 'assistant' && m.toolCalls)
-      .slice(-3)
+      .slice(-5)
       .map(m => {
         const tools = m.toolCalls?.map(tc => tc.name).join(', ') || '';
-        const content = (m.content || '').slice(0, 80);
+        const content = (m.content || '').slice(0, 120);
         return `[${tools}] ${content}`;
       });
 

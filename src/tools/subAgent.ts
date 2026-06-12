@@ -27,22 +27,22 @@ export interface SubAgentConfig {
 export const SUB_AGENT_CONFIGS: Record<SubAgentType, SubAgentConfig> = {
   explore: {
     allowedTools: ['glob', 'grep', 'read', 'directory_list', 'file_exists'],
-    timeout: 30000,
-    description: 'Fast read-only exploration, locate files and code',
+    timeout: 90000,
+    description: 'Read-only exploration, locate files and code',
   },
   review: {
     allowedTools: ['glob', 'grep', 'read', 'directory_list', 'lint', 'file_exists'],
-    timeout: 60000,
+    timeout: 120000,
     description: 'Code review, find issues',
   },
   fix: {
     allowedTools: ['read', 'edit', 'bash', 'lint'],
-    timeout: 120000,
+    timeout: 180000,
     description: 'Fix specific issues, minimal changes',
   },
   build: {
     allowedTools: '*', // All tools
-    timeout: 180000,
+    timeout: 300000,
     description: 'Full feature implementation',
   },
 };

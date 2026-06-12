@@ -385,6 +385,47 @@ function formatArgsCompact(args: Record<string, unknown>, maxWidth: number): str
   return truncateToWidth(result, maxWidth);
 }
 
+// Format key tool args for subagent display (brief, one arg max)
+function formatToolArgs(toolName: string, args: Record<string, unknown>): string {
+  if (!args || Object.keys(args).length === 0) return '';
+
+  const filtered = Object.keys(args).filter(k => !k.startsWith('_'));
+  if (filtered.length === 0) return '';
+
+  // Pick the most informative arg per tool type
+  const keyArg = ((): string | null => {
+    switch (toolName) {
+      case 'read':
+      case 'file_read':
+        return typeof args.path === 'string' ? (args.path as string).replace(/.*\//, '') : null;
+      case 'write':
+      case 'file_write':
+      case 'edit':
+      case 'file_edit':
+        return typeof args.path === 'string' ? (args.path as string).replace(/.*\//, '') : null;
+      case 'grep':
+        return typeof args.pattern === 'string' ? (args.pattern as string).slice(0, 30) : null;
+      case 'glob':
+        return typeof args.pattern === 'string' ? (args.pattern as string).slice(0, 30) : null;
+      case 'bash':
+        return typeof args.command === 'string' ? (args.command as string).slice(0, 40) : null;
+      case 'directory_list':
+        return typeof args.path === 'string' ? (args.path as string).replace(/.*\//, '') : null;
+      default: {
+        // Show first string arg
+        const firstStr = filtered.find(k => typeof args[k] === 'string');
+        if (firstStr) {
+          const v = args[firstStr] as string;
+          return v.length > 30 ? v.slice(0, 27) + '...' : v;
+        }
+        return null;
+      }
+    }
+  })();
+
+  return keyArg ? `(${keyArg})` : '';
+}
+
 // 工具摘要辅助函数
 function countDiffLines(text: string, prefix: '+' | '-'): number {
   return text.split('\n').filter(l => l.startsWith(prefix) && !l.startsWith(prefix + prefix))
@@ -898,6 +939,7 @@ interface SubAgentRecord {
   startTime: number;
   summary?: string;
   error?: string;
+  toolCount: number;
 }
 
 const activeSubAgents: Map<string, SubAgentRecord> = new Map();
@@ -936,12 +978,22 @@ function displaySubAgentPanel(): void {
           ? COLORS.success
           : COLORS.error;
 
-    const line = `${statusIcon} [${agent.type}] ${truncateToWidth(agent.description, 20)} (${elapsed})`;
+    const desc = truncateToWidth(agent.description, 35);
+    const line = `${statusIcon} [${agent.type}] ${desc} (${elapsed})`;
     screen.appendScroll(
       statusColor(
         `│ ${line}${' '.repeat(Math.max(0, boxWidth - 2 - getStringDisplayWidth(line)))}│\n`
       )
     );
+
+    // Show summary or error detail for completed agents
+    if (agent.status === 'error' && agent.error) {
+      const errLine = `   err: ${truncateToWidth(agent.error, boxWidth - 8)}`;
+      screen.appendScroll(COLORS.error(`│ ${errLine}${' '.repeat(Math.max(0, boxWidth - 2 - getStringDisplayWidth(errLine)))}│\n`));
+    } else if (agent.status === 'done' && agent.summary) {
+      const sumLine = `   ${truncateToWidth(agent.summary, boxWidth - 5)}`;
+      screen.appendScroll(COLORS.muted(`│ ${sumLine}${' '.repeat(Math.max(0, boxWidth - 2 - getStringDisplayWidth(sumLine)))}│\n`));
+    }
   }
 
   if (agents.length > 3) {
@@ -1157,9 +1209,10 @@ export function setupAgentEvents(
     activeSubAgents.set(data.id, {
       id: data.id,
       type: data.type || 'sub',
-      description: truncateToWidth(data.description || data.prompt.slice(0, 50), 30),
+      description: truncateToWidth(data.description || data.prompt.slice(0, 60), 50),
       status: 'running',
       startTime: Date.now(),
+      toolCount: 0,
     });
 
     // 显示状态面板
@@ -1167,8 +1220,13 @@ export function setupAgentEvents(
   });
 
   on('sub_agent_tool_call', (data: SubAgentToolCallData) => {
-    // Subagent 内部的工具调用（缩进显示）
-    screen.appendScroll(COLORS.subAgent(`    → ${data.name}\n`));
+    // Track tool count
+    const record = activeSubAgents.get(data.id);
+    if (record) record.toolCount++;
+
+    // Show tool call with key args for context
+    const args = formatToolArgs(data.name, data.arguments);
+    screen.appendScroll(COLORS.subAgent(`    → ${data.name}${args ? ` ${args}` : ''}\n`));
   });
 
   on('sub_agent_tool_result', (data: SubAgentToolResultData) => {
@@ -1181,7 +1239,7 @@ export function setupAgentEvents(
     const record = activeSubAgents.get(data.id);
     if (record) {
       record.status = 'done';
-      record.summary = truncateToWidth(data.summary || 'done', 30);
+      record.summary = truncateToWidth(data.summary || 'done', 60);
     }
 
     // 更新状态面板
@@ -1192,7 +1250,7 @@ export function setupAgentEvents(
     const record = activeSubAgents.get(data.id);
     if (record) {
       record.status = 'error';
-      record.error = truncateToWidth(data.error, 30);
+      record.error = truncateToWidth(data.error, 80);
     }
 
     // 更新状态面板
