@@ -181,9 +181,9 @@ src/commands/
 ### Subagent Types
 | Type | Allowed Tools | Timeout | Description |
 |------|-------------|---------|-------------|
-| `explore` | glob, grep, file_read, directory_list, file_exists | 30s | Read-only exploration |
+| `explore` | glob, grep, read, directory_list, file_exists | 30s | Read-only exploration |
 | `review` | explore + lint | 60s | Code review, find issues |
-| `fix` | file_read, file_edit, bash, lint | 120s | Fix specific issues |
+| `fix` | read, edit, bash, lint | 120s | Fix specific issues |
 | `build` | * (all tools) | 180s | Full feature implementation |
 
 ### Key Mechanisms
@@ -233,7 +233,7 @@ spica skill list
 │   │   ├── src/...
 │   │   └── metadata.json
 │   └── ...
-└── backups/               # Single file backups (auto-created by file_write)
+└── backups/               # Single file backups (auto-created by write tool)
 ```
 
 **Commands:**

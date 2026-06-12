@@ -1119,8 +1119,16 @@ export class SpicaAgent extends EventEmitter {
               }
             }
 
-            // 工具白名单检查
-            if (this.toolWhitelist && !this.toolWhitelist.includes(tc.name)) {
+            // 工具白名单检查（先解析别名，确保旧名称也能通过白名单）
+            // TOOL_ALIASES 与 execute.ts 保持同步，用于向后兼容
+            const TOOL_ALIASES: Record<string, string> = {
+              'file_read': 'read',
+              'file_write': 'write',
+              'file_edit': 'edit',
+            };
+            const resolvedName = TOOL_ALIASES[tc.name] || tc.name;
+
+            if (this.toolWhitelist && !this.toolWhitelist.includes(resolvedName)) {
               this.emit('tool_result', {
                 name: tc.name,
                 success: false,
@@ -1129,7 +1137,7 @@ export class SpicaAgent extends EventEmitter {
               return { name: tc.name, id: tc.id, result: `Tool ${tc.name} blocked by whitelist` };
             }
 
-            this.emit('tool_call', { name: tc.name, arguments: tcArgs });
+            this.emit('tool_call', { name: resolvedName, arguments: tcArgs });
             setWorkspace(this.workspacePath);
 
             // 传递 runLoop 的 signal 给工具（让工具能响应中断）
@@ -1141,28 +1149,28 @@ export class SpicaAgent extends EventEmitter {
             };
 
             try {
-              const result = await executeTool(tc.name, tcArgs, eventCallback);
+              const result = await executeTool(resolvedName, tcArgs, eventCallback);
 
               if (!result.success) {
                 if (result.error?.includes('aborted') || result.error?.includes('interrupted')) {
-                  this.emit('tool_result', { name: tc.name, success: false, error: 'interrupted' });
-                  return { name: tc.name, id: tc.id, result: `Tool interrupted`, isCritical: true };
+                  this.emit('tool_result', { name: resolvedName, success: false, error: 'interrupted' });
+                  return { name: resolvedName, id: tc.id, result: `Tool interrupted`, isCritical: true };
                 }
 
-                if (this.isCriticalToolError(tc.name, result)) {
+                if (this.isCriticalToolError(resolvedName, result)) {
                   const suggestion = this.generateErrorSuggestion(
-                    tc.name,
+                    resolvedName,
                     result.error || '',
                     tcArgs
                   );
                   criticalErrorDetected = {
-                    tool: tc.name,
+                    tool: resolvedName,
                     error: result.error || 'Unknown error',
                     suggestion,
                   };
-                  this.emit('tool_result', { name: tc.name, success: false, error: result.error });
+                  this.emit('tool_result', { name: resolvedName, success: false, error: result.error });
                   return {
-                    name: tc.name,
+                    name: resolvedName,
                     id: tc.id,
                     result: `Critical error: ${result.error}`,
                     isCritical: true,
@@ -1170,17 +1178,17 @@ export class SpicaAgent extends EventEmitter {
                 }
 
                 this.emit('error_suggestion', {
-                  toolName: tc.name,
+                  toolName: resolvedName,
                   error: result.error || 'Unknown error',
-                  suggestion: this.generateErrorSuggestion(tc.name, result.error || '', tcArgs),
+                  suggestion: this.generateErrorSuggestion(resolvedName, result.error || '', tcArgs),
                 });
               }
 
               if (
                 result.success &&
-                (tc.name === 'write' ||
-                  tc.name === 'edit' ||
-                  tc.name === 'file_multi_edit') &&
+                (resolvedName === 'write' ||
+                  resolvedName === 'edit' ||
+                  resolvedName === 'file_multi_edit') &&
                 result.diff
               ) {
                 this.emit('diff_preview', {
@@ -1190,7 +1198,7 @@ export class SpicaAgent extends EventEmitter {
               }
 
               this.emit('tool_result', {
-                name: tc.name,
+                name: resolvedName,
                 success: result.success,
                 output: result.output,
                 error: result.error,
@@ -1198,26 +1206,26 @@ export class SpicaAgent extends EventEmitter {
                 content: result.content,
               });
 
-              const postHookMessage = runPostHooks(tc.name, tcArgs, result);
+              const postHookMessage = runPostHooks(resolvedName, tcArgs, result);
               if (postHookMessage) {
-                this.emit('hook_log', { tool: tc.name, message: postHookMessage });
+                this.emit('hook_log', { tool: resolvedName, message: postHookMessage });
               }
 
-              if (tc.name === 'workspace' && result.success && tcArgs.path) {
+              if (resolvedName === 'workspace' && result.success && tcArgs.path) {
                 await this.switchWorkspace(tcArgs.path as string);
               }
 
               return {
-                name: tc.name,
+                name: resolvedName,
                 id: tc.id,
                 result: result.content || result.output || result.error || '',
                 referencedSkills:
-                  tc.name === 'skill' && result.success ? result.referencedSkills : undefined,
+                  resolvedName === 'skill' && result.success ? result.referencedSkills : undefined,
               };
             } catch (toolError: unknown) {
               const errorMsg = toolError instanceof Error ? toolError.message : String(toolError);
-              this.emit('tool_result', { name: tc.name, success: false, error: errorMsg });
-              return { name: tc.name, id: tc.id, result: `Tool execution error: ${errorMsg}` };
+              this.emit('tool_result', { name: resolvedName, success: false, error: errorMsg });
+              return { name: resolvedName, id: tc.id, result: `Tool execution error: ${errorMsg}` };
             }
           };
 

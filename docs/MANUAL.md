@@ -109,9 +109,9 @@ spica -p <name>    # Use specific provider
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
-| `file_read` | Read file content | path, offset, limit |
-| `file_write` | Write/create file | path, content |
-| `file_edit` | Edit by exact replacement | path, oldString, newString |
+| `read` | Read file content | path, offset, limit |
+| `write` | Write/create file | path, content |
+| `edit` | Edit by exact replacement | path, oldString, newString |
 | `file_multi_edit` | Multiple edits at once | path, edits[] |
 | `file_replace` | Regex replacement | path, pattern, replacement, flags, all |
 | `file_insert` | Insert at line or pattern | path, line, content, after, before |
@@ -317,7 +317,7 @@ spica set vllm http://localhost:8000/v1 dummy <model>
     ],
     "PostToolUse": [
       {
-        "matcher": { "tool": "file_write" },
+        "matcher": { "tool": "write" },
         "action": "log",
         "message": "File written"
       }
@@ -337,7 +337,7 @@ spica set vllm http://localhost:8000/v1 dummy <model>
       "name": "review",
       "description": "Code review for specified files",
       "promptTemplate": "Review these files: {input}. Check for bugs, style, and improvements.",
-      "allowedTools": ["file_read", "grep", "glob"]
+      "allowedTools": ["read", "grep", "glob"]
     },
     "debug": {
       "name": "debug",
