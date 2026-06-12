@@ -3,23 +3,30 @@ import { getMCPManager } from '../mcp/client';
 
 export const TOOLS_DEFINITIONS: ToolDefinition[] = [
   {
-    name: 'file_read',
+    name: 'read',
     batchHint: 'read' as const,
-    description: 'Read file. Required before file_write/edit.',
+    description: 'Read file contents. Required before write/edit.',
     parameters: {
       type: 'object' as const,
       properties: {
         path: { type: 'string', description: 'File path' },
-        offset: { type: 'number', description: 'Start line (optional)' },
-        limit: { type: 'number', description: 'Lines to read (optional)' },
+        offset: {
+          type: 'number',
+          description: 'Start line (1-based, optional). Reads from that line to end of file.',
+        },
+        limit: {
+          type: 'number',
+          description: 'Deprecated — ignored when offset is set. Kept for backward compatibility.',
+        },
       },
       required: ['path'],
     },
   },
   {
-    name: 'file_write',
+    name: 'write',
     batchHint: 'write' as const,
-    description: 'Write/create file. Overwrites existing. Auto-checks syntax for code files (TS/JS/Python/Go/Rust/Shell). Returns syntaxErrors if issues found.',
+    description:
+      'Write/create file. Overwrites existing. Auto-checks syntax for code files (TS/JS/Python/Go/Rust/Shell). Returns syntaxErrors if issues found.',
     parameters: {
       type: 'object' as const,
       properties: {
@@ -30,9 +37,10 @@ export const TOOLS_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
-    name: 'file_edit',
+    name: 'edit',
     batchHint: 'write' as const,
-    description: 'Edit file by exact text replacement. Read first. Auto-checks syntax after edit. Returns syntaxErrors if issues found.',
+    description:
+      'Edit file by exact text replacement. Read first. Auto-checks syntax after edit. Returns syntaxErrors if issues found.',
     parameters: {
       type: 'object' as const,
       properties: {
@@ -46,7 +54,8 @@ export const TOOLS_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'file_multi_edit',
     batchHint: 'write' as const,
-    description: 'Edit file with multiple replacements at once. More efficient than multiple file_edit calls. Read file first. Auto-checks syntax after edit.',
+    description:
+      'Edit file with multiple replacements at once. More efficient than multiple edit calls. Read file first. Auto-checks syntax after edit.',
     parameters: {
       type: 'object' as const,
       properties: {
@@ -70,14 +79,24 @@ export const TOOLS_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'file_replace',
     batchHint: 'write' as const,
-    description: 'Replace text in file using regex pattern. More flexible than file_edit for pattern matching. Read file first. Auto-checks syntax after edit.',
+    description:
+      'Replace text in file using regex pattern. More flexible than edit for pattern matching. Read file first. Auto-checks syntax after edit.',
     parameters: {
       type: 'object' as const,
       properties: {
         path: { type: 'string', description: 'File path' },
-        pattern: { type: 'string', description: 'Regex pattern to match (e.g., "oldFunc\\\\(\\\\)" for oldFunc())' },
-        replacement: { type: 'string', description: 'Replacement text. Use $1, $2 for capture groups.' },
-        flags: { type: 'string', description: 'Regex flags: g (global), i (ignore case), m (multiline). Default: "g"' },
+        pattern: {
+          type: 'string',
+          description: 'Regex pattern to match (e.g., "oldFunc\\\\(\\\\)" for oldFunc())',
+        },
+        replacement: {
+          type: 'string',
+          description: 'Replacement text. Use $1, $2 for capture groups.',
+        },
+        flags: {
+          type: 'string',
+          description: 'Regex flags: g (global), i (ignore case), m (multiline). Default: "g"',
+        },
         all: { type: 'boolean', description: 'Replace all occurrences. Default: true' },
       },
       required: ['path', 'pattern', 'replacement'],
@@ -86,15 +105,26 @@ export const TOOLS_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'file_insert',
     batchHint: 'write' as const,
-    description: 'Insert text at specific line number. Read file first. Auto-checks syntax after edit.',
+    description:
+      'Insert text at specific line number. Read file first. Auto-checks syntax after edit.',
     parameters: {
       type: 'object' as const,
       properties: {
         path: { type: 'string', description: 'File path' },
-        line: { type: 'number', description: 'Line number to insert at (1-based). Use 0 to append at end, -1 to prepend at beginning.' },
+        line: {
+          type: 'number',
+          description:
+            'Line number to insert at (1-based). Use 0 to append at end, -1 to prepend at beginning.',
+        },
         content: { type: 'string', description: 'Content to insert' },
-        after: { type: 'string', description: 'Insert after line matching this pattern (alternative to line)' },
-        before: { type: 'string', description: 'Insert before line matching this pattern (alternative to line)' },
+        after: {
+          type: 'string',
+          description: 'Insert after line matching this pattern (alternative to line)',
+        },
+        before: {
+          type: 'string',
+          description: 'Insert before line matching this pattern (alternative to line)',
+        },
       },
     },
   },
@@ -180,8 +210,15 @@ export const TOOLS_DEFINITIONS: ToolDefinition[] = [
       type: 'object' as const,
       properties: {
         pattern: { type: 'string', description: 'Glob pattern' },
-        ignore: { type: 'array', items: { type: 'string' }, description: 'Patterns to ignore (default: node_modules, .git, dist, build, *.lock)' },
-        maxFiles: { type: 'number', description: 'Max files to return (default: 100, prevents overflow)' },
+        ignore: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Patterns to ignore (default: node_modules, .git, dist, build, *.lock)',
+        },
+        maxFiles: {
+          type: 'number',
+          description: 'Max files to return (default: 100, prevents overflow)',
+        },
       },
       required: ['pattern'],
     },
@@ -196,13 +233,16 @@ export const TOOLS_DEFINITIONS: ToolDefinition[] = [
         pattern: { type: 'string', description: 'Regex pattern to search' },
         path: { type: 'string', description: 'Directory to search (default: workspace)' },
         include: { type: 'string', description: 'File pattern to include (e.g., "*.ts")' },
-        maxLines: { type: 'number', description: 'Max lines to return (default: 100, prevents overflow)' },
+        maxLines: {
+          type: 'number',
+          description: 'Max lines to return (default: 100, prevents overflow)',
+        },
       },
       required: ['pattern'],
     },
   },
   {
-name: 'bash',
+    name: 'bash',
     batchHint: 'write' as const,
     description: 'Run shell command. Timeout returns error - AI should decide retry strategy.',
     parameters: {
@@ -220,14 +260,21 @@ name: 'bash',
   {
     name: 'monitor',
     batchHint: 'neutral' as const,
-    description: 'Start a background monitor that streams events from a long-running script. Each stdout line becomes a notification. Use for watching logs, processes, or polling for changes. Exit ends the watch.',
+    description:
+      'Start a background monitor that streams events from a long-running script. Each stdout line becomes a notification. Use for watching logs, processes, or polling for changes. Exit ends the watch.',
     parameters: {
       type: 'object' as const,
       properties: {
-        command: { type: 'string', description: 'Shell command to run. Each stdout line is an event.' },
+        command: {
+          type: 'string',
+          description: 'Shell command to run. Each stdout line is an event.',
+        },
         description: { type: 'string', description: 'Short description shown in notifications' },
         timeout: { type: 'number', description: 'Timeout in seconds (default 300, max 3600)' },
-        persistent: { type: 'boolean', description: 'Run for session lifetime (no timeout). Stop with task_stop.' },
+        persistent: {
+          type: 'boolean',
+          description: 'Run for session lifetime (no timeout). Stop with task_stop.',
+        },
       },
       required: ['command', 'description'],
     },
@@ -247,14 +294,27 @@ name: 'bash',
   {
     name: 'git',
     batchHint: 'write' as const,
-    description: 'Git operations. Actions: status, diff, log, add, commit, branch, checkout, push, pull, reset, stash. Use for version control.',
+    description:
+      'Git operations. Actions: status, diff, log, add, commit, branch, checkout, push, pull, reset, stash. Use for version control.',
     parameters: {
       type: 'object' as const,
       properties: {
         action: {
           type: 'string',
-          enum: ['status', 'diff', 'log', 'add', 'commit', 'branch', 'checkout', 'push', 'pull', 'reset', 'stash'],
-          description: 'Git action to perform'
+          enum: [
+            'status',
+            'diff',
+            'log',
+            'add',
+            'commit',
+            'branch',
+            'checkout',
+            'push',
+            'pull',
+            'reset',
+            'stash',
+          ],
+          description: 'Git action to perform',
         },
         args: {
           type: 'object',
@@ -265,7 +325,7 @@ name: 'bash',
             limit: { type: 'number', description: 'Log count limit' },
             mode: { type: 'string', description: 'Reset mode: soft/mixed/hard' },
           },
-          description: 'Action-specific arguments'
+          description: 'Action-specific arguments',
         },
       },
       required: ['action'],
@@ -286,12 +346,17 @@ name: 'bash',
   {
     name: 'web_search',
     batchHint: 'read' as const,
-    description: 'Search web using DuckDuckGo (free) or Tavily API (if configured). Returns up to 10 results with titles and URLs. Use for finding documentation, solutions, current information.',
+    description:
+      'Search web using DuckDuckGo (free) or Tavily API (if configured). Returns up to 10 results with titles and URLs. Use for finding documentation, solutions, current information.',
     parameters: {
       type: 'object' as const,
       properties: {
         query: { type: 'string', description: 'Search query' },
-        engine: { type: 'string', enum: ['duckduckgo', 'tavily'], description: 'Search engine (default: duckduckgo)' },
+        engine: {
+          type: 'string',
+          enum: ['duckduckgo', 'tavily'],
+          description: 'Search engine (default: duckduckgo)',
+        },
         timeout: { type: 'number', description: 'Timeout in seconds (default 30)' },
       },
       required: ['query'],
@@ -325,14 +390,31 @@ name: 'bash',
   {
     name: 'gh',
     batchHint: 'write' as const,
-    description: 'GitHub CLI operations. Actions: pr_view, pr_list, pr_create, pr_comment, pr_review, pr_merge, pr_diff, issue_list, issue_view, issue_create, issue_comment, search, repo_view, run_list, run_view.',
+    description:
+      'GitHub CLI operations. Actions: pr_view, pr_list, pr_create, pr_comment, pr_review, pr_merge, pr_diff, issue_list, issue_view, issue_create, issue_comment, search, repo_view, run_list, run_view.',
     parameters: {
       type: 'object' as const,
       properties: {
         action: {
           type: 'string',
-          enum: ['pr_view', 'pr_list', 'pr_create', 'pr_comment', 'pr_review', 'pr_merge', 'pr_diff', 'issue_list', 'issue_view', 'issue_create', 'issue_comment', 'search', 'repo_view', 'run_list', 'run_view'],
-          description: 'GitHub action'
+          enum: [
+            'pr_view',
+            'pr_list',
+            'pr_create',
+            'pr_comment',
+            'pr_review',
+            'pr_merge',
+            'pr_diff',
+            'issue_list',
+            'issue_view',
+            'issue_create',
+            'issue_comment',
+            'search',
+            'repo_view',
+            'run_list',
+            'run_view',
+          ],
+          description: 'GitHub action',
         },
         args: {
           type: 'object',
@@ -345,12 +427,15 @@ name: 'bash',
             body: { type: 'string', description: 'Comment/PR body text' },
             base: { type: 'string', description: 'Base branch (for PR create)' },
             head: { type: 'string', description: 'Head branch (for PR create)' },
-            action: { type: 'string', description: 'Review action: approve/comment/request-changes' },
+            action: {
+              type: 'string',
+              description: 'Review action: approve/comment/request-changes',
+            },
             method: { type: 'string', description: 'Merge method: squash/rebase/merge' },
             type: { type: 'string', description: 'Search type: code/issues/prs' },
             query: { type: 'string', description: 'Search query' },
           },
-          description: 'Action-specific arguments'
+          description: 'Action-specific arguments',
         },
       },
       required: ['action'],
@@ -359,7 +444,8 @@ name: 'bash',
   {
     name: 'todo_write',
     batchHint: 'neutral' as const,
-    description: 'Write or update task todos. Use to create task list at start, or update status during work.',
+    description:
+      'Write or update task todos. Use to create task list at start, or update status during work.',
     parameters: {
       type: 'object' as const,
       properties: {
@@ -381,11 +467,15 @@ name: 'bash',
   {
     name: 'skill',
     batchHint: 'neutral' as const,
-    description: 'Invoke a skill to load its full instructions. Use when a skill description suggests it may apply to the current task. Calling this tool loads the complete SKILL.md content so you can follow it precisely.',
+    description:
+      'Invoke a skill to load its full instructions. Use when a skill description suggests it may apply to the current task. Calling this tool loads the complete SKILL.md content so you can follow it precisely.',
     parameters: {
       type: 'object' as const,
       properties: {
-        name: { type: 'string', description: 'Skill name (e.g., brainstorming, systematic-debugging, using-superpowers)' },
+        name: {
+          type: 'string',
+          description: 'Skill name (e.g., brainstorming, systematic-debugging, using-superpowers)',
+        },
       },
       required: ['name'],
     },
@@ -393,7 +483,8 @@ name: 'bash',
   {
     name: 'todo_read',
     batchHint: 'read' as const,
-    description: 'Read current persisted tasks from .spica/tasks.json. Use to check existing tasks before adding new ones.',
+    description:
+      'Read current persisted tasks from .spica/tasks.json. Use to check existing tasks before adding new ones.',
     parameters: {
       type: 'object' as const,
       properties: {},
@@ -403,20 +494,31 @@ name: 'bash',
   {
     name: 'task',
     batchHint: 'neutral' as const,
-    description: 'Run parallel subagents (max 3). Each subagent works independently. IMPORTANT: If a subagent fails (returns [FAIL]), you should: 1) Analyze the error message, 2) Retry with a modified prompt or different approach, 3) Or handle the failed task yourself in main agent. Do NOT ignore failed subagents - investigate and resolve them.',
+    description:
+      'Run parallel subagents (max 3). Each subagent works independently. IMPORTANT: If a subagent fails (returns [FAIL]), you should: 1) Analyze the error message, 2) Retry with a modified prompt or different approach, 3) Or handle the failed task yourself in main agent. Do NOT ignore failed subagents - investigate and resolve them.',
     parameters: {
       type: 'object' as const,
       properties: {
         tasks: {
           type: 'array',
-          description: 'Tasks to run in parallel. Each task should be independent and self-contained.',
+          description:
+            'Tasks to run in parallel. Each task should be independent and self-contained.',
           maxItems: 3,
           items: {
             type: 'object',
             properties: {
               description: { type: 'string', description: 'Short desc for display' },
-              prompt: { type: 'string', description: 'Full prompt with clear instructions, context, and expected output format' },
-              type: { type: 'string', enum: ['explore', 'review', 'fix', 'build'], description: 'Subagent type: explore(read-only), review(+lint), fix(+edit), build(full)' },
+              prompt: {
+                type: 'string',
+                description:
+                  'Full prompt with clear instructions, context, and expected output format',
+              },
+              type: {
+                type: 'string',
+                enum: ['explore', 'review', 'fix', 'build'],
+                description:
+                  'Subagent type: explore(read-only), review(+lint), fix(+edit), build(full)',
+              },
             },
             required: ['description', 'prompt'],
           },
@@ -428,7 +530,8 @@ name: 'bash',
   {
     name: 'lint',
     batchHint: 'read' as const,
-    description: 'Run project-level linter/type checker. Auto-detects: TypeScript (tsc), ESLint, Go (golangci-lint), Python (pylint), Rust (clippy). Use after code changes to catch errors.',
+    description:
+      'Run project-level linter/type checker. Auto-detects: TypeScript (tsc), ESLint, Go (golangci-lint), Python (pylint), Rust (clippy). Use after code changes to catch errors.',
     parameters: {
       type: 'object' as const,
       properties: {
@@ -441,7 +544,8 @@ name: 'bash',
   {
     name: 'test',
     batchHint: 'read' as const,
-    description: 'Run tests. Auto-detects: vitest, npm test, go test, pytest, cargo test. IMPORTANT: Run after code changes to verify functionality.',
+    description:
+      'Run tests. Auto-detects: vitest, npm test, go test, pytest, cargo test. IMPORTANT: Run after code changes to verify functionality.',
     parameters: {
       type: 'object' as const,
       properties: {
@@ -454,7 +558,8 @@ name: 'bash',
   {
     name: 'file_patch',
     batchHint: 'write' as const,
-    description: 'Apply a unified diff patch to a file. Accepts full unified diff content with @@ hunk headers. Returns error if patch does not apply cleanly.',
+    description:
+      'Apply a unified diff patch to a file. Accepts full unified diff content with @@ hunk headers. Returns error if patch does not apply cleanly.',
     parameters: {
       type: 'object' as const,
       properties: {
@@ -467,11 +572,15 @@ name: 'bash',
   {
     name: 'format',
     batchHint: 'write' as const,
-    description: 'Format code using project formatter. Auto-detects: prettier (TS/JS), gofmt (Go), rustfmt (Rust), black (Python). Use after file edits to fix style.',
+    description:
+      'Format code using project formatter. Auto-detects: prettier (TS/JS), gofmt (Go), rustfmt (Rust), black (Python). Use after file edits to fix style.',
     parameters: {
       type: 'object' as const,
       properties: {
-        path: { type: 'string', description: 'File or directory to format (defaults to workspace root)' },
+        path: {
+          type: 'string',
+          description: 'File or directory to format (defaults to workspace root)',
+        },
       },
       required: [],
     },
@@ -479,7 +588,8 @@ name: 'bash',
   {
     name: 'code_health',
     batchHint: 'read' as const,
-    description: 'Analyze code health score (maintainability, complexity, nesting). Target: >= 9.5 for AI-friendly code. Based on Martin Fowler\'s recommendations.',
+    description:
+      "Analyze code health score (maintainability, complexity, nesting). Target: >= 9.5 for AI-friendly code. Based on Martin Fowler's recommendations.",
     parameters: {
       type: 'object' as const,
       properties: {
@@ -492,7 +602,8 @@ name: 'bash',
   {
     name: 'test_quality_check',
     batchHint: 'read' as const,
-    description: 'Detect test anti-patterns: over-mocking (TST-004), happy-path-only (TST-005), assertion-free (TST-008). Use after writing tests to ensure quality.',
+    description:
+      'Detect test anti-patterns: over-mocking (TST-004), happy-path-only (TST-005), assertion-free (TST-008). Use after writing tests to ensure quality.',
     parameters: {
       type: 'object' as const,
       properties: {
@@ -524,8 +635,6 @@ export function getAllToolDefinitions(): ToolDefinition[] {
   // Without this, MCP tool ordering variations cause cache misses on the tools parameter.
   return [...TOOLS_DEFINITIONS, ...mcpConverted].sort((a, b) => a.name.localeCompare(b.name));
 }
-
-
 
 /** Look up the batchHint for a tool by name. Falls back to 'neutral' for unknown/MCP tools. */
 export function getToolBatchHint(toolName: string): 'read' | 'write' | 'neutral' {
