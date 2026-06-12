@@ -18,10 +18,10 @@ describe('Token Counter Fix - Regression Tests', () => {
           role: 'assistant',
           content: '',
           toolCalls: [
-            { id: 'call_001', name: 'file_read', arguments: { path: '/test.txt' } },
-            { id: 'call_002', name: 'bash', arguments: { command: 'ls -la' } }
-          ]
-        }
+            { id: 'call_001', name: 'read', arguments: { path: '/test.txt' } },
+            { id: 'call_002', name: 'bash', arguments: { command: 'ls -la' } },
+          ],
+        },
       ];
 
       const count = counter.estimateMessages(messages);
@@ -39,15 +39,13 @@ describe('Token Counter Fix - Regression Tests', () => {
         {
           role: 'assistant',
           content: '',
-          toolCalls: [
-            { id: 'call_001', name: 'file_read', arguments: { path: '/test.txt' } }
-          ]
+          toolCalls: [{ id: 'call_001', name: 'read', arguments: { path: '/test.txt' } }],
         },
         {
           role: 'tool',
           content: 'file content here',
-          toolCallId: 'call_001'
-        }
+          toolCallId: 'call_001',
+        },
       ];
 
       const count = counter.estimateMessages(messages);
@@ -64,12 +62,12 @@ describe('Token Counter Fix - Regression Tests', () => {
           role: 'assistant',
           content: 'Processing...',
           toolCalls: [
-            { id: 'call_001', name: 'file_read', arguments: { path: '/a.txt' } },
-            { id: 'call_002', name: 'file_read', arguments: { path: '/b.txt' } },
-            { id: 'call_003', name: 'file_read', arguments: { path: '/c.txt' } },
-            { id: 'call_004', name: 'bash', arguments: { command: 'echo test' } }
-          ]
-        }
+            { id: 'call_001', name: 'read', arguments: { path: '/a.txt' } },
+            { id: 'call_002', name: 'read', arguments: { path: '/b.txt' } },
+            { id: 'call_003', name: 'read', arguments: { path: '/c.txt' } },
+            { id: 'call_004', name: 'bash', arguments: { command: 'echo test' } },
+          ],
+        },
       ];
 
       const count = counter.estimateMessages(messages);
@@ -85,8 +83,8 @@ describe('Token Counter Fix - Regression Tests', () => {
         {
           role: 'assistant',
           content: 'No tools needed',
-          toolCalls: []
-        }
+          toolCalls: [],
+        },
       ];
 
       const count = counter.estimateMessages(messages);
@@ -98,7 +96,7 @@ describe('Token Counter Fix - Regression Tests', () => {
     it('should handle messages without toolCalls', () => {
       const messages: ChatMessage[] = [
         { role: 'user', content: 'Hello' },
-        { role: 'assistant', content: 'Hi there' }
+        { role: 'assistant', content: 'Hi there' },
       ];
 
       const count = counter.estimateMessages(messages);
@@ -113,22 +111,20 @@ describe('Token Counter Fix - Regression Tests', () => {
         options: {
           encoding: 'utf-8',
           mode: 'strict',
-          flags: ['a', 'b', 'c']
+          flags: ['a', 'b', 'c'],
         },
         metadata: {
           author: 'test',
-          version: '1.0.0'
-        }
+          version: '1.0.0',
+        },
       };
 
       const messages: ChatMessage[] = [
         {
           role: 'assistant',
           content: '',
-          toolCalls: [
-            { id: 'call_complex', name: 'file_write', arguments: complexArgs }
-          ]
-        }
+          toolCalls: [{ id: 'call_complex', name: 'write', arguments: complexArgs }],
+        },
       ];
 
       const count = counter.estimateMessages(messages);
@@ -148,7 +144,7 @@ describe('Token Counter Fix - Regression Tests', () => {
       for (let i = 0; i < 100; i++) {
         messages.push({
           role: 'user',
-          content: `Message ${i} with some content to add tokens`
+          content: `Message ${i} with some content to add tokens`,
         });
       }
 

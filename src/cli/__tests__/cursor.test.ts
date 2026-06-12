@@ -35,7 +35,10 @@ describe('ScreenManager Cursor Positioning', () => {
       // Simulate paste
       const pasteContent = 'abc\ndef';
       const chars = [...pasteContent];
-      screen.state.inputBuffer[0] = screen.state.inputBuffer[0].slice(0, screen.state.cursorCol) + pasteContent + screen.state.inputBuffer[0].slice(screen.state.cursorCol);
+      screen.state.inputBuffer[0] =
+        screen.state.inputBuffer[0].slice(0, screen.state.cursorCol) +
+        pasteContent +
+        screen.state.inputBuffer[0].slice(screen.state.cursorCol);
       screen.state.cursorCol += chars.length;
 
       // Verify content
@@ -52,7 +55,10 @@ describe('ScreenManager Cursor Positioning', () => {
       // Simulate paste at cursor position
       const pasteContent = 'XX';
       const chars = [...pasteContent];
-      screen.state.inputBuffer[0] = screen.state.inputBuffer[0].slice(0, screen.state.cursorCol) + pasteContent + screen.state.inputBuffer[0].slice(screen.state.cursorCol);
+      screen.state.inputBuffer[0] =
+        screen.state.inputBuffer[0].slice(0, screen.state.cursorCol) +
+        pasteContent +
+        screen.state.inputBuffer[0].slice(screen.state.cursorCol);
       screen.state.cursorCol += chars.length;
 
       // Verify: should be "heXXllo" (inserted at position 2)
@@ -68,7 +74,10 @@ describe('ScreenManager Cursor Positioning', () => {
       // Paste content with newline
       const pasteContent = 'A\nB';
       const chars = [...pasteContent];
-      screen.state.inputBuffer[0] = screen.state.inputBuffer[0].slice(0, screen.state.cursorCol) + pasteContent + screen.state.inputBuffer[0].slice(screen.state.cursorCol);
+      screen.state.inputBuffer[0] =
+        screen.state.inputBuffer[0].slice(0, screen.state.cursorCol) +
+        pasteContent +
+        screen.state.inputBuffer[0].slice(screen.state.cursorCol);
       screen.state.cursorCol += chars.length;
 
       // Verify: should be "helA\nBlo" (inserted at position 3)

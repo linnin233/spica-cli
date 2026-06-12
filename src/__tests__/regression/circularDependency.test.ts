@@ -61,7 +61,7 @@ describe('Circular Dependency Fix - Regression Tests', () => {
         '../../core/RuntimeState',
         '../../mcp/client',
         '../../skills/index',
-        '../../cli/events'
+        '../../cli/events',
       ];
 
       for (const modulePath of modules) {

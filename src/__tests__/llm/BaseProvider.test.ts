@@ -84,9 +84,11 @@ describe('BaseProvider setSystemPrompt', () => {
 
     // Add messages including tool messages
     provider.addMessage({ role: 'user', content: 'Read file' });
-    provider.addMessage({ role: 'assistant', content: '', toolCalls: [
-      { id: 'tc1', name: 'file_read', arguments: { path: '/test.txt' } }
-    ]});
+    provider.addMessage({
+      role: 'assistant',
+      content: '',
+      toolCalls: [{ id: 'tc1', name: 'read', arguments: { path: '/test.txt' } }],
+    });
     provider.addMessage({ role: 'tool', toolCallId: 'tc1', content: 'file content' });
 
     // Set system prompt

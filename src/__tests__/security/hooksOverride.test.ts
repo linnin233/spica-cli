@@ -34,7 +34,7 @@ describe('project hooks cannot override global safety', () => {
     // hooks with global first, then filtered project hooks
     const hooksConfig = loadHooks(tmpDir);
     const preHooks = hooksConfig.hooks.PreToolUse || [];
-    
+
     // All hooks should have valid actions
     const validActions = ['none', 'warn', 'confirm', 'block'];
     for (const hook of preHooks) {
@@ -46,12 +46,12 @@ describe('project hooks cannot override global safety', () => {
     // Verify the strictness ordering is correct
     // block > confirm > warn > none
     const order: Record<string, number> = {
-      'none': 0,
-      'warn': 1,
-      'confirm': 2,
-      'block': 3,
+      none: 0,
+      warn: 1,
+      confirm: 2,
+      block: 3,
     };
-    
+
     expect(order.block).toBeGreaterThan(order.confirm);
     expect(order.confirm).toBeGreaterThan(order.warn);
     expect(order.warn).toBeGreaterThan(order.none);

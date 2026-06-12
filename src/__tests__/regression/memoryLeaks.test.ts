@@ -9,7 +9,7 @@ describe('Memory Leak Fix - Regression Tests', () => {
     beforeEach(() => {
       limiter = new RateLimiter({
         requestsPerMinute: 10,
-        tokensPerMinute: 1000
+        tokensPerMinute: 1000,
       });
       vi.useFakeTimers();
     });
@@ -89,7 +89,7 @@ describe('Memory Leak Fix - Regression Tests', () => {
         off: vi.fn(),
         interrupt: vi.fn(),
         init: vi.fn().mockResolvedValue(undefined),
-        runLoop: vi.fn().mockResolvedValue('result')
+        runLoop: vi.fn().mockResolvedValue('result'),
       };
 
       // 模拟事件监听器添加

@@ -5,12 +5,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs-extra';
 import { join } from 'path';
-import {
-  TOOLS_DEFINITIONS,
-  executeTool,
-  setWorkspace,
-  getWorkspace,
-} from '../../tools/index';
+import { TOOLS_DEFINITIONS, executeTool, setWorkspace, getWorkspace } from '../../tools/index';
 
 const TEST_DIR = join(process.cwd(), 'test-tools-temp');
 const isWindows = process.platform === 'win32';
@@ -37,9 +32,9 @@ describe('Tools System Core Tests', () => {
 
     it('should have all required tools', () => {
       const requiredTools = [
-        'file_read',
-        'file_write',
-        'file_edit',
+        'read',
+        'write',
+        'edit',
         'file_multi_edit',
         'file_replace',
         'file_insert',
@@ -88,7 +83,7 @@ describe('Tools System Core Tests', () => {
 
   describe('File Tools', () => {
     it('should write a file', async () => {
-      const result = await executeTool('file_write', {
+      const result = await executeTool('write', {
         path: join(TEST_DIR, 'test.txt'),
         content: 'Hello World',
       });
@@ -102,7 +97,7 @@ describe('Tools System Core Tests', () => {
       // 先写入文件
       await fs.writeFile(join(TEST_DIR, 'test.txt'), 'Hello World');
 
-      const result = await executeTool('file_read', {
+      const result = await executeTool('read', {
         path: join(TEST_DIR, 'test.txt'),
       });
 
@@ -115,7 +110,7 @@ describe('Tools System Core Tests', () => {
       // 先写入文件
       await fs.writeFile(join(TEST_DIR, 'test.txt'), 'Hello World');
 
-      const result = await executeTool('file_edit', {
+      const result = await executeTool('edit', {
         path: join(TEST_DIR, 'test.txt'),
         oldString: 'World',
         newString: 'Test',
@@ -348,9 +343,7 @@ describe('Tools System Core Tests', () => {
     it('should read todos', async () => {
       // 先写入
       await executeTool('todo_write', {
-        todos: [
-          { content: 'Task 1', status: 'pending' },
-        ],
+        todos: [{ content: 'Task 1', status: 'pending' }],
       });
 
       const result = await executeTool('todo_read', {});
@@ -361,7 +354,7 @@ describe('Tools System Core Tests', () => {
 
   describe('Syntax Check', () => {
     it('should detect syntax errors in TypeScript', async () => {
-      const result = await executeTool('file_write', {
+      const result = await executeTool('write', {
         path: join(TEST_DIR, 'test.ts'),
         content: 'const x = ;', // Syntax error
       });
@@ -373,7 +366,7 @@ describe('Tools System Core Tests', () => {
     });
 
     it('should not report errors for valid TypeScript', async () => {
-      const result = await executeTool('file_write', {
+      const result = await executeTool('write', {
         path: join(TEST_DIR, 'test.ts'),
         content: 'const x = 1;',
       });
@@ -385,7 +378,7 @@ describe('Tools System Core Tests', () => {
 
   describe('Chinese Content Support', () => {
     it('should write Chinese content', async () => {
-      const result = await executeTool('file_write', {
+      const result = await executeTool('write', {
         path: join(TEST_DIR, 'chinese.txt'),
         content: '你好世界',
       });
@@ -397,7 +390,7 @@ describe('Tools System Core Tests', () => {
     it('should read Chinese content', async () => {
       await fs.writeFile(join(TEST_DIR, 'chinese.txt'), '你好世界');
 
-      const result = await executeTool('file_read', {
+      const result = await executeTool('read', {
         path: join(TEST_DIR, 'chinese.txt'),
       });
 
@@ -409,7 +402,7 @@ describe('Tools System Core Tests', () => {
     it('should edit Chinese content', async () => {
       await fs.writeFile(join(TEST_DIR, 'chinese.txt'), '你好世界');
 
-      const result = await executeTool('file_edit', {
+      const result = await executeTool('edit', {
         path: join(TEST_DIR, 'chinese.txt'),
         oldString: '你好',
         newString: '再见',

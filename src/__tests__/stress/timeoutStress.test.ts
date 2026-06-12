@@ -1,6 +1,6 @@
 /**
  * 压力测试：检测可能导致超时的问题
- * 
+ *
  * 测试场景：
  * 1. 长对话（大量消息）
  * 2. 大量工具调用
@@ -48,10 +48,10 @@ class MockStressProvider extends OpenAICompatibleProvider {
 
   override async generate(prompt: string, tools?: any, signal?: AbortSignal): Promise<any> {
     this.callCount++;
-    
+
     // Simulate network delay
     await new Promise(resolve => setTimeout(resolve, this.delay));
-    
+
     if (signal?.aborted) {
       return { finished: true };
     }
@@ -70,9 +70,9 @@ class MockStressProvider extends OpenAICompatibleProvider {
 
   override async generateFromHistory(tools?: any, signal?: AbortSignal): Promise<any> {
     this.callCount++;
-    
+
     await new Promise(resolve => setTimeout(resolve, this.delay));
-    
+
     if (signal?.aborted) {
       return { finished: true };
     }
@@ -87,9 +87,9 @@ class MockStressProvider extends OpenAICompatibleProvider {
 
   override async generateDirect(prompt: string, signal?: AbortSignal): Promise<any> {
     this.callCount++;
-    
+
     await new Promise(resolve => setTimeout(resolve, this.delay));
-    
+
     if (signal?.aborted) {
       return { finished: true };
     }
@@ -109,13 +109,13 @@ describe('Stress Tests - Timeout Detection', () => {
       baseUrl: 'http://test',
       name: 'test-provider',
     });
-    
+
     llmClient = new LLMClient({
       provider: 'test',
       apiKey: 'test-key',
       model: 'test-model',
     });
-    
+
     // Replace internal provider with mock
     (llmClient as any).provider = provider;
   });
@@ -127,7 +127,7 @@ describe('Stress Tests - Timeout Detection', () => {
   describe('1. Long Conversation (大量消息)', () => {
     it('should handle 100 messages without timeout', async () => {
       const startTime = Date.now();
-      
+
       // 添加 100 条消息
       for (let i = 0; i < 100; i++) {
         provider.addMessage({ role: 'user', content: `User message ${i}` });
@@ -140,17 +140,17 @@ describe('Stress Tests - Timeout Detection', () => {
       // 测试 generateFromHistory 性能
       provider.setDelay(10);
       const response = await llmClient.generateFromHistory();
-      
+
       const elapsed = Date.now() - startTime;
       console.log(`[100 messages] elapsed: ${elapsed}ms, calls: ${provider.getCallCount()}`);
-      
+
       expect(response.content).toBeDefined();
       expect(elapsed).toBeLessThan(5000); // 5秒内完成
     });
 
     it('should handle 500 messages without timeout', async () => {
       const startTime = Date.now();
-      
+
       // 添加 500 条消息
       for (let i = 0; i < 500; i++) {
         provider.addMessage({ role: 'user', content: `User message ${i}` });
@@ -162,17 +162,17 @@ describe('Stress Tests - Timeout Detection', () => {
 
       provider.setDelay(10);
       const response = await llmClient.generateFromHistory();
-      
+
       const elapsed = Date.now() - startTime;
       console.log(`[500 messages] elapsed: ${elapsed}ms, calls: ${provider.getCallCount()}`);
-      
+
       expect(response.content).toBeDefined();
       expect(elapsed).toBeLessThan(10000); // 10秒内完成
     });
 
     it('should handle 1000 messages without timeout', async () => {
       const startTime = Date.now();
-      
+
       // 添加 1000 条消息
       for (let i = 0; i < 1000; i++) {
         provider.addMessage({ role: 'user', content: `User message ${i}` });
@@ -184,10 +184,10 @@ describe('Stress Tests - Timeout Detection', () => {
 
       provider.setDelay(10);
       const response = await llmClient.generateFromHistory();
-      
+
       const elapsed = Date.now() - startTime;
       console.log(`[1000 messages] elapsed: ${elapsed}ms, calls: ${provider.getCallCount()}`);
-      
+
       expect(response.content).toBeDefined();
       expect(elapsed).toBeLessThan(15000); // 15秒内完成
     });
@@ -196,7 +196,7 @@ describe('Stress Tests - Timeout Detection', () => {
   describe('2. Large Tool Calls (大量工具调用)', () => {
     it('should handle 50 tool calls in single response', async () => {
       const startTime = Date.now();
-      
+
       // 创建包含 50 个 tool calls 的 assistant 消息
       const toolCalls = Array.from({ length: 50 }, (_, i) => ({
         id: `call_${i}`,
@@ -224,16 +224,16 @@ describe('Stress Tests - Timeout Detection', () => {
 
       provider.setDelay(10);
       const response = await llmClient.generateFromHistory();
-      
+
       const elapsed = Date.now() - startTime;
       console.log(`[50 tool calls] elapsed: ${elapsed}ms`);
-      
+
       expect(elapsed).toBeLessThan(5000);
     });
 
     it('should handle 100 tool calls in single response', async () => {
       const startTime = Date.now();
-      
+
       const toolCalls = Array.from({ length: 100 }, (_, i) => ({
         id: `call_${i}`,
         name: 'test_tool',
@@ -259,10 +259,10 @@ describe('Stress Tests - Timeout Detection', () => {
 
       provider.setDelay(10);
       const response = await llmClient.generateFromHistory();
-      
+
       const elapsed = Date.now() - startTime;
       console.log(`[100 tool calls] elapsed: ${elapsed}ms`);
-      
+
       expect(elapsed).toBeLessThan(10000);
     });
   });
@@ -278,7 +278,7 @@ describe('Stress Tests - Timeout Detection', () => {
       ];
 
       const cleaned = cleanMessages(messages);
-      
+
       // 孤立的 tool message 应该被移除
       expect(cleaned.filter(m => m.role === 'tool')).toHaveLength(0);
       expect(cleaned.length).toBe(3);
@@ -301,7 +301,7 @@ describe('Stress Tests - Timeout Detection', () => {
       ];
 
       const cleaned = cleanMessages(messages);
-      
+
       // assistant 的 toolCalls 应该被移除
       const lastAssistant = cleaned.filter(m => m.role === 'assistant').pop();
       expect(lastAssistant?.toolCalls).toBeUndefined();
@@ -313,9 +313,7 @@ describe('Stress Tests - Timeout Detection', () => {
         {
           role: 'assistant',
           content: '',
-          toolCalls: [
-            { id: 'call_1', name: 'tool1', arguments: {} },
-          ],
+          toolCalls: [{ id: 'call_1', name: 'tool1', arguments: {} }],
         },
         { role: 'tool', content: 'R1', toolCallId: 'call_1' },
         { role: 'assistant', content: 'A1' },
@@ -336,10 +334,10 @@ describe('Stress Tests - Timeout Detection', () => {
       ];
 
       const cleaned = cleanMessages(messages);
-      
+
       // 检查清理后的消息序列
       expect(cleaned.length).toBeLessThan(messages.length);
-      
+
       // 不应该有孤立的 tool message
       const toolMessages = cleaned.filter(m => m.role === 'tool');
       expect(toolMessages.length).toBeLessThanOrEqual(1);
@@ -347,9 +345,9 @@ describe('Stress Tests - Timeout Detection', () => {
 
     it('should handle 1000 messages with anomalies efficiently', () => {
       const startTime = Date.now();
-      
+
       const messages: ChatMessage[] = [];
-      
+
       // 创建 1000 条消息，包含各种异常
       for (let i = 0; i < 200; i++) {
         messages.push({ role: 'user', content: `User ${i}` });
@@ -368,10 +366,12 @@ describe('Stress Tests - Timeout Detection', () => {
       }
 
       const cleaned = cleanMessages(messages);
-      
+
       const elapsed = Date.now() - startTime;
-      console.log(`[1000 messages with anomalies] elapsed: ${elapsed}ms, cleaned: ${cleaned.length}`);
-      
+      console.log(
+        `[1000 messages with anomalies] elapsed: ${elapsed}ms, cleaned: ${cleaned.length}`
+      );
+
       expect(elapsed).toBeLessThan(1000); // 1秒内完成
     });
   });
@@ -380,19 +380,25 @@ describe('Stress Tests - Timeout Detection', () => {
     it('should count tokens for 1000 messages efficiently', () => {
       const tokenCounter = new TokenCounter();
       tokenCounter.setContextWindow(128000);
-      
+
       const messages: ChatMessage[] = [];
       for (let i = 0; i < 1000; i++) {
-        messages.push({ role: 'user', content: `This is a test message with some content. Message number ${i}.` });
-        messages.push({ role: 'assistant', content: `This is a response with some content. Response number ${i}.` });
+        messages.push({
+          role: 'user',
+          content: `This is a test message with some content. Message number ${i}.`,
+        });
+        messages.push({
+          role: 'assistant',
+          content: `This is a response with some content. Response number ${i}.`,
+        });
       }
 
       const startTime = Date.now();
       const tokens = tokenCounter.estimateMessages(messages);
       const elapsed = Date.now() - startTime;
-      
+
       console.log(`[Token count 1000 messages] elapsed: ${elapsed}ms, tokens: ${tokens}`);
-      
+
       expect(elapsed).toBeLessThan(500); // 500ms 内完成
       expect(tokens).toBeGreaterThan(0);
     });
@@ -400,7 +406,7 @@ describe('Stress Tests - Timeout Detection', () => {
     it('should count tokens for messages with large tool calls', () => {
       const tokenCounter = new TokenCounter();
       tokenCounter.setContextWindow(128000);
-      
+
       const messages: ChatMessage[] = [];
       for (let i = 0; i < 100; i++) {
         messages.push({
@@ -430,9 +436,9 @@ describe('Stress Tests - Timeout Detection', () => {
       const startTime = Date.now();
       const tokens = tokenCounter.estimateMessages(messages);
       const elapsed = Date.now() - startTime;
-      
+
       console.log(`[Token count 1000 tool calls] elapsed: ${elapsed}ms, tokens: ${tokens}`);
-      
+
       expect(elapsed).toBeLessThan(500);
     });
   });
@@ -449,7 +455,7 @@ describe('Stress Tests - Timeout Detection', () => {
         role: 'user' as const,
         content: `User ${i}`,
       }));
-      
+
       const cleaned = cleanMessages(messages);
       expect(cleaned.length).toBe(100);
     });
@@ -460,7 +466,7 @@ describe('Stress Tests - Timeout Detection', () => {
         content: `Tool ${i}`,
         toolCallId: `call_${i}`,
       }));
-      
+
       const cleaned = cleanMessages(messages);
       // 所有孤立的 tool messages 应该被移除
       expect(cleaned.length).toBe(0);
@@ -469,19 +475,17 @@ describe('Stress Tests - Timeout Detection', () => {
     it('should handle very long single message', () => {
       const tokenCounter = new TokenCounter();
       tokenCounter.setContextWindow(128000);
-      
+
       // 创建一个超长消息（100KB）
       const longContent = 'A'.repeat(100000);
-      const messages: ChatMessage[] = [
-        { role: 'user', content: longContent },
-      ];
-      
+      const messages: ChatMessage[] = [{ role: 'user', content: longContent }];
+
       const startTime = Date.now();
       const tokens = tokenCounter.estimateMessages(messages);
       const elapsed = Date.now() - startTime;
-      
+
       console.log(`[100KB message] elapsed: ${elapsed}ms, tokens: ${tokens}`);
-      
+
       expect(elapsed).toBeLessThan(100);
     });
 
@@ -490,7 +494,7 @@ describe('Stress Tests - Timeout Detection', () => {
         { role: 'user', content: 'Hello\n\t\r\n世界🌍🎉' },
         { role: 'assistant', content: 'Response with <xml> & "quotes" and \'apostrophes\'' },
       ];
-      
+
       const cleaned = cleanMessages(messages);
       expect(cleaned.length).toBe(2);
     });
@@ -499,28 +503,30 @@ describe('Stress Tests - Timeout Detection', () => {
   describe('6. Memory Leak Detection (内存泄漏检测)', () => {
     it('should not leak memory on repeated operations', async () => {
       const initialMemory = process.memoryUsage().heapUsed;
-      
+
       // 执行 100 次操作
       for (let i = 0; i < 100; i++) {
         provider.addMessage({ role: 'user', content: `Test ${i}` });
         provider.addMessage({ role: 'assistant', content: `Response ${i}` });
-        
+
         // 每 10 次清理一次
         if (i % 10 === 0) {
           provider.clearHistory();
         }
       }
-      
+
       // 强制 GC（如果可用）
       if (global.gc) {
         global.gc();
       }
-      
+
       const finalMemory = process.memoryUsage().heapUsed;
       const memoryIncrease = finalMemory - initialMemory;
-      
-      console.log(`[Memory] initial: ${(initialMemory / 1024 / 1024).toFixed(2)}MB, final: ${(finalMemory / 1024 / 1024).toFixed(2)}MB, increase: ${(memoryIncrease / 1024 / 1024).toFixed(2)}MB`);
-      
+
+      console.log(
+        `[Memory] initial: ${(initialMemory / 1024 / 1024).toFixed(2)}MB, final: ${(finalMemory / 1024 / 1024).toFixed(2)}MB, increase: ${(memoryIncrease / 1024 / 1024).toFixed(2)}MB`
+      );
+
       // 内存增长不应该超过 50MB
       expect(memoryIncrease).toBeLessThan(50 * 1024 * 1024);
     });

@@ -9,7 +9,9 @@ vi.mock('../llm/LLMClient', () => ({
     setMessages: vi.fn(),
     getMessages: vi.fn().mockReturnValue([]),
     on: vi.fn(),
-    generate: vi.fn().mockResolvedValue({ content: 'test response', finished: true, toolCalls: [] }),
+    generate: vi
+      .fn()
+      .mockResolvedValue({ content: 'test response', finished: true, toolCalls: [] }),
     continueWithAllToolResults: vi.fn(),
     generateDirect: vi.fn().mockResolvedValue({ content: 'summary' }),
     checkConnection: vi.fn().mockResolvedValue({ success: true }),
@@ -109,7 +111,7 @@ describe('SpicaAgent', () => {
     it('should emit todos_set event', () => {
       const eventSpy = vi.fn();
       agent.on('todos_set', eventSpy);
-      
+
       agent.setTodos(['task 1']);
       expect(eventSpy).toHaveBeenCalled();
     });
@@ -117,7 +119,7 @@ describe('SpicaAgent', () => {
     it('should update todo status', () => {
       agent.setTodos(['task 1', 'task 2']);
       agent.updateTodo(0, 'in_progress');
-      
+
       expect(agent.todos[0].status).toBe('in_progress');
       expect(agent.todos[1].status).toBe('pending');
     });
@@ -125,7 +127,7 @@ describe('SpicaAgent', () => {
     it('should emit todo_update event', () => {
       const eventSpy = vi.fn();
       agent.on('todo_update', eventSpy);
-      
+
       agent.setTodos(['task']);
       agent.updateTodo(0, 'completed');
       expect(eventSpy).toHaveBeenCalled();
@@ -134,15 +136,15 @@ describe('SpicaAgent', () => {
     it('should ignore invalid todo index', () => {
       agent.setTodos(['task']);
       agent.updateTodo(10, 'completed'); // Invalid index
-      
+
       expect(agent.todos[0].status).toBe('pending');
     });
   });
 
   describe('generateErrorSuggestion', () => {
-it('should suggest for ENOENT error', () => {
+    it('should suggest for ENOENT error', () => {
       const suggestion = (agent as any).generateErrorSuggestion(
-        'file_read',
+        'read',
         'ENOENT: no such file',
         { path: '/missing/file' }
       );
@@ -151,7 +153,7 @@ it('should suggest for ENOENT error', () => {
 
     it('should suggest for EACCES error', () => {
       const suggestion = (agent as any).generateErrorSuggestion(
-        'file_read',
+        'read',
         'EACCES: permission denied',
         { path: '/protected/file' }
       );
@@ -159,26 +161,20 @@ it('should suggest for ENOENT error', () => {
     });
 
     it('should suggest for command not found', () => {
-      const suggestion = (agent as any).generateErrorSuggestion(
-        'bash',
-        'command not found: xyz',
-        { command: 'xyz' }
-      );
+      const suggestion = (agent as any).generateErrorSuggestion('bash', 'command not found: xyz', {
+        command: 'xyz',
+      });
       expect(suggestion).toContain('not found');
     });
 
     it('should provide generic suggestion for unknown errors', () => {
-      const suggestion = (agent as any).generateErrorSuggestion(
-        'unknown_tool',
-        'some error',
-        {}
-      );
+      const suggestion = (agent as any).generateErrorSuggestion('unknown_tool', 'some error', {});
       expect(suggestion).toContain('failed');
     });
 
     it('should suggest for EACCES error', () => {
       const suggestion = (agent as any).generateErrorSuggestion(
-        'file_write',
+        'write',
         'EACCES: permission denied',
         { path: '/protected/file' }
       );
@@ -186,20 +182,14 @@ it('should suggest for ENOENT error', () => {
     });
 
     it('should suggest for command not found', () => {
-      const suggestion = (agent as any).generateErrorSuggestion(
-        'bash',
-        'command not found: xyz',
-        { command: 'xyz' }
-      );
+      const suggestion = (agent as any).generateErrorSuggestion('bash', 'command not found: xyz', {
+        command: 'xyz',
+      });
       expect(suggestion).toContain('not found');
     });
 
     it('should provide generic suggestion for unknown errors', () => {
-      const suggestion = (agent as any).generateErrorSuggestion(
-        'unknown_tool',
-        'some error',
-        {}
-      );
+      const suggestion = (agent as any).generateErrorSuggestion('unknown_tool', 'some error', {});
       expect(suggestion).toContain('failed');
     });
   });
@@ -236,7 +226,7 @@ it('should suggest for ENOENT error', () => {
         getMessages: vi.fn().mockReturnValue([
           { role: 'system', content: 'You are spica, a coding agent CLI.' },
           { role: 'user', content: 'Previous user message' },
-          { role: 'assistant', content: 'Previous assistant response' }
+          { role: 'assistant', content: 'Previous assistant response' },
         ]),
         on: vi.fn(),
         generate: vi.fn(),
@@ -269,7 +259,7 @@ it('should suggest for ENOENT error', () => {
         getMessages: vi.fn().mockReturnValue([
           { role: 'system', content: 'You are spica, a coding agent CLI.' },
           { role: 'user', content: 'Old message 1' },
-          { role: 'assistant', content: 'Old response 1' }
+          { role: 'assistant', content: 'Old response 1' },
         ]),
         on: vi.fn(),
         generate: vi.fn(),
@@ -285,7 +275,7 @@ it('should suggest for ENOENT error', () => {
       // Set new messages (simulating session switch)
       agent.setMessages([
         { role: 'user', content: 'New message 1' },
-        { role: 'assistant', content: 'New response 1' }
+        { role: 'assistant', content: 'New response 1' },
       ]);
 
       expect(mockLLMWithSystem.setMessages).toHaveBeenCalled();
@@ -293,16 +283,16 @@ it('should suggest for ENOENT error', () => {
 
       // System prompt should be preserved at index 0
       expect(finalMessages[0].role).toBe('system');
-      expect(finalMessages.length).toBe(3);  // system + 2 new messages
+      expect(finalMessages.length).toBe(3); // system + 2 new messages
     });
 
     it('should not duplicate system prompt if new messages contain system', () => {
       const mockLLMWithSystem = {
         setSystemPrompt: vi.fn(),
         setMessages: vi.fn(),
-        getMessages: vi.fn().mockReturnValue([
-          { role: 'system', content: 'You are spica, a coding agent CLI.' },
-        ]),
+        getMessages: vi
+          .fn()
+          .mockReturnValue([{ role: 'system', content: 'You are spica, a coding agent CLI.' }]),
         on: vi.fn(),
         generate: vi.fn(),
         continueWithAllToolResults: vi.fn(),
@@ -317,7 +307,7 @@ it('should suggest for ENOENT error', () => {
       // Set messages that include a system prompt (should be filtered out)
       agent.setMessages([
         { role: 'system', content: 'Different system prompt' },
-        { role: 'user', content: 'User message' }
+        { role: 'user', content: 'User message' },
       ]);
 
       const finalMessages = mockLLMWithSystem.setMessages.mock.calls[0][0];
@@ -325,7 +315,7 @@ it('should suggest for ENOENT error', () => {
       // Should only have one system prompt (the original one)
       const systemMessages = finalMessages.filter(m => m.role === 'system');
       expect(systemMessages.length).toBe(1);
-      expect(systemMessages[0].content).toContain('spica');  // Original preserved
+      expect(systemMessages[0].content).toContain('spica'); // Original preserved
     });
   });
 

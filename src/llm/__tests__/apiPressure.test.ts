@@ -30,11 +30,13 @@ describe('API Pressure Tests', () => {
       const msg = {
         role: 'assistant',
         content: '',
-        toolCalls: Array(100).fill(null).map((_, i) => ({
-          id: `tc-${i}`,
-          name: 'tool-' + i,
-          arguments: { data: 'arg-' + i, path: `/file${i}.txt` }
-        }))
+        toolCalls: Array(100)
+          .fill(null)
+          .map((_, i) => ({
+            id: `tc-${i}`,
+            name: 'tool-' + i,
+            arguments: { data: 'arg-' + i, path: `/file${i}.txt` },
+          })),
       };
 
       const tokens = counter.estimateMessage(msg);
@@ -102,7 +104,7 @@ describe('API Pressure Tests', () => {
 
       const messages = provider.getMessages();
       const toolMessages = messages.filter(m => m.role === 'tool');
-      
+
       expect(toolMessages.length).toBe(2);
       expect(toolMessages[0].toolCallId).toBe('tc-123');
       expect(toolMessages[0].content).toBe('result 1');
@@ -122,7 +124,7 @@ describe('API Pressure Tests', () => {
 
       const messages = provider.getMessages();
       const toolMessages = messages.filter(m => m.role === 'tool');
-      
+
       expect(toolMessages.length).toBe(3);
     });
   });

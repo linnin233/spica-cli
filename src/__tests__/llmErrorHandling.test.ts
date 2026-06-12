@@ -8,12 +8,12 @@ import type { ChatMessage } from '../llm/providers/BaseProvider';
 const shouldSkip = process.env.CI === 'true' || process.env.SKIP_API_TESTS === 'true';
 
 // Partial mock of tools module
-vi.mock('../tools/index', async (importOriginal) => {
-  const actual = await importOriginal() as any;
+vi.mock('../tools/index', async importOriginal => {
+  const actual = (await importOriginal()) as any;
   return {
     ...actual,
     executeTool: vi.fn().mockResolvedValue({ success: true, output: 'mock output' }),
-    getAllToolDefinitions: vi.fn().mockReturnValue([])
+    getAllToolDefinitions: vi.fn().mockReturnValue([]),
   };
 });
 
@@ -23,17 +23,21 @@ describe.skipIf(shouldSkip)('LLM Error Handling', () => {
   let testMessages: ChatMessage[];
 
   beforeEach(() => {
-    vi.useFakeTimers();  // 使用假计时器加速重试延迟
+    vi.useFakeTimers(); // 使用假计时器加速重试延迟
     agent = new SpicaAgent('test', '/tmp/spica-test-error');
 
     testMessages = [];
 
     mockLLM = {
       getMessages: vi.fn(() => testMessages),
-      setMessages: vi.fn((msgs: ChatMessage[]) => { testMessages = msgs; }),
-      addMessage: vi.fn((msg: ChatMessage) => { testMessages.push(msg); }),
+      setMessages: vi.fn((msgs: ChatMessage[]) => {
+        testMessages = msgs;
+      }),
+      addMessage: vi.fn((msg: ChatMessage) => {
+        testMessages.push(msg);
+      }),
       getProvider: vi.fn(() => ({
-        getContextWindow: () => 10000
+        getContextWindow: () => 10000,
       })),
       getTokenCounter: vi.fn(() => {
         const counter = new TokenCounter();
@@ -41,14 +45,16 @@ describe.skipIf(shouldSkip)('LLM Error Handling', () => {
         return counter;
       }),
       generate: vi.fn().mockResolvedValue({ content: 'Mock response', finished: true }),
-      continueWithAllToolResults: vi.fn().mockResolvedValue({ content: 'Mock continuation', finished: true })
+      continueWithAllToolResults: vi
+        .fn()
+        .mockResolvedValue({ content: 'Mock continuation', finished: true }),
     };
 
     Object.defineProperty(agent, 'llm', { value: mockLLM, writable: true });
   });
 
   afterEach(() => {
-    vi.useRealTimers();  // 恢复真实计时器
+    vi.useRealTimers(); // 恢复真实计时器
   });
 
   describe('Initial generate failure', () => {
@@ -94,12 +100,14 @@ describe.skipIf(shouldSkip)('LLM Error Handling', () => {
     it('should handle continueWithAllToolResults failure gracefully', async () => {
       // First call succeeds with tool calls
       mockLLM.generate = vi.fn().mockResolvedValue({
-        toolCalls: [{ id: 'tc1', name: 'file_read', arguments: { path: '/test.txt' } }],
-        finished: false
+        toolCalls: [{ id: 'tc1', name: 'read', arguments: { path: '/test.txt' } }],
+        finished: false,
       });
 
       // Continue 每次都失败
-      mockLLM.continueWithAllToolResults = vi.fn().mockRejectedValue(new Error('Network interrupted'));
+      mockLLM.continueWithAllToolResults = vi
+        .fn()
+        .mockRejectedValue(new Error('Network interrupted'));
 
       const resultPromise = agent.runLoop('read a file');
 
@@ -118,10 +126,12 @@ describe.skipIf(shouldSkip)('LLM Error Handling', () => {
     it('should emit error_suggestion on continue failure', async () => {
       mockLLM.generate = vi.fn().mockResolvedValue({
         toolCalls: [{ id: 'tc1', name: 'bash', arguments: { command: 'ls' } }],
-        finished: false
+        finished: false,
       });
 
-      mockLLM.continueWithAllToolResults = vi.fn().mockRejectedValue(new Error('Stream interrupted'));
+      mockLLM.continueWithAllToolResults = vi
+        .fn()
+        .mockRejectedValue(new Error('Stream interrupted'));
 
       const errorListener = vi.fn();
       agent.on('error_suggestion', errorListener);

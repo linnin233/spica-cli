@@ -43,17 +43,25 @@ describe('CLI Commands', () => {
     expect(result.stdout).toContain('Examples:');
   }, 10000);
 
-  it.skipIf(shouldSkipApiTests)('should list providers', async () => {
-    const result = await runCli(['list']);
-    expect(result.stdout).toMatch(/\* /);  // default provider marker
-  }, 10000);
+  it.skipIf(shouldSkipApiTests)(
+    'should list providers',
+    async () => {
+      const result = await runCli(['list']);
+      expect(result.stdout).toMatch(/\* /); // default provider marker
+    },
+    10000
+  );
 
-  it.skipIf(shouldSkipApiTests)('should show provider details', async () => {
-    const result = await runCli(['show', 'aliyunglm5']);
-    expect(result.stdout).toContain('name:');
-    expect(result.stdout).toContain('url:');
-    expect(result.stdout).toContain('model:');
-  }, 10000);
+  it.skipIf(shouldSkipApiTests)(
+    'should show provider details',
+    async () => {
+      const result = await runCli(['show', 'aliyunglm5']);
+      expect(result.stdout).toContain('name:');
+      expect(result.stdout).toContain('url:');
+      expect(result.stdout).toContain('model:');
+    },
+    10000
+  );
 });
 
 // 工具系统测试
@@ -73,7 +81,7 @@ describe('Tool System', () => {
 
       setWorkspace(TEST_DIR);
 
-      const result = await executeTool('file_read', { path: 'test.txt' });
+      const result = await executeTool('read', { path: 'test.txt' });
       expect(result.success).toBe(true);
       expect(result.content).toContain('Hello World');
     });
@@ -81,7 +89,7 @@ describe('Tool System', () => {
     it('file_write: should write file with syntax check', async () => {
       setWorkspace(TEST_DIR);
 
-      const result = await executeTool('file_write', {
+      const result = await executeTool('write', {
         path: 'test.ts',
         content: 'const x: number = 1;',
       });
@@ -92,9 +100,9 @@ describe('Tool System', () => {
     it('file_write: should detect syntax errors', async () => {
       setWorkspace(TEST_DIR);
 
-      const result = await executeTool('file_write', {
+      const result = await executeTool('write', {
         path: 'error.ts',
-        content: 'const x: string = ;',  // syntax error
+        content: 'const x: string = ;', // syntax error
       });
       expect(result.success).toBe(true);
       expect(result.syntaxErrors).toBeDefined();
@@ -107,7 +115,7 @@ describe('Tool System', () => {
 
       setWorkspace(TEST_DIR);
 
-      const result = await executeTool('file_edit', {
+      const result = await executeTool('edit', {
         path: 'edit.txt',
         oldString: 'Hello',
         newString: 'Hi',
@@ -207,7 +215,10 @@ describe('Tool System', () => {
 
       setWorkspace(TEST_DIR);
 
-      const result = await executeTool('file_copy', { source: 'copy-src.txt', destination: 'copy-dest.txt' });
+      const result = await executeTool('file_copy', {
+        source: 'copy-src.txt',
+        destination: 'copy-dest.txt',
+      });
       expect(result.success).toBe(true);
 
       const content = await fs.readFile(dest, 'utf8');
@@ -221,7 +232,10 @@ describe('Tool System', () => {
 
       setWorkspace(TEST_DIR);
 
-      const result = await executeTool('file_move', { source: 'move-src.txt', destination: 'move-dest.txt' });
+      const result = await executeTool('file_move', {
+        source: 'move-src.txt',
+        destination: 'move-dest.txt',
+      });
       expect(result.success).toBe(true);
 
       const srcExists = await fs.pathExists(src);
@@ -278,7 +292,11 @@ describe('Tool System', () => {
       setWorkspace(TEST_DIR);
 
       // grep tool expects path as directory, include as file pattern
-      const result = await executeTool('grep', { pattern: 'Test', path: TEST_DIR, include: 'grep.txt' });
+      const result = await executeTool('grep', {
+        pattern: 'Test',
+        path: TEST_DIR,
+        include: 'grep.txt',
+      });
       expect(result.success).toBe(true);
       expect(result.output).toContain('Test');
     });
@@ -345,7 +363,7 @@ describe('TUI Features', () => {
 
   // 通用PTY测试函数 - 等待脚本准备好
   async function runTuiTest(scriptPath: string, input: string): Promise<string> {
-    return new Promise((resolve) => {
+    return new Promise(resolve => {
       const p = pty.spawn('npx', ['tsx', scriptPath], {
         name: 'xterm-256color',
         cols: 80,
@@ -359,7 +377,11 @@ describe('TUI Features', () => {
       p.onData(d => {
         output += d;
         // 等待脚本准备好后发送输入（使用 guard 防止 onData 多次触发导致重复写入）
-        if (!inputSent && output.includes('=== TUI State Test Start ===') && !output.includes(input)) {
+        if (
+          !inputSent &&
+          output.includes('=== TUI State Test Start ===') &&
+          !output.includes(input)
+        ) {
           inputSent = true;
           setTimeout(() => {
             p.write(input);

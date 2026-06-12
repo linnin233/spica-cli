@@ -5,10 +5,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { join } from 'path';
 import fs from 'fs-extra';
-import {
-  executeTool,
-  setWorkspace,
-} from '../../tools/index';
+import { executeTool, setWorkspace } from '../../tools/index';
 
 const TEST_DIR = join(process.cwd(), 'test-monitor-temp');
 const isWindows = process.platform === 'win32';
@@ -46,24 +43,28 @@ describe('Monitor Tool Tests', () => {
 
     it('should emit monitor_event for each stdout line', async () => {
       const events: Array<{ task_id: string; line: string }> = [];
-      
-      const result = await executeTool('monitor', {
-        command: isWindows 
-          ? 'echo line1 && echo line2 && echo line3' 
-          : 'echo line1 && echo line2 && echo line3',
-        description: 'Multi-line monitor',
-        timeout: 10,
-      }, (eventType, data) => {
-        if (eventType === 'monitor_event') {
-          events.push(data);
+
+      const result = await executeTool(
+        'monitor',
+        {
+          command: isWindows
+            ? 'echo line1 && echo line2 && echo line3'
+            : 'echo line1 && echo line2 && echo line3',
+          description: 'Multi-line monitor',
+          timeout: 10,
+        },
+        (eventType, data) => {
+          if (eventType === 'monitor_event') {
+            events.push(data);
+          }
         }
-      });
+      );
 
       expect(result.success).toBe(true);
-      
+
       // 等待事件
       await delay(500);
-      
+
       expect(events.length).toBe(3);
       expect(events[0].line).toBe('line1');
       expect(events[1].line).toBe('line2');
@@ -84,7 +85,7 @@ describe('Monitor Tool Tests', () => {
       // 停止任务
       const taskId = result.content;
       await delay(100);
-      
+
       const stopResult = await executeTool('task_stop', {
         task_id: taskId,
       });
@@ -105,7 +106,7 @@ describe('Monitor Tool Tests', () => {
       // 停止任务
       const taskId = result.content;
       await delay(100);
-      
+
       await executeTool('task_stop', {
         task_id: taskId,
       });
@@ -124,22 +125,26 @@ describe('Monitor Tool Tests', () => {
 
     it('should handle command errors gracefully', async () => {
       const errorEvents: Array<{ error: string }> = [];
-      
-      const result = await executeTool('monitor', {
-        command: isWindows ? 'nonexistent_command_12345' : 'nonexistent_command_12345',
-        description: 'Error test',
-        timeout: 10,
-      }, (eventType, data) => {
-        if (eventType === 'monitor_error') {
-          errorEvents.push(data);
+
+      const result = await executeTool(
+        'monitor',
+        {
+          command: isWindows ? 'nonexistent_command_12345' : 'nonexistent_command_12345',
+          description: 'Error test',
+          timeout: 10,
+        },
+        (eventType, data) => {
+          if (eventType === 'monitor_error') {
+            errorEvents.push(data);
+          }
         }
-      });
+      );
 
       expect(result.success).toBe(true);
-      
+
       // 等待错误
       await delay(500);
-      
+
       // 命令不存在应该触发错误
       expect(errorEvents.length).toBeGreaterThanOrEqual(0); // 可能不会触发 error 事件，取决于 shell
     });
@@ -229,25 +234,33 @@ describe('Monitor Tool Tests', () => {
       const events2: string[] = [];
 
       // 启动两个监控
-      const result1 = await executeTool('monitor', {
-        command: isWindows ? 'echo monitor1' : 'echo monitor1',
-        description: 'Monitor 1',
-        timeout: 10,
-      }, (eventType, data) => {
-        if (eventType === 'monitor_event') {
-          events1.push(data.line);
+      const result1 = await executeTool(
+        'monitor',
+        {
+          command: isWindows ? 'echo monitor1' : 'echo monitor1',
+          description: 'Monitor 1',
+          timeout: 10,
+        },
+        (eventType, data) => {
+          if (eventType === 'monitor_event') {
+            events1.push(data.line);
+          }
         }
-      });
+      );
 
-      const result2 = await executeTool('monitor', {
-        command: isWindows ? 'echo monitor2' : 'echo monitor2',
-        description: 'Monitor 2',
-        timeout: 10,
-      }, (eventType, data) => {
-        if (eventType === 'monitor_event') {
-          events2.push(data.line);
+      const result2 = await executeTool(
+        'monitor',
+        {
+          command: isWindows ? 'echo monitor2' : 'echo monitor2',
+          description: 'Monitor 2',
+          timeout: 10,
+        },
+        (eventType, data) => {
+          if (eventType === 'monitor_event') {
+            events2.push(data.line);
+          }
         }
-      });
+      );
 
       expect(result1.success).toBe(true);
       expect(result2.success).toBe(true);
@@ -313,21 +326,25 @@ describe('Monitor Tool Tests', () => {
       const scriptContent = isWindows
         ? '@echo off\nfor /L %%i in (1,1,5) do (\n  echo line%%i\n  ping -n 1 127.0.0.1 > nul\n)'
         : '#!/bin/bash\nfor i in 1 2 3 4 5; do\n  echo "line$i"\n  sleep 0.1\ndone';
-      
+
       await fs.writeFile(scriptFile, scriptContent);
       if (!isWindows) {
         await fs.chmod(scriptFile, '755');
       }
 
-      const result = await executeTool('monitor', {
-        command: isWindows ? scriptFile : `bash ${scriptFile}`,
-        description: 'Streaming test',
-        timeout: 30,
-      }, (eventType, data) => {
-        if (eventType === 'monitor_event') {
-          events.push(data.line);
+      const result = await executeTool(
+        'monitor',
+        {
+          command: isWindows ? scriptFile : `bash ${scriptFile}`,
+          description: 'Streaming test',
+          timeout: 30,
+        },
+        (eventType, data) => {
+          if (eventType === 'monitor_event') {
+            events.push(data.line);
+          }
         }
-      });
+      );
 
       expect(result.success).toBe(true);
 
@@ -342,17 +359,19 @@ describe('Monitor Tool Tests', () => {
     it('should handle stderr output', async () => {
       const events: string[] = [];
 
-      const result = await executeTool('monitor', {
-        command: isWindows 
-          ? 'echo stdout && echo stderr 1>&2' 
-          : 'echo stdout && echo stderr >&2',
-        description: 'Stderr test',
-        timeout: 10,
-      }, (eventType, data) => {
-        if (eventType === 'monitor_event') {
-          events.push(data.line);
+      const result = await executeTool(
+        'monitor',
+        {
+          command: isWindows ? 'echo stdout && echo stderr 1>&2' : 'echo stdout && echo stderr >&2',
+          description: 'Stderr test',
+          timeout: 10,
+        },
+        (eventType, data) => {
+          if (eventType === 'monitor_event') {
+            events.push(data.line);
+          }
         }
-      });
+      );
 
       expect(result.success).toBe(true);
       await delay(500);

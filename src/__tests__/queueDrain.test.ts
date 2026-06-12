@@ -71,7 +71,8 @@ describe('autoDrainQueue', () => {
   it('handles handler rejection without blocking subsequent drains', async () => {
     queue.add('before-error');
     queue.add('after-error');
-    const handler = vi.fn()
+    const handler = vi
+      .fn()
       .mockRejectedValueOnce(new Error('fail'))
       .mockResolvedValueOnce(undefined);
 

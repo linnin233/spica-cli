@@ -8,7 +8,7 @@ describe('Compression Integration', () => {
   let agent: SpicaAgent;
   let mockLLM: any;
   let testMessages: ChatMessage[];
-  const SMALL_CONTEXT_WINDOW = 1000;  // Small window so tests trigger compression easily
+  const SMALL_CONTEXT_WINDOW = 1000; // Small window so tests trigger compression easily
 
   beforeEach(() => {
     agent = new SpicaAgent('test', '/tmp/spica-test-compression');
@@ -18,16 +18,18 @@ describe('Compression Integration', () => {
     // Create mock LLM with controllable behavior
     mockLLM = {
       getMessages: vi.fn(() => testMessages),
-      setMessages: vi.fn((msgs: ChatMessage[]) => { testMessages = msgs; }),
+      setMessages: vi.fn((msgs: ChatMessage[]) => {
+        testMessages = msgs;
+      }),
       getProvider: vi.fn(() => ({
-        getContextWindow: () => SMALL_CONTEXT_WINDOW
+        getContextWindow: () => SMALL_CONTEXT_WINDOW,
       })),
       getTokenCounter: vi.fn(() => {
         const counter = new TokenCounter();
         counter.setContextWindow(SMALL_CONTEXT_WINDOW);
         return counter;
       }),
-      generateDirect: vi.fn().mockResolvedValue({ content: 'Mock summary of conversation' })
+      generateForCompression: vi.fn().mockResolvedValue({ content: 'Mock summary of conversation' }),
     };
 
     // Inject mock into private field
@@ -48,7 +50,7 @@ describe('Compression Integration', () => {
       const counter = new TokenCounter();
       counter.setContextWindow(SMALL_CONTEXT_WINDOW);
       const initialTokens = counter.estimateMessages(testMessages);
-      expect(initialTokens).toBeGreaterThan(300);  // Over target (30%)
+      expect(initialTokens).toBeGreaterThan(300); // Over target (30%)
 
       // Listen for compression event
       const compressListener = vi.fn();
@@ -71,7 +73,7 @@ describe('Compression Integration', () => {
       // Small message set - well below threshold
       testMessages = [
         { role: 'user', content: 'Hello' },
-        { role: 'assistant', content: 'Hi there' }
+        { role: 'assistant', content: 'Hi there' },
       ];
 
       await agent.compact();
@@ -88,7 +90,7 @@ describe('Compression Integration', () => {
         { role: 'user', content: 'A'.repeat(400) },
         { role: 'assistant', content: 'A'.repeat(400) },
         { role: 'user', content: 'A'.repeat(400) },
-        { role: 'assistant', content: 'A'.repeat(5000) }  // Last message - will be in recentMessages and truncated
+        { role: 'assistant', content: 'A'.repeat(5000) }, // Last message - will be in recentMessages and truncated
       ];
 
       await agent.compact();
@@ -109,15 +111,15 @@ describe('Compression Integration', () => {
       testMessages = [
         { role: 'user', content: 'X'.repeat(400) },
         { role: 'assistant', content: 'Y'.repeat(400) },
-        { role: 'user', content: 'Z'.repeat(3000) },      // Will be truncated
-        { role: 'assistant', content: 'W'.repeat(4000) }  // Will be truncated
+        { role: 'user', content: 'Z'.repeat(3000) }, // Will be truncated
+        { role: 'assistant', content: 'W'.repeat(4000) }, // Will be truncated
       ];
 
       await agent.compact();
 
       const finalMessages = mockLLM.setMessages.mock.calls[0][0];
       const truncatedCount = finalMessages.filter(m => m.content?.includes('[truncated]')).length;
-      expect(truncatedCount).toBeGreaterThanOrEqual(1);  // At least 1 should be truncated
+      expect(truncatedCount).toBeGreaterThanOrEqual(1); // At least 1 should be truncated
     });
 
     it('should handle assistant+tool messages in compact', async () => {
@@ -134,19 +136,19 @@ describe('Compression Integration', () => {
           role: 'assistant',
           content: '',
           toolCalls: [
-            { id: 'tc1', name: 'file_read', arguments: { path: '/a.txt' } },
-            { id: 'tc2', name: 'file_read', arguments: { path: '/b.txt' } },
-            { id: 'tc3', name: 'file_read', arguments: { path: '/c.txt' } },
-            { id: 'tc4', name: 'file_read', arguments: { path: '/d.txt' } },
-            { id: 'tc5', name: 'bash', arguments: { command: 'ls' } }
-          ]
+            { id: 'tc1', name: 'read', arguments: { path: '/a.txt' } },
+            { id: 'tc2', name: 'read', arguments: { path: '/b.txt' } },
+            { id: 'tc3', name: 'read', arguments: { path: '/c.txt' } },
+            { id: 'tc4', name: 'read', arguments: { path: '/d.txt' } },
+            { id: 'tc5', name: 'bash', arguments: { command: 'ls' } },
+          ],
         },
         // 必须添加对应的tool messages，否则compact会去掉toolCalls
         { role: 'tool', toolCallId: 'tc1', content: 'content a' },
         { role: 'tool', toolCallId: 'tc2', content: 'content b' },
         { role: 'tool', toolCallId: 'tc3', content: 'content c' },
         { role: 'tool', toolCallId: 'tc4', content: 'content d' },
-        { role: 'tool', toolCallId: 'tc5', content: 'ls output' }
+        { role: 'tool', toolCallId: 'tc5', content: 'ls output' },
       ];
 
       await agent.compact();
@@ -165,30 +167,34 @@ describe('Compression Integration', () => {
       // Need enough messages to trigger compression
       testMessages = [
         { role: 'user', content: 'Read the config file' },
-        { role: 'assistant', content: '', toolCalls: [
-          { id: 'tc1', name: 'file_read', arguments: { path: '/etc/config.json' } }
-        ]},
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [{ id: 'tc1', name: 'read', arguments: { path: '/etc/config.json' } }],
+        },
         { role: 'tool', content: '{"key": "value"}', toolCallId: 'tc1' },
         { role: 'assistant', content: 'Config loaded successfully' },
         { role: 'user', content: 'Now edit it' },
-        { role: 'assistant', content: '', toolCalls: [
-          { id: 'tc2', name: 'bash', arguments: { command: 'cat /etc/config.json' } }
-        ]},
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [{ id: 'tc2', name: 'bash', arguments: { command: 'cat /etc/config.json' } }],
+        },
         { role: 'tool', content: 'output', toolCallId: 'tc2' },
         // Add more messages to exceed threshold
         { role: 'user', content: 'X'.repeat(400) },
         { role: 'assistant', content: 'Y'.repeat(400) },
         { role: 'user', content: 'X'.repeat(400) },
-        { role: 'assistant', content: 'Y'.repeat(400) }
+        { role: 'assistant', content: 'Y'.repeat(400) },
       ];
 
       await agent.compact();
 
-      expect(mockLLM.generateDirect).toHaveBeenCalled();
-      const promptArg = mockLLM.generateDirect.mock.calls[0][0];
+      expect(mockLLM.generateForCompression).toHaveBeenCalled();
+      const promptArg = mockLLM.generateForCompression.mock.calls[0][0];
 
       // Tool names should be preserved in summary prompt
-      expect(promptArg).toContain('file_read');
+      expect(promptArg).toContain('read');
       expect(promptArg).toContain('bash');
       // Key arguments should be preserved
       expect(promptArg).toContain('/etc/config.json');
@@ -196,11 +202,15 @@ describe('Compression Integration', () => {
 
     it('should handle messages with multiple toolCalls', async () => {
       testMessages = [
-        { role: 'assistant', content: '', toolCalls: [
-          { id: 'tc1', name: 'file_read', arguments: { path: '/a.txt' } },
-          { id: 'tc2', name: 'file_read', arguments: { path: '/b.txt' } },
-          { id: 'tc3', name: 'bash', arguments: { command: 'ls' } }
-        ]},
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [
+            { id: 'tc1', name: 'read', arguments: { path: '/a.txt' } },
+            { id: 'tc2', name: 'read', arguments: { path: '/b.txt' } },
+            { id: 'tc3', name: 'bash', arguments: { command: 'ls' } },
+          ],
+        },
         { role: 'tool', content: 'content a', toolCallId: 'tc1' },
         { role: 'tool', content: 'content b', toolCallId: 'tc2' },
         { role: 'tool', content: 'output', toolCallId: 'tc3' },
@@ -208,20 +218,20 @@ describe('Compression Integration', () => {
         { role: 'user', content: 'X'.repeat(400) },
         { role: 'assistant', content: 'Y'.repeat(400) },
         { role: 'user', content: 'X'.repeat(400) },
-        { role: 'assistant', content: 'Y'.repeat(400) }
+        { role: 'assistant', content: 'Y'.repeat(400) },
       ];
 
       await agent.compact();
 
-      const promptArg = mockLLM.generateDirect.mock.calls[0][0];
-      expect(promptArg).toContain('file_read');
+      const promptArg = mockLLM.generateForCompression.mock.calls[0][0];
+      expect(promptArg).toContain('read');
       expect(promptArg).toContain('bash');
     });
   });
 
   describe('Fallback summary tests', () => {
-    it('should use fallback summary when generateDirect fails', async () => {
-      mockLLM.generateDirect = vi.fn().mockRejectedValue(new Error('API error'));
+    it('should use fallback summary when generateForCompression fails', async () => {
+      mockLLM.generateForCompression = vi.fn().mockRejectedValue(new Error('API error'));
 
       // Need enough messages AND oldMessages for fallback to be triggered
       // Target is 50% = 500 tokens, need > 500 tokens
@@ -237,14 +247,16 @@ describe('Compression Integration', () => {
         { role: 'assistant', content: 'Y'.repeat(400) },
         { role: 'user', content: 'X'.repeat(400) },
         { role: 'assistant', content: 'Y'.repeat(400) },
-        { role: 'user', content: 'Final question' }
+        { role: 'user', content: 'Final question' },
       ];
 
       await agent.compact();
 
       expect(mockLLM.setMessages).toHaveBeenCalled();
       const finalMessages = mockLLM.setMessages.mock.calls[0][0];
-      const summaryMsg = finalMessages.find(m => m.role === 'assistant' && m.content?.includes('[COMPACTED CONTEXT'));
+      const summaryMsg = finalMessages.find(
+        m => m.role === 'assistant' && m.content?.includes('[COMPACTED CONTEXT')
+      );
 
       expect(summaryMsg).toBeDefined();
       expect(summaryMsg!.content).toContain('[COMPACTED CONTEXT');
@@ -273,7 +285,7 @@ describe('Compression Integration', () => {
         { role: 'user', content: 'X'.repeat(400) },
         { role: 'assistant', content: 'Y'.repeat(400) },
         { role: 'user', content: 'X'.repeat(400) },
-        { role: 'assistant', content: 'Y'.repeat(400) }
+        { role: 'assistant', content: 'Y'.repeat(400) },
       ];
 
       await agent.compact();
@@ -293,7 +305,7 @@ describe('Compression Integration', () => {
       const counter = new TokenCounter();
       counter.setContextWindow(SMALL_CONTEXT_WINDOW);
       const initialTokens = counter.estimateMessages(testMessages);
-      expect(initialTokens).toBeGreaterThan(2000);  // Way over limit
+      expect(initialTokens).toBeGreaterThan(2000); // Way over limit
 
       await agent.compact();
 
@@ -314,8 +326,8 @@ describe('Compression Integration', () => {
         testMessages.push({ role: 'assistant', content: 'Y'.repeat(500) });
       }
 
-      // Make generateDirect slow to simulate in-flight compression
-      mockLLM.generateDirect = vi.fn().mockImplementation(() => {
+      // Make generateForCompression slow to simulate in-flight compression
+      mockLLM.generateForCompression = vi.fn().mockImplementation(() => {
         return new Promise(resolve => {
           setTimeout(() => resolve({ content: 'Slow summary' }), 100);
         });
@@ -333,7 +345,7 @@ describe('Compression Integration', () => {
       // setMessages may be called multiple times if secondary compression needed
       // Just verify that the second compact was a no-op (no additional calls beyond first compact)
       const setCalls = mockLLM.setMessages.mock.calls.length;
-      expect(setCalls).toBeGreaterThanOrEqual(1);  // At least one from first compact
+      expect(setCalls).toBeGreaterThanOrEqual(1); // At least one from first compact
     });
   });
 
@@ -349,7 +361,7 @@ describe('Compression Integration', () => {
         { role: 'user', content: 'X'.repeat(400) },
         { role: 'assistant', content: 'Y'.repeat(400) },
         { role: 'user', content: 'X'.repeat(400) },
-        { role: 'assistant', content: 'Y'.repeat(400) }
+        { role: 'assistant', content: 'Y'.repeat(400) },
       ];
 
       await agent.compact();
@@ -385,7 +397,7 @@ describe('Compression Integration', () => {
         { role: 'user', content: 'X'.repeat(500) },
         { role: 'assistant', content: 'Y'.repeat(500) },
         { role: 'user', content: 'X'.repeat(500) },
-        { role: 'assistant', content: 'Y'.repeat(500) }
+        { role: 'assistant', content: 'Y'.repeat(500) },
       ];
 
       await agent.compact();
@@ -404,7 +416,7 @@ describe('Compression Integration', () => {
         { role: 'user', content: 'X'.repeat(400) },
         { role: 'assistant', content: 'Y'.repeat(400) },
         { role: 'user', content: 'X'.repeat(400) },
-        { role: 'assistant', content: 'Y'.repeat(400) }
+        { role: 'assistant', content: 'Y'.repeat(400) },
       ];
 
       await agent.compact();

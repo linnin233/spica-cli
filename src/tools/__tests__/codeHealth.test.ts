@@ -5,11 +5,11 @@ import * as path from 'path';
 
 describe('analyzeCodeHealth', () => {
   const testDir = path.join(__dirname, 'test-fixtures-health');
-  
+
   beforeAll(async () => {
     await fs.ensureDir(testDir);
   });
-  
+
   afterAll(async () => {
     await fs.remove(testDir);
   });
@@ -22,9 +22,9 @@ function add(a: number, b: number): number {
 `;
     const filePath = path.join(testDir, 'simple.ts');
     await fs.writeFile(filePath, simpleCode);
-    
+
     const result = await analyzeCodeHealth(filePath);
-    
+
     expect(result.score).toBeGreaterThanOrEqual(9);
     expect(result.passed).toBe(true);
     expect(result.issues).toHaveLength(0);
@@ -62,9 +62,9 @@ function complex(a: number, b: number, c: number, d: number, e: number, f: numbe
 `;
     const filePath = path.join(testDir, 'complex.ts');
     await fs.writeFile(filePath, complexCode);
-    
+
     const result = await analyzeCodeHealth(filePath);
-    
+
     // Should detect either nesting or complexity issues
     expect(result.issues.length).toBeGreaterThan(0);
     expect(result.score).toBeLessThan(10);
@@ -77,18 +77,18 @@ function complex(a: number, b: number, c: number, d: number, e: number, f: numbe
     }
     lines.push('}');
     const longCode = lines.join('\n');
-    
+
     const filePath = path.join(testDir, 'long.ts');
     await fs.writeFile(filePath, longCode);
-    
+
     const result = await analyzeCodeHealth(filePath);
-    
+
     expect(result.issues.some(i => i.type === 'length')).toBe(true);
   });
 
   it('should handle non-existent file gracefully', async () => {
     const result = await analyzeCodeHealth('/non/existent/file.ts');
-    
+
     expect(result.passed).toBe(false);
     expect(result.issues).toHaveLength(1);
     expect(result.issues[0].message).toContain('does not exist');
@@ -100,7 +100,13 @@ describe('formatCodeHealthResult', () => {
     const result = {
       score: 8.5,
       issues: [
-        { type: 'complexity' as const, location: 'test.ts:10', severity: 'medium' as const, message: 'High complexity', suggestion: 'Refactor' }
+        {
+          type: 'complexity' as const,
+          location: 'test.ts:10',
+          severity: 'medium' as const,
+          message: 'High complexity',
+          suggestion: 'Refactor',
+        },
       ],
       passed: false,
       stats: {
@@ -112,9 +118,9 @@ describe('formatCodeHealthResult', () => {
         maxParameters: 4,
       },
     };
-    
+
     const output = formatCodeHealthResult(result);
-    
+
     expect(output).toContain('8.5/10');
     expect(output).toContain('[FAIL]');
     expect(output).toContain('Total lines: 100');

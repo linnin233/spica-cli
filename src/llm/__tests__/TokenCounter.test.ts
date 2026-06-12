@@ -29,9 +29,7 @@ describe('TokenCounter', () => {
     const msgWithTools = {
       role: 'assistant',
       content: '',
-      toolCalls: [
-        { id: 'tc-123', name: 'file_read', arguments: { path: '/test/file.txt' } }
-      ]
+      toolCalls: [{ id: 'tc-123', name: 'read', arguments: { path: '/test/file.txt' } }],
     };
 
     const tokensNoTools = counter.estimateMessage(msgNoTools);
@@ -57,10 +55,10 @@ describe('TokenCounter', () => {
       role: 'assistant',
       content: '',
       toolCalls: [
-        { id: 'tc-1', name: 'file_read', arguments: { path: 'a' } },
-        { id: 'tc-2', name: 'file_write', arguments: { path: 'b', content: 'x' } },
-        { id: 'tc-3', name: 'bash', arguments: { command: 'ls' } }
-      ]
+        { id: 'tc-1', name: 'read', arguments: { path: 'a' } },
+        { id: 'tc-2', name: 'write', arguments: { path: 'b', content: 'x' } },
+        { id: 'tc-3', name: 'bash', arguments: { command: 'ls' } },
+      ],
     };
 
     const tokens = counter.estimateMessage(msg);
@@ -71,8 +69,12 @@ describe('TokenCounter', () => {
   it('should estimate total messages correctly', () => {
     const messages = [
       { role: 'user', content: 'Hello' },
-      { role: 'assistant', content: 'Hi there', toolCalls: [{ id: 'tc-1', name: 'file_read', arguments: {} }] },
-      { role: 'tool', content: 'file content', toolCallId: 'tc-1' }
+      {
+        role: 'assistant',
+        content: 'Hi there',
+        toolCalls: [{ id: 'tc-1', name: 'read', arguments: {} }],
+      },
+      { role: 'tool', content: 'file content', toolCallId: 'tc-1' },
     ];
 
     const total = counter.estimateMessages(messages);

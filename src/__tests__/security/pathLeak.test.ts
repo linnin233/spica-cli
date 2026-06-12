@@ -14,7 +14,9 @@ describe('history file permissions', () => {
       expect(() => saveHistory([])).not.toThrow();
     } finally {
       // Cleanup
-      try { fs.rmSync(tmpDir, { recursive: true }); } catch {}
+      try {
+        fs.rmSync(tmpDir, { recursive: true });
+      } catch {}
     }
   });
 

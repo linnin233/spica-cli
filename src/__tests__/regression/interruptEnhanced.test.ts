@@ -13,7 +13,7 @@ describe('Interrupt Handling - Enhanced Regression Tests', () => {
     it('should reset streaming state after interrupt', () => {
       // Mock streaming state
       const mockLLM = {
-        interrupt: vi.fn()
+        interrupt: vi.fn(),
       };
 
       Object.defineProperty(agent, 'llm', { value: mockLLM, writable: true });
@@ -34,15 +34,15 @@ describe('Interrupt Handling - Enhanced Regression Tests', () => {
 
     it('should handle interrupt during tool execution', async () => {
       // Mock tool execution
-      vi.mock('../../tools/index', async (importOriginal) => {
-        const actual = await importOriginal() as any;
+      vi.mock('../../tools/index', async importOriginal => {
+        const actual = (await importOriginal()) as any;
         return {
           ...actual,
           executeTool: vi.fn().mockImplementation(async () => {
             // 模拟长时间执行
             await new Promise(resolve => setTimeout(resolve, 1000));
             return { success: true, output: 'result' };
-          })
+          }),
         };
       });
 

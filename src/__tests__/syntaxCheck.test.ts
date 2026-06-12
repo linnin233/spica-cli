@@ -25,7 +25,7 @@ export function broken( {
   // Missing closing brace
   return 1;
 `;
-      const result = await executeTool('file_write', {
+      const result = await executeTool('write', {
         path: join(tempDir, 'broken.ts'),
         content: invalidTS,
       });
@@ -41,7 +41,7 @@ export function add(a: number, b: number): number {
   return a + b;
 }
 `;
-      const result = await executeTool('file_write', {
+      const result = await executeTool('write', {
         path: join(tempDir, 'valid.ts'),
         content: validTS,
       });
@@ -59,7 +59,7 @@ function broken( {
   // Missing closing brace
   return 1;
 `;
-      const result = await executeTool('file_write', {
+      const result = await executeTool('write', {
         path: join(tempDir, 'broken.js'),
         content: invalidJS,
       });
@@ -76,7 +76,7 @@ function add(a, b) {
 }
 module.exports = { add };
 `;
-      const result = await executeTool('file_write', {
+      const result = await executeTool('write', {
         path: join(tempDir, 'valid.js'),
         content: validJS,
       });
@@ -93,7 +93,7 @@ def broken(:
     # Invalid syntax
     return 1
 `;
-      const result = await executeTool('file_write', {
+      const result = await executeTool('write', {
         path: join(tempDir, 'broken.py'),
         content: invalidPy,
       });
@@ -110,7 +110,7 @@ def broken(:
 def add(a, b):
     return a + b
 `;
-      const result = await executeTool('file_write', {
+      const result = await executeTool('write', {
         path: join(tempDir, 'valid.py'),
         content: validPy,
       });
@@ -127,7 +127,7 @@ if [ -f file.txt ]; then
   echo "found"
 # Missing fi
 `;
-      const result = await executeTool('file_write', {
+      const result = await executeTool('write', {
         path: join(tempDir, 'broken.sh'),
         content: invalidSh,
       });
@@ -145,7 +145,7 @@ if [ -f file.txt ]; then
   echo "found"
 fi
 `;
-      const result = await executeTool('file_write', {
+      const result = await executeTool('write', {
         path: join(tempDir, 'valid.sh'),
         content: validSh,
       });
@@ -163,16 +163,16 @@ export function add(a: number, b: number): number {
   return a + b;
 }
 `;
-      await executeTool('file_write', {
+      await executeTool('write', {
         path: join(tempDir, 'edit-test.ts'),
         content: validTS,
       });
 
       // Edit to introduce syntax error
-      const result = await executeTool('file_edit', {
+      const result = await executeTool('edit', {
         path: join(tempDir, 'edit-test.ts'),
         oldString: 'return a + b;',
-        newString: 'return a + b',  // Missing semicolon is OK in TS, let's try something worse
+        newString: 'return a + b', // Missing semicolon is OK in TS, let's try something worse
       });
 
       expect(result.success).toBe(true);
@@ -190,7 +190,7 @@ export function multiply(a: number, b: number): number {
   return a * b;
 }
 `;
-      await executeTool('file_write', {
+      await executeTool('write', {
         path: join(tempDir, 'multi-edit-test.ts'),
         content: validTS,
       });
@@ -209,7 +209,7 @@ export function multiply(a: number, b: number): number {
 
   describe('Unknown file types', () => {
     it('should skip syntax check for unknown file types', async () => {
-      const result = await executeTool('file_write', {
+      const result = await executeTool('write', {
         path: join(tempDir, 'unknown.xyz'),
         content: 'some random content',
       });
@@ -219,7 +219,7 @@ export function multiply(a: number, b: number): number {
     });
 
     it('should skip syntax check for markdown files', async () => {
-      const result = await executeTool('file_write', {
+      const result = await executeTool('write', {
         path: join(tempDir, 'README.md'),
         content: '# Hello\n\nThis is markdown.',
       });
