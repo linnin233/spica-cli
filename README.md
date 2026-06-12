@@ -52,7 +52,63 @@ spica run "fix the bug"                          # single task
 
 ## Architecture
 
-![Architecture](docs/architecture.png)
+```mermaid
+graph TB
+    subgraph Presentation["Presentation Layer"]
+        TUI["TUI Mode\nfull-screen"]
+        Simple["Simple Mode\n--no-tui"]
+        Cmds["CLI Commands\n/archive /compact ..."]
+        InputQ["Input Queue\nbuffers during processing"]
+        UIComp["UI Components\nspinner, diff, scrollback"]
+    end
+
+    subgraph Application["Application Layer"]
+        Agent["<b>SpicaAgent</b>\nEventEmitter orchestrator\nprocessInput / executeTools\n_fullHistory / provider.messages"]
+        Events["Event Bus\nstream, tool_call, tool_result\nmessage, interrupt, done"]
+        Interrupt["Interrupt Handler\nAbortController\ncancelSeq"]
+        Session["Session & Archive\ntwo-state model\nsaveSession / archiveSession"]
+        Subagent["Sub-Agents\nexplore / review / fix / build"]
+    end
+
+    subgraph Domain["Domain Layer"]
+        LLM["LLMClient\nOpenAI-compatible streaming\nRateLimiter, TokenCounter"]
+        Providers["LLM Providers\nOpenAI, Anthropic\nDeepSeek, Gemini, Groq"]
+        Tools["Tool System\n33 built-in tools\nfile, bash, git, grep, glob"]
+        MCP["MCP Client\nexternal tool servers"]
+        Skills["Skills & Hooks\n14 built-in skills\nPreToolUse / PostToolUse"]
+    end
+
+    subgraph Infrastructure["Infrastructure Layer"]
+        GlobalCfg["Global Config\n~/.spica/\nproviders, MCP, hooks"]
+        ActiveSess["Active Session\n.spica/session.json\nappend-only history"]
+        HistSess["Historical Sessions\n.spica/sessions/&lt;id&gt;.json\none per archive"]
+        ProjState["Project State\n.spica/state.json\ntodos, decisions"]
+    end
+
+    %% Data flow
+    TUI --> InputQ
+    Simple --> InputQ
+    InputQ --> Agent
+    Cmds --> Agent
+    Agent <--> LLM
+    Providers --> LLM
+    LLM --> Agent
+    Agent --> Tools
+    MCP --> Tools
+    Tools --> Agent
+    Agent --> Events
+    Events --> UIComp
+    Interrupt --> Agent
+    Agent --> Session
+    Session --> ActiveSess
+    ActiveSess --> HistSess
+    Agent --> Subagent
+    Subagent --> Agent
+    Agent --> ProjState
+    GlobalCfg --> LLM
+    Skills --> Agent
+    Skills --> Tools
+```
 
 ## Tools
 

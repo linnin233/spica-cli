@@ -52,7 +52,63 @@ spica run "fix the bug"                          # 单次任务
 
 ## 架构
 
-![架构图](docs/architecture.png)
+```mermaid
+graph TB
+    subgraph Presentation["Presentation 层"]
+        TUI["TUI 模式\n全屏终端"]
+        Simple["简单模式\n--no-tui"]
+        Cmds["CLI 命令\n/archive /compact ..."]
+        InputQ["输入队列\n处理期间缓冲"]
+        UIComp["UI 组件\nspinner, diff, scrollback"]
+    end
+
+    subgraph Application["Application 层"]
+        Agent["<b>SpicaAgent</b>\nEventEmitter 编排器\nprocessInput / executeTools\n_fullHistory / provider.messages"]
+        Events["事件总线\nstream, tool_call, tool_result\nmessage, interrupt, done"]
+        Interrupt["中断处理\nAbortController\ncancelSeq"]
+        Session["会话与归档\n两态模型\nsaveSession / archiveSession"]
+        Subagent["子代理\nexplore / review / fix / build"]
+    end
+
+    subgraph Domain["Domain 层"]
+        LLM["LLMClient\nOpenAI 兼容流式\nRateLimiter, TokenCounter"]
+        Providers["LLM 供应商\nOpenAI, Anthropic\nDeepSeek, Gemini, Groq"]
+        Tools["工具系统\n33 个内置工具\nfile, bash, git, grep, glob"]
+        MCP["MCP 客户端\n外部工具服务器"]
+        Skills["技能与钩子\n14 个内置技能\nPreToolUse / PostToolUse"]
+    end
+
+    subgraph Infrastructure["Infrastructure 层"]
+        GlobalCfg["全局配置\n~/.spica/\nproviders, MCP, hooks"]
+        ActiveSess["活跃会话\n.spica/session.json\n追加写入，永不截断"]
+        HistSess["历史会话\n.spica/sessions/&lt;id&gt;.json\n每会话一份"]
+        ProjState["项目状态\n.spica/state.json\ntodos, decisions"]
+    end
+
+    %% 数据流
+    TUI --> InputQ
+    Simple --> InputQ
+    InputQ --> Agent
+    Cmds --> Agent
+    Agent <--> LLM
+    Providers --> LLM
+    LLM --> Agent
+    Agent --> Tools
+    MCP --> Tools
+    Tools --> Agent
+    Agent --> Events
+    Events --> UIComp
+    Interrupt --> Agent
+    Agent --> Session
+    Session --> ActiveSess
+    ActiveSess --> HistSess
+    Agent --> Subagent
+    Subagent --> Agent
+    Agent --> ProjState
+    GlobalCfg --> LLM
+    Skills --> Agent
+    Skills --> Tools
+```
 
 ## 工具
 
