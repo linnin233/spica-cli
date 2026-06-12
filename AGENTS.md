@@ -29,7 +29,7 @@ spica-cli is an AI coding agent CLI with interactive and single-task modes. It s
 - `src/utils/` — Settings, project config, session, history, platform, message cleaner, logger, bell
 - `src/builtin-skills/superpowers/` — 14 built-in skills
 
-**Stats:** ~125 source files, 30 test files (git tracked `.ts` only)
+**Stats:** ~87 source files, 62 test files (~149 git tracked `.ts` files)
 
 ## Existing Instruction Files
 
@@ -71,21 +71,22 @@ npm run test:run -- --coverage    # Run with coverage (requires @vitest/coverage
 
 **Coverage:** Uses v8 provider. Coverage excludes `src/builtin-skills/`.
 
-**Known Windows-only failures (~40 tests across 6 files):**
-- `src/cli/ui/__tests__/tuiPty.test.ts` — PTY tests (14 tests): `node-pty` Windows agent unavailable for `npx tsx`
-- `src/tools/__tests__/monitor.test.ts` — Monitor tests (14 tests): process management timing on Windows
-- `src/__tests__/security/resolvePath.test.ts` — Symlink tests (6 tests): Windows symlink permissions
-- `src/__tests__/fullFeature.test.ts` — TUI tests (4 tests): Chinese input encoding on Windows
-- `src/tools/__tests__/toolsCore.test.ts` — occasional syntax check timeout
-- `src/utils/__tests__/session.test.ts` — Session persistence (2 tests): filesystem write timing
+**Known flaky tests:**
+- `src/cli/ui/__tests__/tuiPty.test.ts` — PTY tests (14 tests): `node-pty` Windows agent unavailable for `npx tsx` (Windows only)
+- `src/tools/__tests__/monitor.test.ts` — Monitor tests (14 tests): process management timing on Windows (Windows only)
+- `src/__tests__/security/resolvePath.test.ts` — Symlink tests (6 tests): Windows symlink permissions (Windows only)
+- `src/__tests__/fullFeature.test.ts` — TUI tests (4 tests): Chinese input encoding on Windows (Windows only)
+- `src/tools/__tests__/toolsCore.test.ts` — occasional syntax check timeout (cross-platform)
+- `src/utils/__tests__/session.test.ts` — Session persistence (2 tests): filesystem write timing (cross-platform, can fail on slow Linux filesystems)
+- `src/__tests__/boundaryCases.test.ts` — Interrupt edge case (1 test): timing-sensitive tool result preservation (cross-platform)
 
-CI (ubuntu) typically passes all tests. CI sets `SKIP_API_TESTS: true` and `CI: true`.
+CI (ubuntu) typically passes all tests, but session and boundary tests may fail on slower runners. CI sets `SKIP_API_TESTS: true` and `CI: true`.
 
 ## Lint
 
 ```bash
-npm run lint         # Run ESLint on src/**/*.ts (0 errors, ~126 warnings)
-npm run lint:fix     # Auto-fix lint issues (~6 warnings fixable)
+npm run lint         # Run ESLint on src/**/*.ts (0 errors, ~91 warnings)
+npm run lint:fix     # Auto-fix lint issues (~3 warnings fixable)
 npm run lint:strict  # Fail on warnings (--max-warnings 0, not used in CI)
 ```
 
@@ -114,7 +115,17 @@ npx prettier --check <file>   # Check formatting only
 - `trailingComma: "es5"`, `arrowParens: "avoid"`
 - `endOfLine: "lf"`, `bracketSpacing: true`
 
-**Also see `.editorconfig`:** utf-8, lf, 2-space indent, insert_final_newline, trim_trailing_whitespace (except markdown)
+### EditorConfig
+
+`.editorconfig` enforces (supported editors auto-apply):
+- `charset: utf-8`, `end_of_line: lf`, `insert_final_newline: true`
+- `indent_style: space`, `indent_size: 2` (for `*.ts`, `*.js`, `*.json`, `*.yml`)
+- `trim_trailing_whitespace: true` (except `*.md` for line break preservation)
+- Makefile uses `indent_style: tab`
+
+### `.gitignore`
+
+Key entries: `.spica/`, `node_modules/`, `dist/`, `*.log`, `.DS_Store`, `.env`, `.env.local`, `test-compress.txt`
 
 ## Code Style
 
@@ -128,6 +139,7 @@ npx prettier --check <file>   # Check formatting only
 - Path resolution: Use `resolvePath()` from `src/tools/helpers.ts` for relative paths
 - Shell commands: Use array-based `execa` to prevent injection — never string interpolation
 - Project state: `RuntimeState` (in `src/core/RuntimeState.ts`) is the single source of truth — never use raw globals
+- Writing style (from `docs/STYLE_GUIDE.md`): one sentence per point, command-first, no modifiers, no transitions, keep English terms in English
 
 ## PR Workflow
 
@@ -266,3 +278,15 @@ When the user corrects the AI, write a new `.spica/learnings/YYYY-MM-DD-topic.md
 **Runtime:** `execa` (shell), `simple-git` (git), `fast-glob` (glob), `fs-extra` (file ops), `openai` (LLM client), `@modelcontextprotocol/sdk` (MCP), `commander` (CLI parsing), `chalk` (output), `node-pty` (interactive terminal), `ora` (spinners), `prompts` (user prompts), `axios` (HTTP), `https-proxy-agent`
 
 **Dev:** `tsx` (TypeScript runner), `typescript` 5.4, `vitest` 1.6, `eslint` 10, `typescript-eslint` 8
+
+## Additional Documentation
+
+- `docs/MANUAL.md` — Complete user manual
+- `docs/STYLE_GUIDE.md` — Technical writing style guide
+- `docs/CONTRIBUTING.md` — Contribution guidelines
+- `CLAUDE.md` — Detailed architecture reference (agent internals, event system, interrupt handling, compaction, hooks, sub-agents, input queue, LLM provider architecture)
+- `scripts/e2e-test.sh` — End-to-end test script
+- `scripts/stress-test.sh` — Stress test script
+- `scripts/test-interrupt.sh` — Interrupt handling test
+- `scripts/test-compression.sh` — Compression test
+- `scripts/test-skills-invocation.sh` — Skills invocation test
