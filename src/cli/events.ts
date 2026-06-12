@@ -951,6 +951,7 @@ interface SubAgentRecord {
   summary?: string;
   error?: string;
   toolCount: number;
+  label: string; // short prefix for output lines
 }
 
 const activeSubAgents: Map<string, SubAgentRecord> = new Map();
@@ -990,7 +991,7 @@ function displaySubAgentPanel(): void {
           : COLORS.error;
 
     const desc = truncateToWidth(agent.description, 35);
-    const line = `${statusIcon} [${agent.type}] ${desc} (${elapsed})`;
+    const line = `${statusIcon} ${agent.label} ${desc} (${elapsed})`;
     screen.appendScroll(
       statusColor(
         `│ ${line}${' '.repeat(Math.max(0, boxWidth - 2 - getStringDisplayWidth(line)))}│\n`
@@ -1217,13 +1218,17 @@ export function setupAgentEvents(
   // Subagent 事件
   on('sub_agent_start', (data: SubAgentStartData) => {
     subAgentSeq++;
+    const type = data.type || 'sub';
+    // Generate unique label: [#1 explore], [#2 review], etc.
+    const label = `[#${subAgentSeq} ${type}]`;
     activeSubAgents.set(data.id, {
       id: data.id,
-      type: data.type || 'sub',
+      type,
       description: truncateToWidth(data.description || data.prompt.slice(0, 60), 50),
       status: 'running',
       startTime: Date.now(),
       toolCount: 0,
+      label,
     });
 
     // 显示状态面板
@@ -1235,15 +1240,18 @@ export function setupAgentEvents(
     const record = activeSubAgents.get(data.id);
     if (record) record.toolCount++;
 
-    // Show tool call with key args for context
+    // Show tool call with subagent label and key args
+    const prefix = record?.label || '[sub]';
     const args = formatToolArgs(data.name, data.arguments);
-    screen.appendScroll(COLORS.subAgent(`    → ${data.name}${args ? ` ${args}` : ''}\n`));
+    screen.appendScroll(COLORS.subAgent(`  ${prefix} → ${data.name}${args ? ` ${args}` : ''}\n`));
   });
 
   on('sub_agent_tool_result', (data: SubAgentToolResultData) => {
+    const record = activeSubAgents.get(data.id);
+    const prefix = record?.label || '[sub]';
     const icon = data.success ? '✓' : '✗';
     const colorFn = data.success ? COLORS.success : COLORS.error;
-    screen.appendScroll(colorFn(`    ${icon} ${data.name}\n`));
+    screen.appendScroll(colorFn(`  ${prefix} ${icon} ${data.name}\n`));
   });
 
   on('sub_agent_done', (data: SubAgentDoneData) => {
@@ -1271,10 +1279,12 @@ export function setupAgentEvents(
   // Subagent text output — show what subagent is saying
   on('sub_agent_message', (data: SubAgentMessageData) => {
     if (data.role === 'assistant' && data.content) {
+      const record = activeSubAgents.get(data.id);
+      const prefix = record?.label || '[sub]';
       const lines = data.content.split('\n');
       for (const line of lines) {
         if (line.trim()) {
-          screen.appendScroll(COLORS.subAgent(`  │ ${line.slice(0, 200)}\n`));
+          screen.appendScroll(COLORS.subAgent(`  ${prefix} │ ${line.slice(0, 200)}\n`));
         }
       }
     }
@@ -1283,10 +1293,12 @@ export function setupAgentEvents(
   // Subagent reasoning — show with reasoning color
   on('sub_agent_reasoning', (data: SubAgentReasoningData) => {
     if (data.content && data.content.trim()) {
+      const record = activeSubAgents.get(data.id);
+      const prefix = record?.label || '[sub]';
       const lines = data.content.split('\n');
       for (const line of lines) {
         if (line.trim()) {
-          screen.appendScroll(COLORS.reasoning(`  │ ${line.slice(0, 200)}\n`));
+          screen.appendScroll(COLORS.reasoning(`  ${prefix} │ ${line.slice(0, 200)}\n`));
         }
       }
     }
