@@ -88,9 +88,13 @@ export abstract class BaseProvider extends EventEmitter {
 
   setMessages(messages: ChatMessage[]): void {
     this.messages = messages;
-    // Invalidate cache prefix — compact/new session has different message layout
-    // Next generate() call will re-mark at the new stable boundary
-    this.cachePrefixEnd = -1;
+    // Preserve system prompt as cache prefix boundary.
+    // System messages are the most stable part — keeping them in the prefix
+    // means the API-side (OpenAI automatic prefix caching) sees the same
+    // prefix across compaction/new-session, maintaining cache hits.
+    // If no system messages, reset to -1 so next generate() re-marks.
+    const sysCount = messages.filter(m => m.role === 'system').length;
+    this.cachePrefixEnd = sysCount > 0 ? sysCount - 1 : -1;
   }
 
   // Mark current messages end as cache prefix boundary
