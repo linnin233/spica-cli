@@ -1,16 +1,16 @@
-import fs from "fs-extra";
-import { execa } from "execa";
-import simpleGit from "simple-git";
-import { resolve as pathResolve, isAbsolute, dirname, join, basename } from "path";
-import fastGlob from "fast-glob";
-import { SubAgentTask, getSubAgentConfig, summarizeResult } from "./subAgent";
-import { computeDiff, formatDiff, generateEditDiff } from "../cli/ui/diff";
-import { getMCPManager } from "../mcp/client";
-import { getBashPath, getBashOrFallback } from "../utils/platform";
-import type { Todo } from "../agent";
-import type { PersistedTask } from "../storage/taskPersistence";
-import { analyzeCodeHealth, formatCodeHealthResult } from "./codeHealth";
-import { analyzeTestQuality, formatTestQualityResult } from "./testQuality";
+import fs from 'fs-extra';
+import { execa } from 'execa';
+import simpleGit from 'simple-git';
+import { resolve as pathResolve, isAbsolute, dirname, join, basename } from 'path';
+import fastGlob from 'fast-glob';
+import { SubAgentTask, getSubAgentConfig, summarizeResult } from './subAgent';
+import { computeDiff, formatDiff, generateEditDiff } from '../cli/ui/diff';
+import { getMCPManager } from '../mcp/client';
+import { getBashPath, getBashOrFallback } from '../utils/platform';
+import type { Todo } from '../agent';
+import type { PersistedTask } from '../storage/taskPersistence';
+import { analyzeCodeHealth, formatCodeHealthResult } from './codeHealth';
+import { analyzeTestQuality, formatTestQualityResult } from './testQuality';
 
 // Shared utilities from helpers.ts
 import {
@@ -25,21 +25,26 @@ import {
   runSyntaxCheck,
   formatSyntaxResult,
   applyUnifiedPatch,
-} from "./helpers";
-import type { ToolResult, ToolEventCallback } from "./helpers";
+} from './helpers';
+import type { ToolResult, ToolEventCallback } from './helpers';
 
-import { mcpToolNameMap } from "./registry";
-import { executeWorkspace } from "./impl/workspace";
-import { executeDirectoryCreate, executeDirectoryList } from "./impl/directory";
-import { executeQuestion } from "./impl/question";
-import { executeTodoRead, executeTodoWrite } from "./impl/todo";
-import { executeSkill } from "./impl/skill";
-import { executeFileRead } from "./impl/file_read";
-import { executeFileExists, executeFileDelete, executeFileCopy, executeFileMove } from "./impl/file_manage";
-import { executeGlob } from "./impl/glob";
-import { executeGrep } from "./impl/grep";
-import { executeWebSearch, executeWebFetch } from "./impl/web";
-import { executeLint, executeTest } from "./impl/lint_test";
+import { mcpToolNameMap } from './registry';
+import { executeWorkspace } from './impl/workspace';
+import { executeDirectoryCreate, executeDirectoryList } from './impl/directory';
+import { executeQuestion } from './impl/question';
+import { executeTodoRead, executeTodoWrite } from './impl/todo';
+import { executeSkill } from './impl/skill';
+import { executeFileRead } from './impl/file_read';
+import {
+  executeFileExists,
+  executeFileDelete,
+  executeFileCopy,
+  executeFileMove,
+} from './impl/file_manage';
+import { executeGlob } from './impl/glob';
+import { executeGrep } from './impl/grep';
+import { executeWebSearch, executeWebFetch } from './impl/web';
+import { executeLint, executeTest } from './impl/lint_test';
 
 export async function executeTool(
   name: string,
@@ -50,15 +55,23 @@ export async function executeTool(
   // 保护 args 参数，确保不为 undefined
   const safeArgs = args || {};
 
+  // Backward-compatible aliases for renamed tools (file_read→read, file_write→write, file_edit→edit)
+  const TOOL_ALIASES: Record<string, string> = {
+    'file_read': 'read',
+    'file_write': 'write',
+    'file_edit': 'edit',
+  };
+  name = TOOL_ALIASES[name] || name;
+
   try {
     switch (name) {
       case 'workspace':
         return await executeWorkspace(safeArgs);
 
-      case 'file_read':
+      case 'read':
         return await executeFileRead(safeArgs);
 
-      case 'file_write': {
+      case 'write': {
         const writePath = resolvePath(safeArgs.path);
         await fs.ensureDir(dirname(writePath));
 
@@ -109,7 +122,7 @@ export async function executeTool(
         };
       }
 
-      case 'file_edit': {
+      case 'edit': {
         const editPath = resolvePath(safeArgs.path);
         const fileContent = await fs.readFile(editPath, 'utf-8');
 
@@ -117,7 +130,10 @@ export async function executeTool(
         const newStr = String(safeArgs.newString || '');
 
         if (!fileContent.includes(oldStr)) {
-          return { success: false, error: `Text not found in file. Read the file to get exact text.` };
+          return {
+            success: false,
+            error: `Text not found in file. Read the file to get exact text.`,
+          };
         }
 
         const newContent = fileContent.replace(oldStr, newStr);
@@ -188,7 +204,9 @@ export async function executeTool(
           const safeName = safeArgs.path.replace(/[/\\]/g, '_');
           const backupPath = join(backupDir, `${timestamp}-${safeName}`);
           await fs.writeFile(backupPath, originalContent, 'utf-8');
-        } catch { /* 新文件无需备份 */ }
+        } catch {
+          /* 新文件无需备份 */
+        }
 
         const patchResult = applyUnifiedPatch(originalContent, patchText);
         if (!patchResult.success) {
@@ -223,7 +241,10 @@ export async function executeTool(
           const effectiveFlags = replaceAll ? flags : flags.replace('g', '');
           const regex = new RegExp(pattern, effectiveFlags);
           // Count matches using global flag
-          const countRegex = new RegExp(pattern, effectiveFlags.includes('g') ? effectiveFlags : effectiveFlags + 'g');
+          const countRegex = new RegExp(
+            pattern,
+            effectiveFlags.includes('g') ? effectiveFlags : effectiveFlags + 'g'
+          );
           const matches = fileContent.match(countRegex) || [];
 
           if (matches.length === 0) {
@@ -245,7 +266,10 @@ export async function executeTool(
             syntaxErrors: syntaxResult.hasErrors ? syntaxResult.errors : undefined,
           };
         } catch (regexError: unknown) {
-          return { success: false, error: `Invalid regex: ${regexError instanceof Error ? regexError.message : String(regexError)}` };
+          return {
+            success: false,
+            error: `Invalid regex: ${regexError instanceof Error ? regexError.message : String(regexError)}`,
+          };
         }
       }
 
@@ -406,9 +430,18 @@ export async function executeTool(
         // 跨平台进程树杀死: Windows taskkill /F /T, Unix SIGKILL to process group
         const killProcessTree = async (pid: number): Promise<void> => {
           if (isWindows) {
-            await execa('taskkill', ['/F', '/T', '/PID', String(pid)], { timeout: 5000, reject: false });
+            await execa('taskkill', ['/F', '/T', '/PID', String(pid)], {
+              timeout: 5000,
+              reject: false,
+            });
           } else {
-            try { process.kill(-pid, 'SIGKILL'); } catch { try { process.kill(pid, 'SIGKILL'); } catch {} }
+            try {
+              process.kill(-pid, 'SIGKILL');
+            } catch {
+              try {
+                process.kill(pid, 'SIGKILL');
+              } catch {}
+            }
           }
         };
 
@@ -421,7 +454,10 @@ export async function executeTool(
             { pattern: /\bnc\s+-[el]/, name: 'netcat listener' },
             { pattern: /mkfifo/, name: 'named pipe creation' },
             // 管道到 shell 解释器 - 可能被利用
-            { pattern: /\|\s*(bash|sh|zsh|python|perl|ruby)\b/, name: 'piping to shell interpreter' },
+            {
+              pattern: /\|\s*(bash|sh|zsh|python|perl|ruby)\b/,
+              name: 'piping to shell interpreter',
+            },
             // eval - 极危险
             { pattern: /\beval\b/, name: 'eval command' },
             // 嵌套命令替换 - 需谨慎但允许简单使用
@@ -453,7 +489,16 @@ export async function executeTool(
           // 交互式 PTY 模式：AI 可以输入/输出
           if (interactive) {
             const expect = (safeArgs.expect as Array<{ wait: string; input: string }>) || [];
-            return await runInteractivePty(command, WORKSPACE, timeout, inputs, expect, maxOutputLength, outputFile, eventCallback);
+            return await runInteractivePty(
+              command,
+              WORKSPACE,
+              timeout,
+              inputs,
+              expect,
+              maxOutputLength,
+              outputFile,
+              eventCallback
+            );
           }
 
           // 分离模式：使用 tmux 运行（用户可 attach 查看）
@@ -520,7 +565,7 @@ Write-Output $proc.Id;
           const abortController = new AbortController();
           const cleanupAbortLink = linkAbortSignals(externalSignal, abortController);
 
-// === 卡住检测和强制终止机制 ===
+          // === 卡住检测和强制终止机制 ===
           // 关键修复：先启动进程，确保 pid 就绪，再设置 timer 和 abort listener
           let stuckWarningSent = false;
           let progressTimer: NodeJS.Timeout | null = null;
@@ -535,7 +580,7 @@ Write-Output $proc.Id;
             timeout: timeout,
             reject: false,
             cancelSignal: abortController.signal,
-            detached: !isWindows,  // Windows: detached breaks stdout for external commands; Unix: process group for killProcessTree
+            detached: !isWindows, // Windows: detached breaks stdout for external commands; Unix: process group for killProcessTree
           });
 
           // 进程启动后，pid 立即可用，现在设置 timer
@@ -549,7 +594,7 @@ Write-Output $proc.Id;
                 command: actualCommand.slice(0, 50),
                 timeout: stuckWarningMs / 1000,
                 elapsedMs: stuckWarningMs,
-                message: `Command stuck after ${stuckWarningMs / 1000}s, forcing termination...`
+                message: `Command stuck after ${stuckWarningMs / 1000}s, forcing termination...`,
               });
 
               abortController.abort();
@@ -650,10 +695,11 @@ Write-Output $proc.Id;
             }
 
             // 检查是否是被强制杀死（卡住检测触发）
-            const wasKilled = bashError.message?.includes('SIGKILL') ||
-                              bashError.message?.includes('killed') ||
-                              bashError.message?.includes('terminated') ||
-                              bashError.isCanceled;
+            const wasKilled =
+              bashError.message?.includes('SIGKILL') ||
+              bashError.message?.includes('killed') ||
+              bashError.message?.includes('terminated') ||
+              bashError.isCanceled;
 
             if (wasKilled) {
               // 返回错误给AI，让AI决定下一步
@@ -673,8 +719,10 @@ Write-Output $proc.Id;
 
       case 'monitor': {
         const command = safeArgs.command as string;
-        const description = safeArgs.description as string || 'Monitoring';
-        const timeoutMs = safeArgs.persistent ? 3600000 : Math.min((safeArgs.timeout || 300) * 1000, 3600000);
+        const description = (safeArgs.description as string) || 'Monitoring';
+        const timeoutMs = safeArgs.persistent
+          ? 3600000
+          : Math.min((safeArgs.timeout || 300) * 1000, 3600000);
         const persistent = safeArgs.persistent === true;
 
         // 生成任务 ID
@@ -701,7 +749,10 @@ Write-Output $proc.Id;
 
         // 处理 stdout - 每行作为事件发送
         monitorProcess.stdout?.on('data', (data: Buffer) => {
-          const lines = data.toString('utf-8').split('\n').filter(l => l.trim());
+          const lines = data
+            .toString('utf-8')
+            .split('\n')
+            .filter(l => l.trim());
           for (const line of lines) {
             outputLines.push(line);
             // 发送监控事件
@@ -716,7 +767,10 @@ Write-Output $proc.Id;
 
         // 处理 stderr
         monitorProcess.stderr?.on('data', (data: Buffer) => {
-          const lines = data.toString('utf-8').split('\n').filter(l => l.trim());
+          const lines = data
+            .toString('utf-8')
+            .split('\n')
+            .filter(l => l.trim());
           for (const line of lines) {
             outputLines.push(`[stderr] ${line}`);
           }
@@ -732,7 +786,7 @@ Write-Output $proc.Id;
         }, timeoutMs);
 
         // 进程结束
-        monitorProcess.on('close', (code) => {
+        monitorProcess.on('close', code => {
           if (!resolved) {
             resolved = true;
             clearTimeout(timeoutId);
@@ -741,7 +795,7 @@ Write-Output $proc.Id;
         });
 
         // 进程错误
-        monitorProcess.on('error', (err) => {
+        monitorProcess.on('error', err => {
           if (!resolved) {
             resolved = true;
             clearTimeout(timeoutId);
@@ -757,7 +811,7 @@ Write-Output $proc.Id;
         return {
           success: true,
           output: `Monitor started (task_id: ${taskId})\nDescription: ${description}\nCommand: ${command}\nTimeout: ${timeoutMs / 1000}s\nPersistent: ${persistent}\n\nTo stop: task_stop({ task_id: "${taskId}" })`,
-          content: taskId,  // 返回 task_id 方便后续操作
+          content: taskId, // 返回 task_id 方便后续操作
         };
       }
 
@@ -789,7 +843,10 @@ Write-Output $proc.Id;
         switch (action) {
           case 'status': {
             const status = await git.status();
-            return { success: true, output: status.files.map(f => `${f.index} ${f.path}`).join('\n') || 'clean' };
+            return {
+              success: true,
+              output: status.files.map(f => `${f.index} ${f.path}`).join('\n') || 'clean',
+            };
           }
           case 'diff': {
             const diff = await git.diff();
@@ -797,7 +854,10 @@ Write-Output $proc.Id;
           }
           case 'log': {
             const log = await git.log({ maxCount: args.limit || 10 });
-            return { success: true, output: log.all.map(c => `${c.hash.substring(0,7)} ${c.message}`).join('\n') };
+            return {
+              success: true,
+              output: log.all.map(c => `${c.hash.substring(0, 7)} ${c.message}`).join('\n'),
+            };
           }
           case 'add': {
             await git.add(args.files || '.');
@@ -819,20 +879,23 @@ Write-Output $proc.Id;
           case 'checkout': {
             const branchName = String(args.branch || '');
             if (!branchName) return { success: false, error: 'Branch required' };
-            
+
             // 安全检查：检测未提交更改
             const status = await git.status();
             if (status.files.length > 0) {
               // 不直接执行，返回教育性错误让AI决定如何处理
-              const fileList = status.files.slice(0, 10).map(f => f.path).join('\n');
+              const fileList = status.files
+                .slice(0, 10)
+                .map(f => f.path)
+                .join('\n');
               return {
                 success: false,
                 error: `未提交更改存在 (${status.files.length} files)，切换分支将丢失工作。\n建议安全操作顺序：\n1. git action:stash (保存当前工作)\n2. git action:checkout (安全切换)\n3. git action:stash_pop (恢复工作)\n\n或者提交当前工作：\n1. git action:add files:. (添加所有文件)\n2. git action:commit message:"work in progress" (提交)\n3. git action:checkout (安全切换)\n\n受影响文件：\n${fileList}${status.files.length > 10 ? '\n... 更多文件' : ''}`,
                 filesAtRisk: status.files.map(f => f.path),
-                safetyMode: 'protected'
+                safetyMode: 'protected',
               };
             }
-            
+
             // 安全：可以切换分支
             const branches = await git.branchLocal();
             if (branches.all.includes(branchName)) {
@@ -854,29 +917,33 @@ Write-Output $proc.Id;
             // 安全检查：所有reset模式都需要检查未提交更改
             const status = await git.status();
             const mode = args.mode || 'mixed';
-            
+
             if (status.files.length > 0 && (mode === 'hard' || mode === 'mixed')) {
-              const fileList = status.files.slice(0, 10).map(f => f.path).join('\n');
-              const warningMsg = mode === 'hard' 
-                ? `Reset --hard 将永久丢失 ${status.files.length} 个文件的所有更改！`
-                : `Reset --mixed 将取消 ${status.files.length} 个文件的暂存状态`;
-              
+              const fileList = status.files
+                .slice(0, 10)
+                .map(f => f.path)
+                .join('\n');
+              const warningMsg =
+                mode === 'hard'
+                  ? `Reset --hard 将永久丢失 ${status.files.length} 个文件的所有更改！`
+                  : `Reset --mixed 将取消 ${status.files.length} 个文件的暂存状态`;
+
               return {
                 success: false,
                 error: `${warningMsg}\n建议安全操作：\n1. git action:stash (保存工作)\n2. git action:reset mode:${mode} (执行reset)\n3. 如需恢复：git action:stash_pop\n\n受影响文件：\n${fileList}${status.files.length > 10 ? '\n... 更多文件' : ''}\n\n如确认继续，请明确说明：用户已确认reset操作`,
                 filesAtRisk: status.files.map(f => f.path),
                 safetyMode: 'protected',
-                requiresUserConfirmation: true
+                requiresUserConfirmation: true,
               };
             }
-            
+
             // 执行reset（已确认安全或clean状态）
             await git.reset(mode);
             return { success: true, output: `Reset (${mode}) completed safely` };
           }
           case 'stash': {
             const stashAction = args.stash_action || 'push';
-            
+
             if (stashAction === 'push' || stashAction === 'save') {
               const message = args.message || `spica-auto-backup-${Date.now()}`;
               await git.stash({ message } as any);
@@ -889,40 +956,46 @@ Write-Output $proc.Id;
               return { success: true, output: 'Stash applied' };
             } else if (stashAction === 'list') {
               const stashList = await git.stashList();
-              return { success: true, output: stashList.all.map(s => `${s.hash.substring(0,7)} ${s.message}`).join('\n') || 'No stashes' };
+              return {
+                success: true,
+                output:
+                  stashList.all.map(s => `${s.hash.substring(0, 7)} ${s.message}`).join('\n') ||
+                  'No stashes',
+              };
             } else if (stashAction === 'drop') {
               await execa('git stash drop', { shell: true, cwd: WORKSPACE });
               return { success: true, output: 'Stash dropped' };
             }
-            
+
             return { success: false, error: `Unknown stash action: ${stashAction}` };
           }
           case 'checkpoint_restore': {
             // 查找最近的SPICA-CHECKPOINT commit
             const log = await git.log({ maxCount: 20 });
             const checkpoint = log.all.find(c => c.message.includes('[SPICA-CHECKPOINT]'));
-            
+
             if (!checkpoint) {
-              return { 
-                success: false, 
-                error: '没有找到checkpoint。建议：\n1. git action:log (查看历史)\n2. git action:reset mode:hard (手动恢复到某个commit)'
+              return {
+                success: false,
+                error:
+                  '没有找到checkpoint。建议：\n1. git action:log (查看历史)\n2. git action:reset mode:hard (手动恢复到某个commit)',
               };
             }
-            
+
             // 检查当前是否有未保存工作
             const currentStatus = await git.status();
             if (currentStatus.files.length > 0) {
               return {
                 success: false,
-                error: `当前有 ${currentStatus.files.length} 个未保存更改。\n建议先处理：\n1. git action:stash (保存当前工作)\n2. git action:reset mode:hard (恢复checkpoint)\n3. git action:stash_pop (恢复之前工作)`
+                error: `当前有 ${currentStatus.files.length} 个未保存更改。\n建议先处理：\n1. git action:stash (保存当前工作)\n2. git action:reset mode:hard (恢复checkpoint)\n3. git action:stash_pop (恢复之前工作)`,
               };
             }
-            
+
             // 安全恢复到checkpoint
             await git.reset(['--hard', checkpoint.hash]);
-            return { 
-              success: true, 
-              output: `Restored to checkpoint: ${checkpoint.hash.substring(0,7)}\nMessage: ${checkpoint.message}\nTime: ${checkpoint.date}`
+            return {
+              success: true,
+              output: `Restored to checkpoint: ${checkpoint.hash.substring(0, 7)}\nMessage: ${checkpoint.message}\nTime: ${checkpoint.date}`,
             };
           }
           default:
@@ -954,7 +1027,11 @@ Write-Output $proc.Id;
           case 'pr_list': {
             const state = args.state || 'open';
             const limit = args.limit || 20;
-            const ghResult = await execa('gh', ['pr', 'list', '--state', state, '--limit', String(limit)], { cwd: WORKSPACE, timeout, reject: false });
+            const ghResult = await execa(
+              'gh',
+              ['pr', 'list', '--state', state, '--limit', String(limit)],
+              { cwd: WORKSPACE, timeout, reject: false }
+            );
             return { success: ghResult.exitCode === 0, output: ghResult.stdout || 'No PRs found' };
           }
           case 'pr_create': {
@@ -974,7 +1051,10 @@ Write-Output $proc.Id;
             const ghArgs = ['issue', 'list', '--state', state, '--limit', String(limit)];
             if (args.label) ghArgs.push('--label', args.label);
             const ghResult = await execa('gh', ghArgs, { cwd: WORKSPACE, timeout, reject: false });
-            return { success: ghResult.exitCode === 0, output: ghResult.stdout || 'No issues found' };
+            return {
+              success: ghResult.exitCode === 0,
+              output: ghResult.stdout || 'No issues found',
+            };
           }
           case 'issue_view': {
             const ghArgs = ['issue', 'view'];
@@ -986,17 +1066,35 @@ Write-Output $proc.Id;
             const title = args.title || '';
             const body = args.body || '';
             if (!title) return { success: false, error: 'Title required' };
-            const ghResult = await execa('gh', ['issue', 'create', '--title', title, '--body', body], { cwd: WORKSPACE, timeout, reject: false });
+            const ghResult = await execa(
+              'gh',
+              ['issue', 'create', '--title', title, '--body', body],
+              { cwd: WORKSPACE, timeout, reject: false }
+            );
             return { success: ghResult.exitCode === 0, output: ghResult.stdout || ghResult.stderr };
           }
           case 'repo_view': {
-            const ghResult = await execa('gh', ['repo', 'view'], { cwd: WORKSPACE, timeout, reject: false });
-            return { success: ghResult.exitCode === 0, output: ghResult.stdout || 'Not in a GitHub repository' };
+            const ghResult = await execa('gh', ['repo', 'view'], {
+              cwd: WORKSPACE,
+              timeout,
+              reject: false,
+            });
+            return {
+              success: ghResult.exitCode === 0,
+              output: ghResult.stdout || 'Not in a GitHub repository',
+            };
           }
           case 'run_list': {
             const limit = args.limit || 10;
-            const ghResult = await execa('gh', ['run', 'list', '--limit', String(limit)], { cwd: WORKSPACE, timeout, reject: false });
-            return { success: ghResult.exitCode === 0, output: ghResult.stdout || 'No workflow runs found' };
+            const ghResult = await execa('gh', ['run', 'list', '--limit', String(limit)], {
+              cwd: WORKSPACE,
+              timeout,
+              reject: false,
+            });
+            return {
+              success: ghResult.exitCode === 0,
+              output: ghResult.stdout || 'No workflow runs found',
+            };
           }
           case 'run_view': {
             const ghArgs = ['run', 'view'];
@@ -1009,7 +1107,10 @@ Write-Output $proc.Id;
             const ghArgs = ['pr', 'comment', String(args.number)];
             if (args.body) ghArgs.push('--body', args.body);
             const ghResult = await execa('gh', ghArgs, { cwd: WORKSPACE, timeout, reject: false });
-            return { success: ghResult.exitCode === 0, output: ghResult.stdout || 'Comment posted' };
+            return {
+              success: ghResult.exitCode === 0,
+              output: ghResult.stdout || 'Comment posted',
+            };
           }
           case 'pr_review': {
             if (!args.number) return { success: false, error: 'PR number required' };
@@ -1017,18 +1118,28 @@ Write-Output $proc.Id;
             const ghArgs = ['pr', 'review', String(args.number), `--${reviewAction}`];
             if (args.body) ghArgs.push('--body', args.body);
             const ghResult = await execa('gh', ghArgs, { cwd: WORKSPACE, timeout, reject: false });
-            return { success: ghResult.exitCode === 0, output: ghResult.stdout || `Review (${reviewAction}) submitted` };
+            return {
+              success: ghResult.exitCode === 0,
+              output: ghResult.stdout || `Review (${reviewAction}) submitted`,
+            };
           }
           case 'pr_merge': {
             if (!args.number) return { success: false, error: 'PR number required' };
             const mergeMethod = args.method || 'squash';
             const ghArgs = ['pr', 'merge', String(args.number), `--${mergeMethod}`];
             const ghResult = await execa('gh', ghArgs, { cwd: WORKSPACE, timeout, reject: false });
-            return { success: ghResult.exitCode === 0, output: ghResult.stdout || `PR merged (${mergeMethod})` };
+            return {
+              success: ghResult.exitCode === 0,
+              output: ghResult.stdout || `PR merged (${mergeMethod})`,
+            };
           }
           case 'pr_diff': {
             if (!args.number) return { success: false, error: 'PR number required' };
-            const ghResult = await execa('gh', ['pr', 'diff', String(args.number)], { cwd: WORKSPACE, timeout, reject: false });
+            const ghResult = await execa('gh', ['pr', 'diff', String(args.number)], {
+              cwd: WORKSPACE,
+              timeout,
+              reject: false,
+            });
             return { success: ghResult.exitCode === 0, output: ghResult.stdout || 'No diff' };
           }
           case 'issue_comment': {
@@ -1036,14 +1147,21 @@ Write-Output $proc.Id;
             const ghArgs = ['issue', 'comment', String(args.number)];
             if (args.body) ghArgs.push('--body', args.body);
             const ghResult = await execa('gh', ghArgs, { cwd: WORKSPACE, timeout, reject: false });
-            return { success: ghResult.exitCode === 0, output: ghResult.stdout || 'Comment posted' };
+            return {
+              success: ghResult.exitCode === 0,
+              output: ghResult.stdout || 'Comment posted',
+            };
           }
           case 'search': {
             const searchType = args.type || 'code';
             const searchQuery = args.query || '';
             if (!searchQuery) return { success: false, error: 'Search query required' };
             const searchLimit = args.limit || 10;
-            const ghResult = await execa('gh', ['search', searchType, searchQuery, '--limit', String(searchLimit)], { cwd: WORKSPACE, timeout, reject: false });
+            const ghResult = await execa(
+              'gh',
+              ['search', searchType, searchQuery, '--limit', String(searchLimit)],
+              { cwd: WORKSPACE, timeout, reject: false }
+            );
             return { success: ghResult.exitCode === 0, output: ghResult.stdout || 'No results' };
           }
           default:
@@ -1068,7 +1186,7 @@ Write-Output $proc.Id;
         if (tasks.length > 3) {
           return {
             success: false,
-            error: '最多支持3个并行任务。请将任务拆分为多次调用。'
+            error: '最多支持3个并行任务。请将任务拆分为多次调用。',
           };
         }
 
@@ -1077,206 +1195,232 @@ Write-Output $proc.Id;
         const siblingAbortController = new AbortController();
         let earlyExitTriggered = false;
 
-        const results = await Promise.all(tasks.map(async (task, i) => {
-          const subTaskId = `sub-${i}-${Date.now()}`;
-          const config = getSubAgentConfig(task.type);
-          const taskLabel = task.description || task.prompt.slice(0, 30);
+        const results = await Promise.all(
+          tasks.map(async (task, i) => {
+            const subTaskId = `sub-${i}-${Date.now()}`;
+            const config = getSubAgentConfig(task.type);
+            const taskLabel = task.description || task.prompt.slice(0, 30);
 
-          // 发送子agent启动事件
-          if (eventCallback) {
-            eventCallback('sub_agent_start', {
-              id: subTaskId,
-              type: task.type,
-              description: taskLabel,
-            });
-          }
-
-          // 动态导入避免循环依赖
-          const { SpicaAgent } = await import('../agent');
-          const { getRuntimeState } = await import('../core/RuntimeState');
-          const parentAgent = getRuntimeState().getAgent();
-
-          // Determine if error is retryable (timeout, network, transient)
-          const isRetryableError = (errMsg: string): boolean => {
-            const lower = errMsg.toLowerCase();
-            if (lower.includes('interrupted') || lower.includes('parent agent')) return false;
-            if (lower.includes('blocked by whitelist')) return false;
-            if (lower.includes('authentication') || lower.includes('unauthorized')) return false;
-            return lower.includes('timeout')
-              || lower.includes('econnrefused')
-              || lower.includes('enotfound')
-              || lower.includes('etimedout')
-              || lower.includes('econnreset')
-              || lower.includes('network')
-              || lower.includes('rate limit')
-              || lower.includes('429')
-              || lower.includes('500')
-              || lower.includes('502')
-              || lower.includes('503');
-          };
-
-          const MAX_RETRIES = 1;
-          let lastError: string = 'Unknown error';
-
-          for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-            // Check parent interrupt and sibling early-exit before each attempt
-            if (externalSignal?.aborted) {
-              return `[FAIL] ${taskLabel}: Parent agent interrupted`;
-            }
-            if (siblingAbortController.signal.aborted) {
-              return `[FAIL] ${taskLabel}: Early exit — sibling subagent already solved the task`;
+            // 发送子agent启动事件
+            if (eventCallback) {
+              eventCallback('sub_agent_start', {
+                id: subTaskId,
+                type: task.type,
+                description: taskLabel,
+              });
             }
 
-            const taskAgent = new SpicaAgent(undefined, WORKSPACE);
+            // 动态导入避免循环依赖
+            const { SpicaAgent } = await import('../agent');
+            const { getRuntimeState } = await import('../core/RuntimeState');
+            const parentAgent = getRuntimeState().getAgent();
 
-            // 设置工具白名单（限制subagent权限，避免context pollution）
-            if (config.allowedTools !== '*') {
-              taskAgent.setToolWhitelist(config.allowedTools);
-            }
-
-            // 监听器引用，用于清理
-            const toolResultHandler = (data: any) => {
-              if (eventCallback) {
-                eventCallback('sub_agent_tool_result', { id: subTaskId, ...data });
-              }
+            // Determine if error is retryable (timeout, network, transient)
+            const isRetryableError = (errMsg: string): boolean => {
+              const lower = errMsg.toLowerCase();
+              if (lower.includes('interrupted') || lower.includes('parent agent')) return false;
+              if (lower.includes('blocked by whitelist')) return false;
+              if (lower.includes('authentication') || lower.includes('unauthorized')) return false;
+              return (
+                lower.includes('timeout') ||
+                lower.includes('econnrefused') ||
+                lower.includes('enotfound') ||
+                lower.includes('etimedout') ||
+                lower.includes('econnreset') ||
+                lower.includes('network') ||
+                lower.includes('rate limit') ||
+                lower.includes('429') ||
+                lower.includes('500') ||
+                lower.includes('502') ||
+                lower.includes('503')
+              );
             };
-            taskAgent.on('tool_result', toolResultHandler);
 
-            // 创建超时 AbortController
-            const timeoutController = new AbortController();
-            const timeoutId = setTimeout(() => {
-              timeoutController.abort();
-              taskAgent.interrupt();
-            }, config.timeout);
+            const MAX_RETRIES = 1;
+            let lastError: string = 'Unknown error';
 
-            // 监听外部中断信号（父 agent 中断）和 sibling early-exit
-            let abortHandler: (() => void) | null = null;
-            let siblingAbortHandler: (() => void) | null = null;
-            if (externalSignal) {
-              if (externalSignal.aborted) {
+            for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+              // Check parent interrupt and sibling early-exit before each attempt
+              if (externalSignal?.aborted) {
+                return `[FAIL] ${taskLabel}: Parent agent interrupted`;
+              }
+              if (siblingAbortController.signal.aborted) {
+                return `[FAIL] ${taskLabel}: Early exit — sibling subagent already solved the task`;
+              }
+
+              const taskAgent = new SpicaAgent(undefined, WORKSPACE);
+
+              // 设置工具白名单（限制subagent权限，避免context pollution）
+              if (config.allowedTools !== '*') {
+                taskAgent.setToolWhitelist(config.allowedTools);
+              }
+
+              // 监听器引用，用于清理
+              const toolResultHandler = (data: any) => {
+                if (eventCallback) {
+                  eventCallback('sub_agent_tool_result', { id: subTaskId, ...data });
+                }
+              };
+              taskAgent.on('tool_result', toolResultHandler);
+
+              // 创建超时 AbortController
+              const timeoutController = new AbortController();
+              const timeoutId = setTimeout(() => {
+                timeoutController.abort();
+                taskAgent.interrupt();
+              }, config.timeout);
+
+              // 监听外部中断信号（父 agent 中断）和 sibling early-exit
+              let abortHandler: (() => void) | null = null;
+              let siblingAbortHandler: (() => void) | null = null;
+              if (externalSignal) {
+                if (externalSignal.aborted) {
+                  taskAgent.off('tool_result', toolResultHandler);
+                  taskAgent.interrupt();
+                  taskAgent.dispose();
+                  clearTimeout(timeoutId);
+                  return `[FAIL] ${taskLabel}: Parent agent interrupted`;
+                }
+                abortHandler = () => {
+                  externalSignal.removeEventListener('abort', abortHandler!);
+                  taskAgent.interrupt();
+                  clearTimeout(timeoutId);
+                };
+                externalSignal.addEventListener('abort', abortHandler);
+              }
+              // Listen for sibling early-exit
+              if (!siblingAbortController.signal.aborted) {
+                siblingAbortHandler = () => {
+                  siblingAbortController.signal.removeEventListener('abort', siblingAbortHandler!);
+                  taskAgent.interrupt();
+                  clearTimeout(timeoutId);
+                };
+                siblingAbortController.signal.addEventListener('abort', siblingAbortHandler);
+              } else {
                 taskAgent.off('tool_result', toolResultHandler);
                 taskAgent.interrupt();
                 taskAgent.dispose();
                 clearTimeout(timeoutId);
-                return `[FAIL] ${taskLabel}: Parent agent interrupted`;
-              }
-              abortHandler = () => {
-                externalSignal.removeEventListener('abort', abortHandler!);
-                taskAgent.interrupt();
-                clearTimeout(timeoutId);
-              };
-              externalSignal.addEventListener('abort', abortHandler);
-            }
-            // Listen for sibling early-exit
-            if (!siblingAbortController.signal.aborted) {
-              siblingAbortHandler = () => {
-                siblingAbortController.signal.removeEventListener('abort', siblingAbortHandler!);
-                taskAgent.interrupt();
-                clearTimeout(timeoutId);
-              };
-              siblingAbortController.signal.addEventListener('abort', siblingAbortHandler);
-            } else {
-              taskAgent.off('tool_result', toolResultHandler);
-              taskAgent.interrupt();
-              taskAgent.dispose();
-              clearTimeout(timeoutId);
-              return `[FAIL] ${taskLabel}: Early exit — sibling subagent already solved the task`;
-            }
-
-            try {
-              // Use lightweight sub-agent init
-              if (parentAgent) {
-                await taskAgent.initAsSubAgent(parentAgent);
-              } else {
-                await taskAgent.init();
+                return `[FAIL] ${taskLabel}: Early exit — sibling subagent already solved the task`;
               }
 
-              const retryNote = attempt > 0 ? '\n[RETRY] Previous attempt failed. Please try a different approach.' : '';
-              const resultPromise = taskAgent.runLoop(task.prompt + retryNote);
+              try {
+                // Use lightweight sub-agent init
+                if (parentAgent) {
+                  await taskAgent.initAsSubAgent(parentAgent);
+                } else {
+                  await taskAgent.init();
+                }
 
-              // 使用 AbortController 的 promise 来处理超时和中断
-              const abortPromise = new Promise<string>((_, reject) => {
-                timeoutController.signal.addEventListener('abort', () => {
-                  reject(new Error(timeoutController.signal.reason || 'Timeout'));
+                const retryNote =
+                  attempt > 0
+                    ? '\n[RETRY] Previous attempt failed. Please try a different approach.'
+                    : '';
+                const resultPromise = taskAgent.runLoop(task.prompt + retryNote);
+
+                // 使用 AbortController 的 promise 来处理超时和中断
+                const abortPromise = new Promise<string>((_, reject) => {
+                  timeoutController.signal.addEventListener('abort', () => {
+                    reject(new Error(timeoutController.signal.reason || 'Timeout'));
+                  });
                 });
-              });
 
-              const result = await Promise.race([resultPromise, abortPromise]);
+                const result = await Promise.race([resultPromise, abortPromise]);
 
-              // Success — cleanup and return
-              clearTimeout(timeoutId);
-              taskAgent.off('tool_result', toolResultHandler);
-              if (abortHandler && externalSignal) {
-                externalSignal.removeEventListener('abort', abortHandler);
-              }
-              if (siblingAbortHandler) {
-                siblingAbortController.signal.removeEventListener('abort', siblingAbortHandler);
-              }
-              taskAgent.dispose();
+                // Success — cleanup and return
+                clearTimeout(timeoutId);
+                taskAgent.off('tool_result', toolResultHandler);
+                if (abortHandler && externalSignal) {
+                  externalSignal.removeEventListener('abort', abortHandler);
+                }
+                if (siblingAbortHandler) {
+                  siblingAbortController.signal.removeEventListener('abort', siblingAbortHandler);
+                }
+                taskAgent.dispose();
 
-              // Truncate raw result before summarization
-              const MAX_RAW_RESULT = 3000;
-              const truncatedResult = result.length > MAX_RAW_RESULT
-                ? result.slice(0, MAX_RAW_RESULT) + '\n...[truncated]'
-                : result;
-              const summary = summarizeResult(truncatedResult);
+                // Truncate raw result before summarization
+                const MAX_RAW_RESULT = 3000;
+                const truncatedResult =
+                  result.length > MAX_RAW_RESULT
+                    ? result.slice(0, MAX_RAW_RESULT) + '\n...[truncated]'
+                    : result;
+                const summary = summarizeResult(truncatedResult);
 
-              // Check if this result is definitive — if so, signal siblings to stop early
-              if (!earlyExitTriggered && tasks.length > 1) {
-                const definitiveMarkers = [
-                  /✓/, /成功/, /完成/, /fixed/i, /resolved/i, /implemented/i,
-                  /found .* (bug|issue|problem)/i, /build .*(pass|success)/i,
-                ];
-                const isDefinitive = definitiveMarkers.some(p => p.test(summary))
-                  && !/couldn't|unable to|cannot find|no results/i.test(summary);
-                if (isDefinitive) {
-                  earlyExitTriggered = true;
-                  siblingAbortController.abort();
-                  if (eventCallback) {
-                    eventCallback('sub_agent_early_exit', { id: subTaskId, reason: 'Definitive result found' });
+                // Check if this result is definitive — if so, signal siblings to stop early
+                if (!earlyExitTriggered && tasks.length > 1) {
+                  const definitiveMarkers = [
+                    /✓/,
+                    /成功/,
+                    /完成/,
+                    /fixed/i,
+                    /resolved/i,
+                    /implemented/i,
+                    /found .* (bug|issue|problem)/i,
+                    /build .*(pass|success)/i,
+                  ];
+                  const isDefinitive =
+                    definitiveMarkers.some(p => p.test(summary)) &&
+                    !/couldn't|unable to|cannot find|no results/i.test(summary);
+                  if (isDefinitive) {
+                    earlyExitTriggered = true;
+                    siblingAbortController.abort();
+                    if (eventCallback) {
+                      eventCallback('sub_agent_early_exit', {
+                        id: subTaskId,
+                        reason: 'Definitive result found',
+                      });
+                    }
                   }
                 }
-              }
 
-              if (eventCallback) {
-                eventCallback('sub_agent_done', { id: subTaskId, summary });
-              }
-
-              return `[PASS] ${taskLabel}: ${summary}`;
-            } catch (err: any) {
-              // Cleanup
-              clearTimeout(timeoutId);
-              taskAgent.off('tool_result', toolResultHandler);
-              if (abortHandler && externalSignal) {
-                externalSignal.removeEventListener('abort', abortHandler);
-              }
-              if (siblingAbortHandler) {
-                siblingAbortController.signal.removeEventListener('abort', siblingAbortHandler);
-              }
-              taskAgent.interrupt();
-              taskAgent.dispose();
-
-              lastError = String(err.message || err || 'Unknown error');
-
-              // Check if we should retry
-              if (attempt < MAX_RETRIES && isRetryableError(lastError) && !externalSignal?.aborted) {
                 if (eventCallback) {
-                  eventCallback('sub_agent_retry', { id: subTaskId, attempt: attempt + 1, error: lastError });
+                  eventCallback('sub_agent_done', { id: subTaskId, summary });
                 }
-                continue; // Retry
-              }
 
-              // Final failure
-              if (eventCallback) {
-                eventCallback('sub_agent_error', { id: subTaskId, error: lastError });
+                return `[PASS] ${taskLabel}: ${summary}`;
+              } catch (err: any) {
+                // Cleanup
+                clearTimeout(timeoutId);
+                taskAgent.off('tool_result', toolResultHandler);
+                if (abortHandler && externalSignal) {
+                  externalSignal.removeEventListener('abort', abortHandler);
+                }
+                if (siblingAbortHandler) {
+                  siblingAbortController.signal.removeEventListener('abort', siblingAbortHandler);
+                }
+                taskAgent.interrupt();
+                taskAgent.dispose();
+
+                lastError = String(err.message || err || 'Unknown error');
+
+                // Check if we should retry
+                if (
+                  attempt < MAX_RETRIES &&
+                  isRetryableError(lastError) &&
+                  !externalSignal?.aborted
+                ) {
+                  if (eventCallback) {
+                    eventCallback('sub_agent_retry', {
+                      id: subTaskId,
+                      attempt: attempt + 1,
+                      error: lastError,
+                    });
+                  }
+                  continue; // Retry
+                }
+
+                // Final failure
+                if (eventCallback) {
+                  eventCallback('sub_agent_error', { id: subTaskId, error: lastError });
+                }
+                return `[FAIL] ${taskLabel}: ${lastError}`;
               }
-              return `[FAIL] ${taskLabel}: ${lastError}`;
             }
-          }
 
-          // Should not reach here, but just in case
-          return `[FAIL] ${taskLabel}: ${lastError}`;
-        }));
+            // Should not reach here, but just in case
+            return `[FAIL] ${taskLabel}: ${lastError}`;
+          })
+        );
 
         // 分析结果，检测失败
         const failedTasks = results.filter(r => r.startsWith('[FAIL]'));
@@ -1285,15 +1429,18 @@ Write-Output $proc.Id;
         // Cap total output size to prevent context pollution
         const MAX_TOTAL_OUTPUT = 2000;
         let output = results.join('\n');
-        const warningSuffix = failedTasks.length > 0
-          ? `\n\n[WARNING] ${failedTasks.length}/${results.length} subagent(s) failed. Retry failed tasks or handle directly.`
-          : '';
+        const warningSuffix =
+          failedTasks.length > 0
+            ? `\n\n[WARNING] ${failedTasks.length}/${results.length} subagent(s) failed. Retry failed tasks or handle directly.`
+            : '';
 
         if (output.length + warningSuffix.length > MAX_TOTAL_OUTPUT) {
           // Truncate individual results to fit
-          const availablePerResult = Math.floor((MAX_TOTAL_OUTPUT - warningSuffix.length) / results.length);
+          const availablePerResult = Math.floor(
+            (MAX_TOTAL_OUTPUT - warningSuffix.length) / results.length
+          );
           output = results
-            .map(r => r.length > availablePerResult ? r.slice(0, availablePerResult) + '...' : r)
+            .map(r => (r.length > availablePerResult ? r.slice(0, availablePerResult) + '...' : r))
             .join('\n');
         }
         output += warningSuffix;
@@ -1302,7 +1449,7 @@ Write-Output $proc.Id;
           return {
             success: succeededTasks.length > 0,
             output,
-            error: failedTasks.length > 0 ? `${failedTasks.length} subagent(s) failed` : undefined
+            error: failedTasks.length > 0 ? `${failedTasks.length} subagent(s) failed` : undefined,
           };
         }
 
@@ -1318,11 +1465,11 @@ Write-Output $proc.Id;
       case 'code_health': {
         const healthPath = resolvePath(safeArgs.path);
         const threshold = safeArgs.threshold ?? 9.5;
-        
+
         try {
           const result = await analyzeCodeHealth(healthPath, threshold);
           const output = formatCodeHealthResult(result);
-          
+
           return {
             success: result.passed,
             output,
@@ -1337,11 +1484,11 @@ Write-Output $proc.Id;
       case 'test_quality_check': {
         const testFilePath = resolvePath(safeArgs.testFile);
         const threshold = safeArgs.threshold ?? 7.0;
-        
+
         try {
           const result = await analyzeTestQuality(testFilePath, threshold);
           const output = formatTestQualityResult(result);
-          
+
           return {
             success: result.passed,
             output,
@@ -1388,14 +1535,18 @@ async function runInteractivePty(
   try {
     pty = await import('node-pty');
   } catch {
-    return { success: false, error: 'node-pty not available. Install with: npm install node-pty (requires native build tools).' };
+    return {
+      success: false,
+      error:
+        'node-pty not available. Install with: npm install node-pty (requires native build tools).',
+    };
   }
 
-  return new Promise((resolve) => {
+  return new Promise(resolve => {
     // 创建 PTY（通过 shell 执行，支持 cd、&& 等语法）
     const bashPath = getBashPath();
     const shell = bashPath || (isWindows ? process.env.COMSPEC || 'cmd.exe' : '/bin/bash');
-    const shellArgs = bashPath ? ['-c', command] : (isWindows ? ['/c', command] : ['-c', command]);
+    const shellArgs = bashPath ? ['-c', command] : isWindows ? ['/c', command] : ['-c', command];
 
     const ptyProcess = pty.spawn(shell, shellArgs, {
       name: 'xterm-color',
@@ -1473,7 +1624,7 @@ async function runInteractivePty(
     // 发送预定义输入（按时间间隔，优化延迟）
     if (inputs.length > 0) {
       // 根据输入数量动态调整间隔（大量输入时更快）
-      const inputDelay = inputs.length > 20 ? 50 : 200;  // ms
+      const inputDelay = inputs.length > 20 ? 50 : 200; // ms
 
       const sendInputs = () => {
         if (inputIndex < inputs.length && !resolved) {
@@ -1497,7 +1648,7 @@ async function runInteractivePty(
     setTimeout(() => {
       if (!resolved) {
         resolved = true;
-        ptyProcess.write('\x03');  // 发送 Ctrl+C
+        ptyProcess.write('\x03'); // 发送 Ctrl+C
         // 等待一小段时间让进程清理
         setTimeout(() => {
           resolve({
@@ -1509,4 +1660,3 @@ async function runInteractivePty(
     }, timeout);
   });
 }
-
