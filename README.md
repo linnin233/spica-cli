@@ -110,6 +110,8 @@ graph TB
     Skills --> Tools
 ```
 
+![Architecture](docs/architecture.png)
+
 ## Tools
 
 | Category | Tools |

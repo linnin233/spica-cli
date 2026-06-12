@@ -110,6 +110,8 @@ graph TB
     Skills --> Tools
 ```
 
+![架构图](docs/architecture_cn.png)
+
 ## 工具
 
 | 类别 | 工具 |
