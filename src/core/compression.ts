@@ -122,10 +122,16 @@ export async function startNonBlockingCompression(
       // User messages are kept in full (user intent is critical, typically short)
       if (m.role === 'user') return Infinity;
       // Tool results and assistant-with-toolcalls get extra space — they contain evidence
-      if (m.role === 'tool') return baseContentLimit * 1.5;
-      if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) return baseContentLimit * 1.2;
-      // Plain assistant text gets standard limit
-      return baseContentLimit;
+      let limit = baseContentLimit;
+      if (m.role === 'tool') limit = baseContentLimit * 1.5;
+      else if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) limit = baseContentLimit * 1.2;
+
+      // Already truncated at provider level (8K cap with [TRUNCATED] marker) —
+      // double the limit to avoid aggressive re-truncation of already-reduced content.
+      if ((m.content || '').includes('[TRUNCATED')) {
+        limit *= 2;
+      }
+      return limit;
     };
 
     const truncatedRecent = selected.map(m => {
@@ -153,6 +159,21 @@ export async function startNonBlockingCompression(
 
     // Apply immediately — context shrinks NOW.
     llm.setMessages([...systemMessages, ...cleaned]);
+
+    // Restore cache prefix boundary to include preserved prefix messages.
+    // setMessages() resets cachePrefixEnd to system-only — we must restore it
+    // so the API-side prompt cache continues to hit on the full stable prefix.
+    // prefixNonSystem messages are at the head of `cleaned` (line 114) and were
+    // not truncated (line 133), so they remain valid cache candidates.
+    const newMessages = llm.getMessages();
+    let maxPrefixIdx = systemMessages.length - 1; // fallback: system-only
+    for (let i = systemMessages.length; i < newMessages.length; i++) {
+      if (prefixSet.has(newMessages[i])) {
+        maxPrefixIdx = i;
+      }
+    }
+    llm.getProvider().setCachePrefixEnd(maxPrefixIdx);
+
     const newTokens = tokenCounter.estimateMessages(cleaned);
 
     agent.emit('context_compressed', {
@@ -365,7 +386,13 @@ export function buildSummaryPrompt(messages: ChatMessage[]): string {
 
       if (m.role === 'tool') {
         const toolName = (m as any).name || 'unknown';
-        return `tool_result: ${toolName}`;
+        const tc = (m.content || '').slice(0, 500).replace(/\n/g, '\\n');
+        // Flag errors so the summary LLM knows something went wrong
+        const err = /error|Error|FAILED|denied|refused|stack trace|fatal/i.test(
+          (m.content || '').slice(0, 200)
+        );
+        const errorTag = err ? ' ⚠️ERROR' : '';
+        return `tool_result (${toolName})${errorTag}: ${tc}`;
       }
 
       // assistant

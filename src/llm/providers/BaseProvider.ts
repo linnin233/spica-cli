@@ -102,6 +102,11 @@ export abstract class BaseProvider extends EventEmitter {
     return this.cachePrefixEnd;
   }
 
+  /** Set the cache prefix boundary to a specific index. */
+  setCachePrefixEnd(index: number): void {
+    this.cachePrefixEnd = Math.max(-1, Math.min(index, this.messages.length - 1));
+  }
+
   // Mark current messages end as cache prefix boundary
   markCachePrefixEnd(): void {
     this.cachePrefixEnd = this.messages.length - 1;
