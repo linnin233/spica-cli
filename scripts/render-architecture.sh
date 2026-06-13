@@ -11,15 +11,20 @@ if [[ -f ".puppeteer-config.json" ]]; then
   PUPPETEER_CONFIG="-p .puppeteer-config.json"
 fi
 
-echo "Rendering English architecture diagram..."
+echo "Rendering English architecture diagram (detailed)..."
 mmdc -i docs/architecture.mermaid -o docs/architecture.png \
   -w 2400 -H 3600 -b white -s 2 $PUPPETEER_CONFIG
 
-echo "Rendering Chinese architecture diagram..."
+echo "Rendering Chinese architecture diagram (detailed)..."
 mmdc -i docs/architecture_cn.mermaid -o docs/architecture_cn.png \
   -w 2400 -H 3600 -b white -s 2 $PUPPETEER_CONFIG
+
+echo "Rendering simplified architecture diagram..."
+mmdc -i docs/architecture-simplified.mermaid -o docs/architecture-simplified.png \
+  -w 1800 -H 2000 -b white -s 2 $PUPPETEER_CONFIG
 
 echo "Done. Output files:"
 echo "  docs/architecture.png"
 echo "  docs/architecture_cn.png"
-ls -lh docs/architecture.png docs/architecture_cn.png
+echo "  docs/architecture-simplified.png"
+ls -lh docs/architecture.png docs/architecture_cn.png docs/architecture-simplified.png

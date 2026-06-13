@@ -1,0 +1,64 @@
+graph TB
+    %% ═══════════════════════════════════════════════════════
+    %% spica-cli Architecture — Simplified Version
+    %% Focus: core data flows, key invariants, compression lifecycle
+    %% ═══════════════════════════════════════════════════════
+
+    subgraph UI["🖥️ Interface"]
+        TUI["TUI / Simple Mode"]
+        CMD["16 Slash Commands"]
+        IQ["Input Queue (max 50)"]
+    end
+
+    subgraph AGENT["⚙️ SpicaAgent — Core Loop"]
+        direction TB
+        LOOP["<b>runLoop()</b><br/>1. applyPendingSummary<br/>2. token check → compress if >60%<br/>3. callLLMWithRetry (10×)<br/>4. syncFullHistory<br/>5. executeTools (parallel/batch)<br/>6. continueWithAllToolResults<br/>7. loop until text response"]
+        MSG["<b>Three-Way Message Split</b><br/>_fullHistory → session persistence (untouched)<br/>provider.msgs → LLM context (compressed)<br/>toolDefs → API tools param"]
+        SYNC["<b>syncFullHistory()</b><br/>index-based: provider→_fullHistory<br/>prevents desync from cleanMessages()"]
+    end
+
+    subgraph COMPRESS["🗜️ Compression v3 — Two-Phase"]
+        direction LR
+        P1["<b>Phase 1</b> (instant)<br/>score messages → keep top N<br/>cache-prefix preserved<br/>per-role content limits<br/>restore cachePrefixEnd"]
+        P2["<b>Phase 2</b> (background)<br/>LLM summary of dropped msgs<br/>tool names + 500-char results<br/>heavy drop (>50%) → sync wait<br/>light drop (≤50%) → deferred"]
+        P1 -->|"dropped msgs"| P2
+        P2 -.->|"summary injected<br/>next runLoop"| LOOP
+    end
+
+    subgraph LLM["🧠 LLMClient + Provider"]
+        direction TB
+        CLIENT["<b>LLMClient</b><br/>streaming · rate limiter · retry<br/>AbortSignal dedup (handler-refs)"]
+        PROV["<b>Provider</b><br/>split-prefix caching<br/>msg[0]=stable · msg[1]=variable<br/>cachePrefixEnd preserved (v3)"]
+        TOKEN["<b>TokenCounter</b><br/>tiktoken · 60% trigger · 40% target"]
+    end
+
+    subgraph TOOLS["🔧 Tools (33)"]
+        FILE["File (11) + Search (4)"]
+        SHELL["Shell (5): bash(sandbox) + git"]
+        QA["Quality (5) + Web (3) + Task (5)"]
+    end
+
+    subgraph STORAGE["💾 Persistence"]
+        ACTIVE["session.json<br/>← _fullHistory<br/>(never truncated)"]
+        HIST["sessions/&lt;id&gt;.json<br/>LLM summary on archive"]
+        OTHER["state.json · tasks.json<br/>checkpoints.json · snapshots/<br/>backups/ · learnings/"]
+    end
+
+    %% Edges
+    TUI --> IQ
+    CMD --> LOOP
+    IQ --> LOOP
+
+    LOOP <--> CLIENT
+    PROV --> CLIENT
+    TOKEN --> CLIENT
+    LOOP --> P1
+    TOKEN --> P1
+
+    LOOP --> TOOLS
+    TOOLS --> LOOP
+
+    MSG --> SYNC
+    SYNC --> ACTIVE
+    LOOP --> ACTIVE
+    ACTIVE --> HIST

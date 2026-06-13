@@ -58,49 +58,65 @@ spica run "fix the bug"                          # single task
 graph TB
     subgraph PRES["🎨 Presentation Layer"]
         direction TB
-        TUI["<b>TUI Mode</b><br/>full-screen terminal<br/>screenManager / scrollback<br/>status bar / thinking animation"]
-        SIMPLE["<b>Simple Mode</b><br/>--no-tui / non-TTY<br/>readline / plain text output"]
-        CMD["<b>Slash Commands</b><br/>/help /init /history /summary<br/>/compact /archive /view /rename<br/>/delete /clear /reset /new<br/>/checkpoint list|show|restore|clean<br/>/skill list|install|uninstall<br/>/mcp status|init|tools|disconnect<br/>/queue /q /undo /status"]
-        IQ["<b>Input Queue</b><br/>max 50 / buffers during processing<br/>/queue show / /undo remove<br/>auto-drain after processing"]
-        UI["<b>UI Components</b><br/>diff renderer / spinner<br/>streaming output / bracketed paste<br/>fixedBox / tableRenderer / scrollback"]
+        TUI["<b>TUI Mode</b><br/>full-screen terminal · screenManager<br/>scrollback · status bar · thinking anim"]
+        SIMPLE["<b>Simple Mode</b><br/>--no-tui / non-TTY<br/>readline · plain text output"]
+        CMD["<b>Slash Commands</b> (16 handlers)<br/>/help /init /history /summary /compact<br/>/archive /view /rename /delete /clear<br/>/reset /new /checkpoint /skill /mcp<br/>/queue /q /undo /status"]
+        IQ["<b>Input Queue</b><br/>max 50 · buffers during processing<br/>auto-drain after runLoop"]
+        UI["<b>UI Components</b><br/>diff renderer · spinner<br/>streaming output · bracketed paste"]
     end
 
     subgraph APP["⚙️ Application Layer"]
         direction TB
-        AGENT["<b>SpicaAgent</b> (src/agent.ts)<br/>EventEmitter orchestrator<br/>_fullHistory (append-only)<br/>getContextMessages (LLM context)<br/>tool conflict detection<br/>auto message cleaner<br/>dangerous pattern scanner"]
-        GATE["<b>Skill Gate</b> (src/cli/skillGate.ts)<br/>8 intent categories<br/>SKILL HINT injection<br/>path matching / tool whitelisting"]
-        EVENTS["<b>Event Bus (42 events)</b><br/>Core: stream · reasoning · message<br/>Tools: tool_call · tool_result<br/>Compress: context_compressed · context_warning<br/>Subagent: sub_agent_start/done/error<br/>  sub_agent_tool_call/tool_result<br/>  sub_agent_message/reasoning/stream<br/>Monitor: monitor_event · monitor_error<br/>Hooks: hook_blocked/warning/log<br/>+ 14 more (see agent.ts emits)"]
-        INTR["<b>Interrupt Handler</b><br/>AbortController per request<br/>cancelSeq high-water mark<br/>SIGKILL to process group<br/>ESC×2 trigger / 200ms debounce<br/>preserves partial tool results"]
-        SESSION["<b>Session & Archive</b><br/>two-state model (decoupled)<br/>active → session.json<br/>historical → sessions/&lt;id&gt;.json<br/>LLM summary on archive<br/>auto-cleanup (keep 50)"]
-        SUB["<b>Sub-Agents (4 types)</b><br/>explore: read-only (90s→180s)<br/>review: +lint (120s→240s)<br/>fix: +edit (180s→360s)<br/>build: all tools (300s→600s)<br/>adaptive: prompt-length bonus<br/>worktree isolation option<br/>max 3 parallel / early-exit signal<br/>per-task model override"]
-        PMON["<b>ProcessMonitor</b><br/>PID tracking / process group kill<br/>stuck detection (SIGKILL)<br/>timeout management"]
-        LEARN["<b>Learnings System</b><br/>auto-detects user corrections<br/>saves to .spica/learnings/<br/>YYYY-MM-DD-topic.md<br/>auto-injected into system prompt"]
+
+        subgraph AGENT_SUB["SpicaAgent (src/agent.ts)"]
+            direction TB
+            AGENT["<b>Core Loop</b><br/>runLoop(prompt, maxIter=50)<br/>  → applyPendingSummary<br/>  → token check (60% trigger)<br/>  → startNonBlockingCompression<br/>  → callLLMWithRetry (10×, exp backoff)<br/>  → syncFullHistory (provider→_fullHistory)<br/>  → executeTools (parallel/batch)<br/>  → loop until LLM returns text<br/><br/><b>Three-Way Message Split</b><br/>_fullHistory: append-only, session persistence<br/>provider.msgs: LLM API context, compressed<br/>toolDefs: separate `tools` API param"]
+        end
+
+        GATE["<b>Skill Gate</b><br/>8 intent categories<br/>SKILL HINT injection"]
+
+        subgraph COMPRESS["Compression v3 (src/core/compression.ts)"]
+            direction TB
+            COMP1["<b>Phase 1 — Rule Truncation</b> (instant)<br/>① Read cachePrefixEnd → exempt prefix msgs<br/>② Score: user=10, write/bash=9, [COMPACTED]=10<br/>③ Graduated keep: 15%-50%, floor=10 cap=40%<br/>④ Per-role limits: user=∞, tool=1.5×, truncated=2×<br/>⑤ llm.setMessages → RESTORE cachePrefixEnd"]
+            COMP2["<b>Phase 2 — LLM Summary</b> (background)<br/>buildSummaryPrompt: tool names + 500-char results<br/>Heavy drop (>50%): WAIT sync → inject NOW<br/>Light drop (≤50%): BACKGROUND → deferred for next"]
+        end
+
+        EVENTS["<b>Event Bus (42 events)</b><br/>Core: stream · reasoning · message<br/>Tools: tool_call · tool_result<br/>Compress: context_compressed · context_warning<br/>Subagent: sub_agent_start/done/error<br/>  sub_agent_tool_call/tool_result<br/>Monitor: monitor_event · monitor_error<br/>Hooks: hook_blocked/warning/log"]
+        INTR["<b>Interrupt Handler</b><br/>AbortController per runLoop<br/>cancelSeq high-water mark<br/>ESC×2 · 200ms debounce<br/>preserves partial tool results"]
+        SESSION["<b>Session & Archive</b><br/>two-state model (decoupled)<br/>active → session.json (from _fullHistory)<br/>historical → sessions/&lt;id&gt;.json<br/>LLM summary on archive · keep 50"]
+        SUB["<b>Sub-Agents (4 types)</b><br/>explore: 90s→180s · review: 120s→240s<br/>fix: 180s→360s · build: 300s→600s<br/>adaptive timeout · worktree isolation<br/>max 3 parallel · model override"]
+        PMON["<b>ProcessMonitor</b><br/>PID tracking · SIGKILL escalation"]
+        LEARN["<b>Learnings System</b><br/>6 correction patterns<br/>.spica/learnings/YYYY-MM-DD-topic.md<br/>injected into variable system prompt"]
     end
 
     subgraph DOMAIN["🧠 Domain Layer"]
         direction TB
-        LLM["<b>LLMClient</b><br/>OpenAI-compatible streaming<br/>temperature=0.3<br/>stream + reasoning channels<br/>rate limiter · retry with backoff<br/>abort-controller dedup"]
-        PROV["<b>Provider</b> (OpenAICompatible.ts)<br/>single adapter for all APIs<br/>model: default / models: alias→ID map<br/>resolveModel() auto-resolution<br/>split-prefix caching (stable+variable)<br/>OpenAI · DeepSeek · Gemini<br/>Groq · Anthropic proxy · local"]
-        TOK["<b>TokenCounter + Compression v2</b><br/>tiktoken real tokenizer<br/>cache-prefix-aware truncation<br/>graduated keep tiers (10–25 msgs)<br/>2-phase: rule trunc + LLM summary<br/>sync summary on heavy drop (>50%)<br/>per-role content limits (adaptive)<br/>trigger: 60% / target: 40%"]
-        TOOLS["<b>33 Tools</b> (registry.ts + impl/)<br/>📁 File (11) · 🔍 Search (4)<br/>💻 Shell (5): bash (sandbox)<br/>✅ Quality (5) · 🌐 Web (3) · 📋 Task (5)<br/>Auto: syntax check · tool cache (30s TTL)<br/>sandbox (bwrap) · replace_all detection<br/>see tool table below"]
-        MCP["<b>MCP Client</b><br/>@modelcontextprotocol/sdk<br/>external tool servers<br/>built-in: playwright"]
-        HOOKS["<b>Hooks System</b><br/>PreToolUse / PostToolUse<br/>block · confirm · warn · log<br/>global + project layers<br/>project ≤ global strictness"]
+
+        subgraph LLM_SUB["LLMClient (src/llm/LLMClient.ts)"]
+            LLM["<b>Streaming Client</b><br/>temperature=0.3 · stream+reasoning<br/>rate limiter (req+tok/min)<br/>retry: 10× exponential backoff<br/><b>AbortSignal Dedup</b><br/>linkExternalSignal with handler-ref slots<br/>prevents MaxListenersExceeded"]
+        end
+
+        PROV["<b>Provider</b> (OpenAICompatible.ts)<br/>Single adapter for all APIs<br/>model+models alias→ID resolution<br/><b>Split-Prefix Caching</b><br/>msg[0]=stable (AGENTS.md ~3.8K tok)<br/>msg[1]=variable (skills, learnings)<br/>cachePrefixEnd preserved across compression (v3)"]
+        TOK["<b>TokenCounter + Compression v3</b><br/>tiktoken real tokenizer (o200k_base)<br/>cache-prefix-aware truncation<br/>graduated keep tiers (10–25 msgs)<br/>2-phase: rule trunc + LLM summary<br/>sync summary on heavy drop (>50%)<br/>double-truncation prevention<br/>trigger: 60% · target: 40%"]
+        TOOLS["<b>33 Tools</b> (registry.ts + impl/)<br/>📁 File (11) · 🔍 Search (4)<br/>💻 Shell (5): bash(sandbox) monitor task_stop git workspace<br/>✅ Quality (5) · 🌐 Web (3) · 📋 Task (5)<br/>Auto: syntax check · tool cache (30s TTL)<br/>sandbox (bwrap) · replace_all · 8K output cap"]
+        MCP["<b>MCP Client</b><br/>@modelcontextprotocol/sdk<br/>external tool servers · built-in: playwright"]
+        HOOKS["<b>Hooks System</b><br/>PreToolUse / PostToolUse<br/>block · confirm · warn · log<br/>global + project layers · project ≤ global"]
         SKILLS["<b>14 Built-in Skills</b><br/>brainstorming · systematic-debugging<br/>test-driven-development · verification<br/>executing-plans · writing-plans<br/>dispatching-parallel-agents<br/>subagent-driven-development<br/>requesting-code-review · receiving<br/>finishing-a-development-branch<br/>using-git-worktrees · writing-skills<br/>using-superpowers"]
     end
 
     subgraph INFRA["💾 Infrastructure Layer"]
         direction TB
-        GLOBAL["<b>~/.spica/settings.json</b><br/>providers (model aliases)<br/>MCP servers · skills · hooks<br/>chmod 600 / .gitignore protected"]
-        ACTIVE["<b>.spica/session.json</b><br/>active / append-only<br/>never truncated by compression"]
-        HIST["<b>.spica/sessions/&lt;id&gt;.json</b><br/>historical / one per archive<br/>LLM or local summary"]
-        STATE["<b>.spica/state.json</b><br/>todos / decisions"]
-        TASKS["<b>.spica/tasks.json</b><br/>persisted task list<br/>auto-restored on start"]
-        LEARNINGS["<b>.spica/learnings/</b><br/>YYYY-MM-DD-topic.md<br/>auto-injected"]
-        SNAPS["<b>.spica/snapshots/</b><br/>checkpoint snapshots<br/>auto-pruned (keep 20)"]
-        CHKJSON["<b>.spica/checkpoints.json</b><br/>metadata index"]
-        BACKUPS["<b>.spica/backups/</b><br/>auto-created on write/edit"]
-        PSKILLS["<b>.spica/skills.json<br/>.spica/skills/</b><br/>project-level skill overrides"]
-        PHOOKS["<b>.spica/hooks.json</b><br/>project-level hook overrides<br/>must be ≥ global strictness"]
+        GLOBAL["<b>~/.spica/settings.json</b><br/>providers (model aliases)<br/>MCP servers · skills · hooks"]
+        ACTIVE["<b>.spica/session.json</b><br/>active · _fullHistory (never truncated)"]
+        HIST["<b>.spica/sessions/&lt;id&gt;.json</b><br/>historical · one per archive"]
+        STATE["<b>.spica/state.json</b> · todos/decisions"]
+        TASKS["<b>.spica/tasks.json</b> · auto-restored"]
+        LEARNINGS["<b>.spica/learnings/</b> · YYYY-MM-DD-topic.md"]
+        SNAPS["<b>.spica/snapshots/</b> · checkpoint snapshots (keep 20)"]
+        CHKJSON["<b>.spica/checkpoints.json</b> · metadata index"]
+        BACKUPS["<b>.spica/backups/</b> · auto on write/edit"]
+        PSKILLS["<b>.spica/skills.json · skills/</b> · project overrides"]
+        PHOOKS["<b>.spica/hooks.json</b> · must ≥ global strictness"]
     end
 
     TUI --> IQ
@@ -111,12 +127,17 @@ graph TB
     PROV --> LLM
     TOK --> LLM
     LLM --> AGENT
+    AGENT --> COMP1
+    COMP1 --> COMP2
+    TOK --> COMP1
+    COMP2 -.-> AGENT
     AGENT --> TOOLS
     MCP --> TOOLS
     TOOLS --> AGENT
     AGENT --> EVENTS
     EVENTS --> UI
     INTR --> AGENT
+    INTR --> LLM
     AGENT --> SESSION
     SESSION --> ACTIVE
     ACTIVE --> HIST
@@ -144,8 +165,8 @@ graph TB
 
 ![Architecture](docs/architecture.png)
 
-Mermaid source: [docs/architecture.mermaid](docs/architecture.mermaid)<br/>
-Render: `mmdc -i docs/architecture.mermaid -o docs/architecture.png -w 2400 -H 3600 -b white -s 2`
+> [Simplified version](docs/architecture-simplified.png) · [Source (English)](docs/architecture.mermaid) · [Source (中文)](docs/architecture_cn.mermaid)<br/>
+> Render: `bash scripts/render-architecture.sh`
 
 ## Tools
 
