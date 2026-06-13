@@ -403,9 +403,22 @@ export async function setProviderModels(
 ): Promise<void> {
   const settings = await loadGlobalSettings();
   if (!settings.providers?.[providerName]) {
-    throw new Error(`Provider '${providerName}' not configured. Run: spica providers set ${providerName} <api-key>`);
+    throw new Error(`Provider '${providerName}' not configured. Run: spica set ${providerName} <url> <apiKey> <model>`);
   }
   settings.providers[providerName].models = models;
+  await saveGlobalSettings(settings);
+}
+
+/** Change the default model for a provider */
+export async function setDefaultModel(providerName: string, model: string): Promise<void> {
+  const settings = await loadGlobalSettings();
+  if (!settings.providers?.[providerName]) {
+    throw new Error(`Provider '${providerName}' not configured`);
+  }
+  // If model is an alias, resolve it; otherwise use as-is
+  const config = settings.providers[providerName];
+  const resolved = config.models?.[model] || model;
+  config.model = resolved;
   await saveGlobalSettings(settings);
 }
 

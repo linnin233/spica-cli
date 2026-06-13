@@ -5,6 +5,7 @@ import {
   getProviderConfig,
   setProviderConfig,
   setProviderModels,
+  setDefaultModel,
   listProviders,
   setDefaultProvider,
   resolveModel,
@@ -13,15 +14,41 @@ import {
 import { COLORS } from '../cli/ui/colors';
 
 /**
- * Register provider management commands (set, use, list, show, remove, models).
+ * Register provider management commands.
+ *
+ * Provider = one API endpoint. Each provider has:
+ *   model  — the default model (used when no model specified)
+ *   models — alias→id map (e.g. {"fast": "v4-flash", "pro": "v4-pro"})
  */
 export function registerProviderCommands(program: Command): void {
+  // spica set <name> <url> <apiKey> [model] --models fast:id1,pro:id2
   program
-    .command('set <name> <url> <apiKey> <model>')
+    .command('set <name> <url> <apiKey> [model]')
     .description('Add or update a provider')
-    .action(async (name, url, apiKey, model) => {
-      await setProviderConfig(name, apiKey, url, model);
+    .option('--models <list>', 'model aliases: alias1:id1,alias2:id2')
+    .action(async (name, url, apiKey, model, opts) => {
+      // Parse --models: "fast:v4-flash,pro:v4-pro" → { fast: "v4-flash", pro: "v4-pro" }
+      let models: Record<string, string> | undefined;
+      if (opts.models) {
+        models = {};
+        for (const pair of (opts.models as string).split(',')) {
+          const [alias, ...idParts] = pair.split(':');
+          const id = idParts.join(':').trim(); // handle model IDs with colons
+          if (alias.trim() && id) {
+            models[alias.trim()] = id;
+          }
+        }
+        if (Object.keys(models).length === 0) models = undefined;
+      }
+
+      await setProviderConfig(name, apiKey, url, model, models);
       console.log(COLORS.success(`[OK] ${name}`));
+      if (model) console.log(`  default model: ${model}`);
+      if (models) {
+        for (const [alias, id] of Object.entries(models)) {
+          console.log(`  ${alias} → ${id}`);
+        }
+      }
     });
 
   program
@@ -57,17 +84,24 @@ export function registerProviderCommands(program: Command): void {
       if (!name) return console.log('No default provider');
       try {
         const c = await getProviderConfig(name);
-        console.log(`name:    ${c.name}`);
-        console.log(`url:     ${c.baseUrl}`);
-        console.log(`key:     ${c.apiKey.slice(0, 8)}...`);
-        console.log(`model:   ${c.model}`);
-        const models = listProviderModels(c);
-        if (models) {
-          console.log('models:');
-          models.forEach(m => console.log(`  ${m}`));
+        console.log(`name:     ${c.name}`);
+        console.log(`url:      ${c.baseUrl}`);
+        console.log(`key:      ${c.apiKey.slice(0, 8)}...`);
+        console.log(`default:  ${c.model}`);
+
+        const modelList = listProviderModels(c);
+        if (modelList) {
+          console.log('aliases:');
+          for (const m of modelList) {
+            const [alias, id] = m.split(' → ');
+            const marker = id === c.model ? ' (default)' : '';
+            console.log(`  ${alias} → ${id}${marker}`);
+          }
         } else {
-          console.log(`models:  (none configured — use "spica models set ${name} <alias> <model-id>")`);
+          console.log('aliases:  (none)');
         }
+        console.log(`\nSet default:  spica models default ${c.name} <alias>`);
+        console.log(`Add alias:    spica models set ${c.name} <alias> <model-id>`);
       } catch (e: unknown) {
         const errorMsg = e instanceof Error ? e.message : String(e);
         console.log(COLORS.error(errorMsg));
@@ -101,7 +135,8 @@ export function registerProviderCommands(program: Command): void {
       await saveGlobalSettings(config);
     });
 
-  // Model alias management
+  // ── Model alias management ──
+
   const modelsCmd = program
     .command('models')
     .description('Manage model aliases for a provider');
@@ -114,16 +149,16 @@ export function registerProviderCommands(program: Command): void {
       if (!provider) return console.log('No default provider');
       try {
         const c = await getProviderConfig(provider);
-        const models = listProviderModels(c);
-        if (models) {
-          console.log(`${provider} models:`);
-          models.forEach(m => console.log(`  ${m}`));
-          console.log(`\ndefault: ${c.model}`);
+        console.log(`${provider}  default: ${c.model}`);
+        const modelList = listProviderModels(c);
+        if (modelList) {
+          for (const m of modelList) {
+            const [alias, id] = m.split(' → ');
+            const marker = id === c.model ? ' (default)' : '';
+            console.log(`  ${alias} → ${id}${marker}`);
+          }
         } else {
-          console.log(`No model aliases for ${provider}.`);
-          console.log(`Default model: ${c.model}`);
-          console.log(`\nAdd with: spica models set ${provider} <alias> <model-id>`);
-          console.log(`Example: spica models set ${provider} mini gpt-4o-mini`);
+          console.log('  (no aliases)');
         }
       } catch (e: unknown) {
         const errorMsg = e instanceof Error ? e.message : String(e);
@@ -133,7 +168,7 @@ export function registerProviderCommands(program: Command): void {
 
   modelsCmd
     .command('set <provider> <alias> <modelId>')
-    .description('Set a model alias (e.g., "mini" → "gpt-4o-mini")')
+    .description('Add a model alias (e.g., "fast" → "deepseek-v4-flash")')
     .action(async (provider, alias, modelId) => {
       try {
         const c = await getProviderConfig(provider);
@@ -167,6 +202,20 @@ export function registerProviderCommands(program: Command): void {
     });
 
   modelsCmd
+    .command('default <provider> <alias>')
+    .description('Set the default model for a provider (by alias or model ID)')
+    .action(async (provider, alias) => {
+      try {
+        await setDefaultModel(provider, alias);
+        const c = await getProviderConfig(provider);
+        console.log(COLORS.success(`[OK] ${provider} default model → ${c.model}`));
+      } catch (e: unknown) {
+        const errorMsg = e instanceof Error ? e.message : String(e);
+        console.log(COLORS.error(errorMsg));
+      }
+    });
+
+  modelsCmd
     .command('resolve <provider> [alias]')
     .description('Resolve a model alias to its actual model ID')
     .action(async (provider, alias) => {
@@ -174,7 +223,8 @@ export function registerProviderCommands(program: Command): void {
         const c = await getProviderConfig(provider);
         const resolved = resolveModel(c, alias);
         if (alias) {
-          console.log(`${alias} → ${resolved}${resolved === c.model && !c.models?.[alias || ''] ? ' (default)' : ''}`);
+          const viaAlias = c.models?.[alias] ? ' (via alias)' : ' (direct)';
+          console.log(`${alias} → ${resolved}${viaAlias}`);
         } else {
           console.log(`default: ${resolved}`);
         }
