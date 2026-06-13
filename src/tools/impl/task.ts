@@ -1,6 +1,13 @@
-import { SubAgentTask, getSubAgentConfig, summarizeResult } from '../subAgent';
+import { SubAgentTask, getSubAgentConfig, summarizeResult, type SubAgentResult } from '../subAgent';
 import { WORKSPACE } from '../helpers';
 import type { ToolResult, ToolEventCallback } from '../helpers';
+
+interface TaskResult {
+  status: SubAgentResult['status'];
+  taskLabel: string;
+  summary?: string;
+  error?: string;
+}
 
 export async function executeTask(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Tool arguments are dynamic
@@ -18,13 +25,26 @@ export async function executeTask(
     };
   }
 
+  // Check for parallel implementation subagents (fix/build types)
+  // Per subagent-driven-development skill: never dispatch multiple
+  // implementation subagents in parallel to avoid git/file conflicts
+  const implementationTypes = new Set(['fix', 'build']);
+  const implTasks = tasks.filter(t => t.type && implementationTypes.has(t.type));
+  if (implTasks.length > 1) {
+    if (eventCallback) {
+      eventCallback('sub_agent_warning', {
+        message: `${implTasks.length} parallel implementation subagents detected. Consider running sequentially to avoid conflicts.`,
+      });
+    }
+  }
+
   // Shared controller for early termination: when one subagent finds a
   // definitive answer, it signals siblings to stop (saves tokens).
   const siblingAbortController = new AbortController();
   let earlyExitTriggered = false;
 
-  const results = await Promise.all(
-    tasks.map(async (task, i) => {
+  const results: TaskResult[] = await Promise.all(
+    tasks.map(async (task, i): Promise<TaskResult> => {
       const subTaskId = `sub-${i}-${Date.now()}`;
       const config = getSubAgentConfig(task.type);
       const taskLabel = task.description || task.prompt.slice(0, 30);
@@ -70,10 +90,10 @@ export async function executeTask(
       for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         // Check parent interrupt and sibling early-exit before each attempt
         if (externalSignal?.aborted) {
-          return `[FAIL] ${taskLabel}: Parent agent interrupted`;
+          return { status: 'BLOCKED', taskLabel, error: 'Parent agent interrupted' };
         }
         if (siblingAbortController.signal.aborted) {
-          return `[FAIL] ${taskLabel}: Early exit — sibling subagent already solved the task`;
+          return { status: 'BLOCKED', taskLabel, error: 'Early exit — sibling subagent already solved the task' };
         }
 
         const taskAgent = new SpicaAgent(undefined, WORKSPACE);
@@ -104,10 +124,16 @@ export async function executeTask(
             eventCallback('sub_agent_reasoning', { id: subTaskId, ...data });
           }
         };
+        const streamHandler = (data: any) => {
+          if (eventCallback) {
+            eventCallback('sub_agent_stream', { id: subTaskId, chunk: data.chunk });
+          }
+        };
         taskAgent.on('tool_call', toolCallHandler);
         taskAgent.on('tool_result', toolResultHandler);
         taskAgent.on('message', messageHandler);
         taskAgent.on('reasoning', reasoningHandler);
+        taskAgent.on('stream', streamHandler);
 
         // 创建超时 AbortController
         const timeoutController = new AbortController();
@@ -125,10 +151,11 @@ export async function executeTask(
             taskAgent.off('tool_result', toolResultHandler);
             taskAgent.off('message', messageHandler);
             taskAgent.off('reasoning', reasoningHandler);
+            taskAgent.off('stream', streamHandler);
             taskAgent.interrupt();
             taskAgent.dispose();
             clearTimeout(timeoutId);
-            return `[FAIL] ${taskLabel}: Parent agent interrupted`;
+            return { status: 'BLOCKED', taskLabel, error: 'Parent agent interrupted' };
           }
           abortHandler = () => {
             externalSignal.removeEventListener('abort', abortHandler!);
@@ -150,16 +177,17 @@ export async function executeTask(
           taskAgent.off('tool_result', toolResultHandler);
           taskAgent.off('message', messageHandler);
           taskAgent.off('reasoning', reasoningHandler);
+          taskAgent.off('stream', streamHandler);
           taskAgent.interrupt();
           taskAgent.dispose();
           clearTimeout(timeoutId);
-          return `[FAIL] ${taskLabel}: Early exit — sibling subagent already solved the task`;
+          return { status: 'BLOCKED', taskLabel, error: 'Early exit — sibling subagent already solved the task' };
         }
 
         try {
-          // Use lightweight sub-agent init
+          // Use lightweight sub-agent init with optional model override
           if (parentAgent) {
-            await taskAgent.initAsSubAgent(parentAgent);
+            await taskAgent.initAsSubAgent(parentAgent, task.model);
           } else {
             await taskAgent.init();
           }
@@ -185,6 +213,7 @@ export async function executeTask(
           taskAgent.off('tool_result', toolResultHandler);
           taskAgent.off('message', messageHandler);
           taskAgent.off('reasoning', reasoningHandler);
+          taskAgent.off('stream', streamHandler);
           if (abortHandler && externalSignal) {
             externalSignal.removeEventListener('abort', abortHandler);
           }
@@ -228,11 +257,16 @@ export async function executeTask(
             }
           }
 
+          // Determine status: DONE or DONE_WITH_CONCERNS
+          const hasConcerns =
+            /however|but|note:|warning|concern|注意|但是|不过|警告/i.test(summary);
+          const status = hasConcerns ? 'DONE_WITH_CONCERNS' : 'DONE';
+
           if (eventCallback) {
-            eventCallback('sub_agent_done', { id: subTaskId, summary });
+            eventCallback('sub_agent_done', { id: subTaskId, summary, status });
           }
 
-          return `[PASS] ${taskLabel}: ${summary}`;
+          return { status, taskLabel, summary };
         } catch (err: any) {
           // Cleanup
           clearTimeout(timeoutId);
@@ -240,6 +274,7 @@ export async function executeTask(
           taskAgent.off('tool_result', toolResultHandler);
           taskAgent.off('message', messageHandler);
           taskAgent.off('reasoning', reasoningHandler);
+          taskAgent.off('stream', streamHandler);
           if (abortHandler && externalSignal) {
             externalSignal.removeEventListener('abort', abortHandler);
           }
@@ -271,33 +306,39 @@ export async function executeTask(
           if (eventCallback) {
             eventCallback('sub_agent_error', { id: subTaskId, error: lastError });
           }
-          return `[FAIL] ${taskLabel}: ${lastError}`;
+          return { status: 'BLOCKED', taskLabel, error: lastError };
         }
       }
 
       // Should not reach here, but just in case
-      return `[FAIL] ${taskLabel}: ${lastError}`;
+      return { status: 'BLOCKED', taskLabel, error: lastError };
     })
   );
 
-  // 分析结果，检测失败
-  const failedTasks = results.filter(r => r.startsWith('[FAIL]'));
-  const succeededTasks = results.filter(r => r.startsWith('[PASS]'));
+  // 分析结果，检测失败 (uses structured TaskResult objects)
+  const failedTasks = results.filter(r => r.status === 'BLOCKED');
+  const successTasks = results.filter(r => r.status !== 'BLOCKED');
 
-  // Cap total output size to prevent context pollution
+  // Format results with SubAgentResult status codes
   const MAX_TOTAL_OUTPUT = 4000;
-  let output = results.join('\n');
+  const formattedResults = results.map(r => {
+    const statusTag = `[${r.status}]`;
+    const detail = r.status === 'BLOCKED'
+      ? (r.error || 'Unknown error')
+      : (r.summary || 'done');
+    return `${statusTag} ${r.taskLabel}: ${detail}`;
+  });
+  let output = formattedResults.join('\n');
   const warningSuffix =
     failedTasks.length > 0
       ? `\n\n[WARNING] ${failedTasks.length}/${results.length} subagent(s) failed. Retry failed tasks or handle directly.`
       : '';
 
   if (output.length + warningSuffix.length > MAX_TOTAL_OUTPUT) {
-    // Truncate individual results to fit
     const availablePerResult = Math.floor(
-      (MAX_TOTAL_OUTPUT - warningSuffix.length) / results.length
+      (MAX_TOTAL_OUTPUT - warningSuffix.length) / formattedResults.length
     );
-    output = results
+    output = formattedResults
       .map(r => (r.length > availablePerResult ? r.slice(0, availablePerResult) + '...' : r))
       .join('\n');
   }
@@ -305,9 +346,9 @@ export async function executeTask(
 
   if (failedTasks.length > 0) {
     return {
-      success: succeededTasks.length > 0,
+      success: successTasks.length > 0,
       output,
-      error: failedTasks.length > 0 ? `${failedTasks.length} subagent(s) failed` : undefined,
+      error: `${failedTasks.length} subagent(s) failed`,
     };
   }
 

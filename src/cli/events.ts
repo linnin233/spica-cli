@@ -150,6 +150,11 @@ interface SubAgentReasoningData {
   content: string;
 }
 
+interface SubAgentStreamData {
+  id: string;
+  chunk: string;
+}
+
 interface PendingInputDetectedData {
   content: string;
   input?: string;
@@ -221,6 +226,7 @@ export function setupAgentEvents(
     justSwitchedFromReasoning = false;
     resetToolTracking();
     subAgentState.clear();
+    subAgentStreamBuffer.clear();
     subAgentSeq = 0;
     // 清除thinking动画
     screen.clearThinkingAnimation();
@@ -433,6 +439,15 @@ export function setupAgentEvents(
   });
 
   on('sub_agent_done', (data: SubAgentDoneData) => {
+    // Flush any remaining stream buffer
+    const remaining = subAgentStreamBuffer.get(data.id);
+    if (remaining?.trim()) {
+      const record = subAgentState.get(data.id);
+      const prefix = record?.label || '[sub]';
+      screen.appendScroll(COLORS.subAgent(`  ${prefix} │ ${remaining.slice(0, 300)}\n`));
+    }
+    subAgentStreamBuffer.delete(data.id);
+
     const record = subAgentState.get(data.id);
     if (record) {
       record.status = 'done';
@@ -444,6 +459,15 @@ export function setupAgentEvents(
   });
 
   on('sub_agent_error', (data: SubAgentErrorData) => {
+    // Flush any remaining stream buffer
+    const remaining = subAgentStreamBuffer.get(data.id);
+    if (remaining?.trim()) {
+      const record = subAgentState.get(data.id);
+      const prefix = record?.label || '[sub]';
+      screen.appendScroll(COLORS.subAgent(`  ${prefix} │ ${remaining.slice(0, 300)}\n`));
+    }
+    subAgentStreamBuffer.delete(data.id);
+
     const record = subAgentState.get(data.id);
     if (record) {
       record.status = 'error';
@@ -482,8 +506,39 @@ export function setupAgentEvents(
     }
   });
 
+  // Subagent streaming — buffer chunks per subagent, flush on newline
+  const subAgentStreamBuffer = new Map<string, string>();
+  on('sub_agent_stream', (data: SubAgentStreamData) => {
+    if (!data.chunk) return;
+    const record = subAgentState.get(data.id);
+    const prefix = record?.label || '[sub]';
+
+    let buffer = subAgentStreamBuffer.get(data.id) || '';
+    buffer += data.chunk;
+
+    // Flush on newline or when buffer gets large
+    const newlineIdx = buffer.indexOf('\n');
+    if (newlineIdx >= 0 || buffer.length > 120) {
+      const lines = buffer.split('\n');
+      // Keep the last incomplete line in the buffer
+      const incomplete = buffer.endsWith('\n') ? '' : (lines.pop() || '');
+      for (const line of lines) {
+        if (line.trim()) {
+          screen.appendScroll(COLORS.subAgent(`  ${prefix} │ ${line.slice(0, 300)}\n`));
+        }
+      }
+      subAgentStreamBuffer.set(data.id, incomplete);
+    } else {
+      subAgentStreamBuffer.set(data.id, buffer);
+    }
+  });
+
   on('hook_blocked', (data: HookBlockedData) => {
     screen.appendScroll(COLORS.error(`\n[block] ${data.tool}: ${data.reason}\n`));
+  });
+
+  on('sub_agent_warning', (data: { message: string }) => {
+    screen.appendScroll(COLORS.warning(`\n[subagent] ${data.message}\n`));
   });
 
   on('queue_injected', (data: QueueInjectedData) => {

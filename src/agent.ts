@@ -606,8 +606,8 @@ export class SpicaAgent extends EventEmitter {
    * Creates a fresh LLMClient with the same API config (no shared message state).
    * Inherits the parent's system prompt, workspace, and a summary of recent context.
    */
-  async initAsSubAgent(parentAgent: SpicaAgent): Promise<void> {
-    return initAgentAsSubAgent(this, parentAgent);
+  async initAsSubAgent(parentAgent: SpicaAgent, modelOverride?: string): Promise<void> {
+    return initAgentAsSubAgent(this, parentAgent, modelOverride);
   }
 
   private async _doInit(): Promise<void> {

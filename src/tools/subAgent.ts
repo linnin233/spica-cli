@@ -16,6 +16,7 @@ export interface SubAgentTask {
   description?: string;
   type?: SubAgentType;
   skill?: string;
+  model?: string; // Optional model override for this task (e.g., 'haiku' for mechanical, 'opus' for design)
 }
 
 export interface SubAgentConfig {

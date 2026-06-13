@@ -28,7 +28,8 @@ export async function initAgent(agent: SpicaAgent): Promise<void> {
 
 export async function initAgentAsSubAgent(
   agent: SpicaAgent,
-  parentAgent: SpicaAgent
+  parentAgent: SpicaAgent,
+  modelOverride?: string
 ): Promise<void> {
   const self = agent as any;
   if (self._initialized) return;
@@ -38,11 +39,12 @@ export async function initAgentAsSubAgent(
   const config = await getProviderConfig(parentProviderName);
 
   // Fresh LLM client — same API, isolated message history
+  // If modelOverride specified, use it instead of parent's model
   self.llm = new LLMClient({
     provider: parentProviderName || 'openai',
     apiKey: config.apiKey,
     baseUrl: config.baseUrl,
-    model: config.model,
+    model: modelOverride || config.model,
     name: config.name,
   });
 
