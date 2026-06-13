@@ -1,5 +1,12 @@
 import { LLMClient } from './llm/LLMClient';
-import { executeTool, getAllToolDefinitions, setWorkspace, getToolBatchHint } from './tools/index';
+import {
+  executeTool,
+  getAllToolDefinitions,
+  getActiveToolDefinitions,
+  isLazyTool,
+  setWorkspace,
+  getToolBatchHint,
+} from './tools/index';
 import { initMCP } from './mcp/client';
 import { initSkills, listSkills } from './skills/index';
 import { getProviderConfig } from './utils/settings';
@@ -43,6 +50,9 @@ import {
   buildSummaryPrompt as _buildSummaryPrompt,
   generateSummary as _generateSummary,
 } from './core/compression';
+import { ProgressTracker } from './core/progressTracker';
+import { AgentStateMachine, type AgentState } from './core/AgentState';
+import { recordToolUsage } from './tools/analytics';
 import {
   initAgent,
   initAgentAsSubAgent,
@@ -264,14 +274,36 @@ export class SpicaAgent extends EventEmitter {
   // Non-blocking compression: LLM summary runs in background
   private _pendingCompression: Promise<void> | null = null;
   private _deferredSummary: ChatMessage | null = null;
-  // Full history — append-only, independent of LLM context compression
-  // Used by getMessages() for session persistence. Never truncated by compression.
+  /**
+   * Full history — append-only, independent of LLM context compression.
+   *
+   * INVARIANT: _fullHistory NEVER contains system prompts. System prompts are
+   * injected directly into provider.messages via `setSystemPromptSplit()` and
+   * never synced to _fullHistory. This split is intentional:
+   *   - _fullHistory → session.json (persistence, ~5,500 tokens lighter)
+   *   - provider.msgs → LLM API context (with system prompts, compressed)
+   *
+   * Used by getMessages() for session persistence. Never truncated by compression.
+   * Updated by syncFullHistory() which copies new messages from provider.msgs.
+   */
   private _fullHistory: ChatMessage[] = [];
   // Track last synced index from provider to _fullHistory.
   // Using index-based tracking instead of length comparison because cleanMessages()
   // can reduce provider message count below _fullHistory.length, causing permanent
   // desync where new user/assistant messages are never picked up.
   private _lastSyncedProviderIndex: number = -1;
+  // Lazy tool loading: track which tools have been used this session.
+  // Tools not in this set are withheld from the API `tools` parameter to
+  // reduce per-request overhead (~1,500 tokens saved per call).
+  private _usedTools: Set<string> = new Set();
+  // Progress tracker: survives compression, records completed work
+  private _progress: ProgressTracker = new ProgressTracker();
+  // Unified state machine — replaces scattered _initialized/_compacting/pendingCancel
+  private _stateMachine: AgentStateMachine = new AgentStateMachine();
+  // Idle compression timer: triggers compression after inactivity when
+  // context exceeds the 60% threshold. Cleared on new user input.
+  private _idleCompressTimer: ReturnType<typeof setTimeout> | null = null;
+  private static readonly IDLE_COMPRESS_DELAY_MS = 30_000; // 30s inactivity
 
   // === Interrupt 机制（参考 Crush 设计）===
   // 当前活跃的 AbortController（每个请求独立）
@@ -694,10 +726,26 @@ export class SpicaAgent extends EventEmitter {
     }
   }
 
+  /**
+   * Return messages for SESSION PERSISTENCE.
+   *
+   * Returns `_fullHistory` — append-only, never truncated by compression.
+   * Does NOT include system prompts (they live only in provider.msgs via
+   * `setSystemPromptSplit`). This split saves ~5,500 tokens in session files
+   * and keeps system prompts out of `/history` views.
+   *
+   * For LLM context messages (with system prompts), use getContextMessages().
+   */
   getMessages(): ChatMessage[] {
     return this._fullHistory;
   }
 
+  /**
+   * Set messages for BOTH _fullHistory and provider.
+   * Used during session loading (init) to restore state.
+   * System prompts are stripped from the input and re-injected via
+   * setSystemPromptSplit() — this keeps the split boundary clean.
+   */
   setMessages(messages: ChatMessage[]) {
     this._fullHistory = [...messages];
     // Reset sync tracker: assume all provider messages up to current count are synced.
@@ -721,6 +769,15 @@ export class SpicaAgent extends EventEmitter {
     }
   }
 
+  /**
+   * Return messages for LLM API CONTEXT.
+   *
+   * Returns `provider.messages` — includes system prompts injected by
+   * `setSystemPromptSplit()`. This is what the LLM actually sees.
+   * These messages are subject to compression (Phase 1 truncation + Phase 2 summary).
+   *
+   * For session persistence (without system prompts), use getMessages().
+   */
   getContextMessages(): ChatMessage[] {
     return this.llm?.getMessages() || [];
   }
@@ -765,6 +822,15 @@ export class SpicaAgent extends EventEmitter {
    * @throws InterruptError if interrupted by user
    */
   async runLoop(prompt: string, maxIterations = 50): Promise<string> {
+    // State transition: idle → processing (or interrupted → processing)
+    this._stateMachine.transition('processing');
+
+    // Clear idle compression timer — user is active
+    if (this._idleCompressTimer) {
+      clearTimeout(this._idleCompressTimer);
+      this._idleCompressTimer = null;
+    }
+
     // Cancel-on-entry: if pendingCancel, refuse to enter
     if (this.checkCanceledOnEntry()) {
       this.pendingCancel = false;
@@ -830,12 +896,22 @@ export class SpicaAgent extends EventEmitter {
         });
       }
 
-      const triggerThreshold = Math.floor(contextWindow * 0.6); // 触发阈值：60%（现代设计，更早触发避免过满）
+      // Adaptive thresholds based on context window size.
+      // Small windows (<64K) need more aggressive compression to leave room for
+      // tool results. Large windows (≥200K) can be more lenient.
+      const triggerRatio = contextWindow < 32000 ? 0.50 :  // tiny: compress at 50%
+        contextWindow < 64000 ? 0.55 :                     // small: compress at 55%
+        contextWindow < 200000 ? 0.60 :                    // normal: compress at 60%
+        0.65;                                               // huge: compress at 65%
+      const targetRatio = contextWindow < 32000 ? 0.35 :
+        contextWindow < 64000 ? 0.38 :
+        0.40;
+      const triggerThreshold = Math.floor(contextWindow * triggerRatio);
 
       // 当使用超过触发阈值时自动压缩
       // 非阻塞：规则截断立即生效，LLM 摘要在后台异步生成，下次请求前注入
       if (usedTokens > triggerThreshold) {
-        const targetTokens = Math.floor(contextWindow * 0.4);
+        const targetTokens = Math.floor(contextWindow * targetRatio);
         await this.startNonBlockingCompression(targetTokens, signal);
       }
 
@@ -863,7 +939,7 @@ export class SpicaAgent extends EventEmitter {
         this.emit('learning_detected', { source: 'correction', text: prompt.slice(0, 100) });
       }
 
-      const toolDefinitions = getAllToolDefinitions();
+      const toolDefinitions = getActiveToolDefinitions(this._usedTools);
       // 重置 reasoning 状态（每次新请求前）
       this.reasoningReceived = false;
       this.emit('waiting_for_llm'); // 通知外部启动心跳
@@ -1069,6 +1145,15 @@ export class SpicaAgent extends EventEmitter {
 
             try {
               const result = await executeTool(resolvedName, tcArgs, eventCallback);
+
+              // Promote lazy tools on first use — the LLM asked for it,
+              // so include its definition in subsequent API calls
+              if (isLazyTool(resolvedName) && !this._usedTools.has(resolvedName)) {
+                this._usedTools.add(resolvedName);
+              }
+
+              // Track tool usage for analytics (persisted to .spica/tool-usage.json)
+              recordToolUsage(this.workspacePath, resolvedName);
 
               if (!result.success) {
                 if (result.error?.includes('aborted') || result.error?.includes('interrupted')) {
@@ -1337,7 +1422,42 @@ export class SpicaAgent extends EventEmitter {
     } finally {
       this.currentAbortController = null;
       this.clearPendingCancel(this.cancelSeq);
+      // Transition back to idle (unless interrupted)
+      if (this._stateMachine.current !== 'interrupted') {
+        this._stateMachine.transition('idle');
+      }
+      // Schedule idle compression: if user doesn't send another message,
+      // compress automatically after IDLE_COMPRESS_DELAY_MS of inactivity
+      this.scheduleIdleCompression();
     }
+  }
+
+  /** Schedule a one-shot idle compression check after runLoop completes. */
+  private scheduleIdleCompression(): void {
+    // Clear any previously scheduled timer
+    if (this._idleCompressTimer) {
+      clearTimeout(this._idleCompressTimer);
+      this._idleCompressTimer = null;
+    }
+
+    this._idleCompressTimer = setTimeout(() => {
+      if (!this.llm || this._compacting) return;
+      try {
+        const provider = this.llm.getProvider();
+        const tokenCounter = this.llm.getTokenCounter();
+        const contextWindow = provider.getContextWindow();
+        tokenCounter.setContextWindow(contextWindow);
+        const usedTokens = tokenCounter.estimateMessages(this.llm.getMessages());
+        const usagePercent = Math.floor((usedTokens / contextWindow) * 100);
+
+        if (usagePercent > 60) {
+          const targetTokens = Math.floor(contextWindow * 0.4);
+          this.startNonBlockingCompression(targetTokens).catch(() => {});
+        }
+      } catch {
+        // Best-effort — don't crash on timer errors
+      }
+    }, SpicaAgent.IDLE_COMPRESS_DELAY_MS);
   }
 
   getProjectConfig(): ProjectConfig {
@@ -1363,6 +1483,7 @@ export class SpicaAgent extends EventEmitter {
     }
     this._fullHistory = [];
     this._lastSyncedProviderIndex = -1;
+    this._usedTools = new Set();
 
     // 发送workspace变更事件
     this.emit('workspace_changed', { path: newPath });

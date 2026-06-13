@@ -644,6 +644,79 @@ export function getAllToolDefinitions(): ToolDefinition[] {
   return [...TOOLS_DEFINITIONS, ...mcpConverted].sort((a, b) => a.name.localeCompare(b.name));
 }
 
+// ── Lazy-load tool trimming — saves ~1,500 tokens per API call ─────────
+
+/**
+ * Tools that are rarely used (<5% of API calls in typical sessions).
+ * Their definitions are withheld from the API `tools` parameter until the
+ * tool is actually called, at which point it's promoted to the active set.
+ *
+ * This saves ~1,500 tokens per API call for most sessions (18 lazy tools ×
+ * ~85 tokens each, compressed against the prompt cache).
+ */
+const LAZY_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'file_multi_edit',
+  'file_replace',
+  'file_insert',
+  'file_copy',
+  'file_move',
+  'file_patch',
+  'directory_create',
+  'directory_list',
+  'monitor',
+  'task_stop',
+  'workspace',
+  'question',
+  'gh',
+  'format',
+  'code_health',
+  'test_quality_check',
+]);
+
+/**
+ * Get tool definitions filtered for the current session state.
+ * Lazy tools are excluded until they are first called (present in usedTools).
+ * All MCP tools are always included (they're explicitly configured by the user).
+ *
+ * @param usedTools - Set of tool names that have been called this session.
+ *   Pass `null` or omit to get all tools (backward-compatible full set).
+ */
+export function getActiveToolDefinitions(usedTools?: Set<string> | null): ToolDefinition[] {
+  if (!usedTools || usedTools.size === 0) {
+    return getAllToolDefinitions();
+  }
+
+  const mcpTools = getMCPManager().getToolDefinitions();
+  mcpToolNameMap.clear();
+
+  // Filter built-in tools: keep core + any lazy tool that's been used
+  const activeBuiltin = TOOLS_DEFINITIONS.filter(
+    t => !LAZY_TOOL_NAMES.has(t.name) || usedTools.has(t.name)
+  );
+
+  // MCP tools: always included (user explicitly configured them)
+  const mcpConverted: ToolDefinition[] = mcpTools.map(t => {
+    const sanitized = t.name.replace(/\//g, '_');
+    if (sanitized !== t.name) {
+      mcpToolNameMap.set(sanitized, t.name);
+    }
+    return {
+      name: sanitized,
+      description: `[MCP] ${t.description}`,
+      parameters: t.inputSchema,
+    };
+  });
+
+  return [...activeBuiltin, ...mcpConverted].sort((a, b) =>
+    a.name.localeCompare(b.name)
+  );
+}
+
+/** Check if a tool is in the lazy set (for promoting on first use). */
+export function isLazyTool(toolName: string): boolean {
+  return LAZY_TOOL_NAMES.has(toolName);
+}
+
 /** Look up the batchHint for a tool by name. Falls back to 'neutral' for unknown/MCP tools. */
 export function getToolBatchHint(toolName: string): 'read' | 'write' | 'neutral' {
   const def = TOOLS_DEFINITIONS.find(t => t.name === toolName);

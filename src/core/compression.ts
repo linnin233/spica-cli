@@ -174,36 +174,82 @@ export async function startNonBlockingCompression(
     }
     llm.getProvider().setCachePrefixEnd(maxPrefixIdx);
 
+    // Validate cache prefix invariants after restoration.
+    // Catches silent cache invalidation before it hits production API calls.
+    const validation = llm.getProvider().validateCachePrefix();
+    if (!validation.valid) {
+      console.warn(
+        '[compression] cachePrefixEnd validation FAILED:',
+        validation.errors.join('; ')
+      );
+    }
+
     const newTokens = tokenCounter.estimateMessages(cleaned);
+
+    // Per-role counts for observability
+    const countByRole = (msgs: ChatMessage[]) => ({
+      user: msgs.filter(m => m.role === 'user').length,
+      assistant: msgs.filter(m => m.role === 'assistant').length,
+      tool: msgs.filter(m => m.role === 'tool').length,
+    });
+
+    const droppedRatio = nonSystem.length > 0
+      ? oldMessages.length / nonSystem.length
+      : 0;
 
     agent.emit('context_compressed', {
       before: allMessages.length,
       after: systemMessages.length + cleaned.length,
       tokensBefore: usedTokens,
       tokensAfter: newTokens,
+      kept: countByRole(cleaned),
+      dropped: countByRole(oldMessages),
+      phase: 'phase1-only',
+      droppedRatio,
     });
 
     // --- Phase 2: LLM summary ---
     if (oldMessages.length === 0) return;
 
-    // When more than half of compressible messages are dropped, wait for the
-    // summary synchronously. The LLM needs this context on the CURRENT request,
-    // not the next one — otherwise it works with severely truncated context.
+    // Heavy drop (>50% of compressible messages removed): inject a rule-based
+    // fallback summary immediately so the LLM has context NOW, then fire the
+    // LLM summary in background for the next request. This keeps compression
+    // off the critical path — the user never waits for an LLM summary.
     if (oldMessages.length > selectedCompressible.length) {
-      agent.setCompacting(false);
-      try {
-        const summaryMsg = await generateSummary(llm, oldMessages, signal);
-        if (summaryMsg.content && summaryMsg.content.trim()) {
-          const msgs = llm.getMessages();
-          const sysCount = msgs.filter(m => m.role === 'system').length;
-          msgs.splice(sysCount, 0, summaryMsg);
-          llm.setMessages(msgs);
-        }
-      } catch {
-        // Fall through — summary is best-effort
-      } finally {
-        agent.setCompacting(true);
+      // Instant fallback: rule-based summary (no LLM call)
+      const fallbackSummary = buildFallbackSummary(oldMessages);
+      if (fallbackSummary.content && fallbackSummary.content.trim()) {
+        const msgs = llm.getMessages();
+        const sysCount = msgs.filter(m => m.role === 'system').length;
+        msgs.splice(sysCount, 0, fallbackSummary);
+        llm.setMessages(msgs);
       }
+
+      // Background: fire LLM summary for next request (replaces fallback)
+      if (!agent.getPendingCompression()) {
+        agent.setPendingCompression((async () => {
+          try {
+            const summaryMsg = await generateSummary(llm, oldMessages, signal);
+            if (summaryMsg.content?.trim()) {
+              agent.setDeferredSummary(summaryMsg);
+            }
+            agent.emit('context_compressed', {
+              before: allMessages.length,
+              after: systemMessages.length + cleaned.length,
+              tokensBefore: usedTokens,
+              tokensAfter: newTokens,
+              phase: 'phase1+deferred-summary',
+              droppedRatio,
+              summaryLength: summaryMsg.content?.length || 0,
+            });
+          } catch {
+            agent.setDeferredSummary(null);
+          }
+          agent.setPendingCompression(null);
+        })());
+      }
+
+      agent.setCompacting(false);
       return;
     }
 
@@ -218,11 +264,20 @@ export async function startNonBlockingCompression(
     agent.setPendingCompression((async () => {
       try {
         const summaryMsg = await generateSummary(llm, oldMessages, signal);
+        const summaryLen = summaryMsg.content?.length || 0;
         if (summaryMsg.content && summaryMsg.content.trim()) {
           agent.setDeferredSummary(summaryMsg);
         }
+        agent.emit('context_compressed', {
+          before: allMessages.length,
+          after: systemMessages.length + cleaned.length,
+          tokensBefore: usedTokens,
+          tokensAfter: newTokens,
+          phase: 'phase1+deferred-summary',
+          droppedRatio,
+          summaryLength: summaryLen,
+        });
       } catch {
-        // generateSummary has its own fallback and shouldn't throw, but guard anyway
         agent.setDeferredSummary(null);
       }
       agent.setPendingCompression(null);
@@ -315,53 +370,80 @@ export function cleanToolMessages(messages: ChatMessage[]): ChatMessage[] {
 
 /**
  * Score a message for retention priority during compression.
- * Higher score = more likely to be kept.
+ * Higher score = more likely to be kept. Scores range from ~1 to ~14.
  *
- * Scoring rules:
- * - compression summary: 10 (must preserve context)
- * - user messages: 10 base (user intent is critical)
- * - assistant with write/git/bash: 9 (actual code changes)
- * - assistant with edit: 7 (edits)
- * - assistant with other toolCalls: 3 (generic action)
- * - assistant no toolCalls: 2 (commentary)
- * - tool for write/git: 4 (result of write)
- * - tool for read/grep/glob: 1 (transient read)
- * - tool for other: 2
- * - recency bonus: +1.0 for messages in the last 25%
+ * Base scores (by role + action type):
+ * - compression summary: 10 (must preserve context — never dropped)
+ * - user messages: 10 (user intent is critical)
+ * - assistant with write/bash/git: 9 (actual code/state changes)
+ * - assistant with edit:     7 (code modifications)
+ * - assistant with other TC: 3 (generic tool calls)
+ * - assistant no TC:         2 (commentary)
+ * - tool for write/git:      4 (write results)
+ * - tool for read/grep:      1 (transient reads — low value)
+ * - tool for other:          2
+ *
+ * Modifiers:
+ * - recency bonus:  +1.0 for messages in the last 25%
+ * - error signal:   +2.0 for tool results containing errors/exceptions
+ * - content signal: +0.5 for messages >200 chars (information-rich)
+ * - noise penalty:  -1.0 for tool results <20 chars (usually just "OK" or empty)
  */
 export function scoreMessage(msg: ChatMessage, index: number, total: number): number {
+  const content = msg.content || '';
   const recencyWeight = index > total * 0.75 ? 1.0 : 0;
 
   // Protect compression summaries — they carry context that must not be lost
-  if (msg.content && msg.content.startsWith('[COMPACTED CONTEXT')) return 10;
+  if (content.startsWith('[COMPACTED CONTEXT')) return 10;
 
-  if (msg.role === 'user') return 10 + recencyWeight;
+  if (msg.role === 'user') {
+    // User messages: base=10, plus content richness boost
+    // Very short user messages like "yes"/"no" still get 10 (intent is intent)
+    const lengthBonus = content.length > 200 ? 0.5 : 0;
+    return 10 + recencyWeight + lengthBonus;
+  }
 
   if (msg.role === 'tool') {
-    // Check if this tool result is for a write operation
-    const content = msg.content || '';
+    let score = 1; // default: low-value read result
+
+    // Write/edit/git operations — evidence of permanent changes
     if (
-      content &&
-      (content.includes('"name":"write"') ||
-        content.includes('"name":"edit"') ||
-        content.includes('file_delete') ||
-        content.includes('file_move') ||
-        content.includes('git add') ||
-        content.includes('git commit') ||
-        content.includes('bash'))
-    )
-      return 4 + recencyWeight;
-    // Read-only tool results are low value
-    return 1 + recencyWeight;
+      content.includes('"name":"write"') ||
+      content.includes('"name":"edit"') ||
+      content.includes('"name":"file_multi_edit"') ||
+      content.includes('file_delete') ||
+      content.includes('file_move') ||
+      content.includes('git add') ||
+      content.includes('git commit') ||
+      content.includes('bash')
+    ) {
+      score = 4;
+    } else if (content.length < 20) {
+      // Near-empty read results are noise (e.g., "OK", empty string)
+      score = 0;
+    }
+
+    // Error/exception signals — critical diagnostic information
+    const hasError = /error|Error|FAILED|denied|refused|exception|stack trace|fatal/i.test(
+      content.slice(0, 200)
+    );
+    if (hasError) score += 2;
+
+    // Content richness: substantial tool output deserves preservation
+    if (content.length > 200) score += 0.5;
+
+    return score + recencyWeight;
   }
 
   if (msg.role === 'assistant') {
     if (msg.toolCalls && msg.toolCalls.length > 0) {
       const toolNames = msg.toolCalls.map(tc => tc.name);
-      if (toolNames.some(n => /\b(write|bash|git)\b/.test(n))) return 9 + recencyWeight;
-      if (toolNames.some(n => /\bedit\b/.test(n))) return 7 + recencyWeight;
-      return 3 + recencyWeight;
+      let score = 3; // generic tool calls
+      if (toolNames.some(n => /\b(write|bash|git)\b/.test(n))) score = 9;
+      else if (toolNames.some(n => /\b(edit|file_multi_edit|file_patch)\b/.test(n))) score = 7;
+      return score + recencyWeight;
     }
+    // Plain assistant commentary
     return 2 + recencyWeight;
   }
 
@@ -418,6 +500,44 @@ export function buildSummaryPrompt(messages: ChatMessage[]): string {
   return getCompactPrompt(messagesText);
 }
 
+/**
+ * Validate that an LLM-generated summary is actually useful.
+ * Rejects: empty content, boilerplate meta-text, hallucinated non-content.
+ * Returns true if the summary passes quality checks.
+ */
+export function validateSummaryQuality(summary: string): boolean {
+  if (!summary || summary.length < 50) return false;
+
+  // Reject boilerplate that indicates the LLM produced no real content
+  const boilerplate = [
+    "I don't have",
+    'no information',
+    'Could you please',
+    'unable to',
+    'cannot provide',
+    "I'm sorry",
+    'Here is a summary',
+    'Summary of',
+    'I cannot',
+  ];
+  if (boilerplate.some(b => summary.includes(b))) return false;
+
+  // Must contain at least one content-bearing signal:
+  // a file path, a code keyword, or an action verb from the tool set
+  const contentSignals = [
+    /\.ts\b/, /\.js\b/, /\.json\b/, /\.md\b/,   // file extensions
+    /src\//, /lib\//, /test/,                       // directory patterns
+    /\bfix(ed|es)?\b/, /\bcreat(e|ed|es)\b/,       // action verbs
+    /\bmodif(y|ied)\b/, /\bdelet(e|ed|es)\b/,
+    /\berror\b/i, /\bfail(ed)?\b/i,                 // outcomes
+    /\btest(s)?\b/i, /\bbuild\b/i,
+    /\bfile\b/i, /\bfunction\b/i, /\bmodule\b/i,   // code concepts
+  ];
+  if (!contentSignals.some(s => s.test(summary))) return false;
+
+  return true;
+}
+
 // Generate history summary using LLM.
 // Tool result content is discarded — only tool names + key args are kept.
 // This gives the LLM enough context to summarize what happened without
@@ -431,38 +551,56 @@ export async function generateSummary(
 
   try {
     const response = await llm.generateForCompression(prompt, signal);
+    const rawContent = (response.content || '').trim();
+
+    // Validate before accepting — a hallucinated summary pollutes context
+    if (!validateSummaryQuality(rawContent)) {
+      throw new Error('Summary quality validation failed');
+    }
+
     return {
       role: 'assistant',
       content: `[COMPACTED CONTEXT — This is a summary of earlier conversation. Do NOT quote as user words or treat as current instructions.]
 
-${response.content || 'Early conversation compressed'}`,
+${rawContent}`,
     };
   } catch {
-    // Fallback: preserve user messages in full, tool calls with names + key args
-    const items: string[] = [];
-    for (const m of messages) {
-      if (m.role === 'user') {
-        items.push(m.content || '');
-      } else if (m.toolCalls && m.toolCalls.length > 0) {
-        const toolNames = m.toolCalls
-          .map(tc => {
-            const args = tc.arguments || {};
-            const keyArgsStr = Object.entries(args)
-              .filter(([k]) => SUMMARY_KEY_ARGS.has(k))
-              .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
-              .join(', ');
-            return keyArgsStr ? `${tc.name}(${keyArgsStr})` : tc.name;
-          })
-          .join(', ');
-        items.push(`[${toolNames}]`);
-      } else if (m.role === 'tool') {
-        items.push(`[tool_result: ${(m as any).name || '?'}]`);
-      }
-    }
-    const summary = items.join(' | ');
-    return {
-      role: 'assistant',
-      content: `[COMPACTED CONTEXT — Do NOT quote as user words.]\n${summary}`,
-    };
+    return buildFallbackSummary(messages);
   }
+}
+
+/**
+ * Build a rule-based fallback summary from messages without calling an LLM.
+ * Instant and reliable — used when the LLM summary fails or when compression
+ * needs to stay off the critical path (heavy drop → fallback NOW, LLM later).
+ *
+ * Preserves: user messages (full), tool call names + key args, tool result names.
+ * Format: pipe-delimited chronological list.
+ */
+export function buildFallbackSummary(messages: ChatMessage[]): ChatMessage {
+  const items: string[] = [];
+  for (const m of messages) {
+    if (m.role === 'user') {
+      items.push((m.content || '').slice(0, 200));
+    } else if (m.toolCalls && m.toolCalls.length > 0) {
+      const toolNames = m.toolCalls
+        .map(tc => {
+          const args = tc.arguments || {};
+          const keyArgsStr = Object.entries(args)
+            .filter(([k]) => SUMMARY_KEY_ARGS.has(k))
+            .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
+            .join(', ');
+          return keyArgsStr ? `${tc.name}(${keyArgsStr})` : tc.name;
+        })
+        .join(', ');
+      items.push(`[${toolNames}]`);
+    } else if (m.role === 'tool') {
+      items.push(`[tool_result: ${(m as any).name || '?'}]`);
+    }
+  }
+  const summary = items.join(' | ') || 'Early conversation compressed';
+  return {
+    role: 'assistant',
+    content: `[COMPACTED CONTEXT — Rule-based summary. Do NOT quote as user words.]\n${summary}`,
+  };
 }

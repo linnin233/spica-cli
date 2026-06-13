@@ -259,6 +259,17 @@ export class OpenAICompatibleProvider extends BaseProvider {
       this.cachePrefixEnd = this.messages.length - 1;
     }
 
+    // Validate prefix invariants: a bug here means all API calls lose cache hits
+    if (process.env.SPICA_CACHE_DEBUG) {
+      const { valid, errors } = this.validateCachePrefix();
+      if (!valid) {
+        console.warn(
+          `[OpenAICompatible] cachePrefixEnd validation FAILED before generate:\n`,
+          errors.map(e => `  - ${e}`).join('\n')
+        );
+      }
+    }
+
     this.messages.push({ role: 'user', content: prompt });
 
     // DEBUG: 检查消息序列是否正确（清理后应该总是正确）

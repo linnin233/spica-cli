@@ -25,6 +25,7 @@ describe('Compression Integration', () => {
         getContextWindow: () => SMALL_CONTEXT_WINDOW,
         getCachePrefixEnd: () => -1,
         setCachePrefixEnd: vi.fn(),
+        validateCachePrefix: () => ({ valid: true, errors: [] }),
       })),
       getTokenCounter: vi.fn(() => {
         const counter = new TokenCounter();

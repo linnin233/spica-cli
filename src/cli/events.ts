@@ -64,6 +64,12 @@ interface ContextCompressedData {
   tokensBefore?: number;
   tokensAfter?: number;
   message?: string;
+  // Structured observability fields (compression v3)
+  kept?: { user: number; assistant: number; tool: number };
+  dropped?: { user: number; assistant: number; tool: number };
+  phase?: 'phase1-only' | 'phase1+sync-summary' | 'phase1+deferred-summary';
+  droppedRatio?: number;     // fraction of compressible messages dropped
+  summaryLength?: number;    // chars in Phase 2 summary (if applicable)
 }
 
 interface QueueInjectedData {
@@ -675,8 +681,21 @@ export function setupAgentEvents(
       data.tokensBefore && data.tokensAfter
         ? ` (${formatTokens(data.tokensBefore)}→${formatTokens(data.tokensAfter)})`
         : '';
+    const phaseLabel = data.phase === 'phase1+sync-summary'
+      ? 'compress+summary'
+      : data.phase === 'phase1+deferred-summary'
+        ? 'compress+deferred'
+        : 'compress';
+    const roleInfo = data.kept
+      ? ` [u${data.kept.user}/a${data.kept.assistant}/t${data.kept.tool}]`
+      : '';
+    const dropInfo = data.droppedRatio !== undefined
+      ? ` drop:${Math.round(data.droppedRatio * 100)}%`
+      : '';
     screen.appendScroll(
-      COLORS.secondary(`\n[compress] ${data.before}→${data.after}${tokensInfo}\n`)
+      COLORS.secondary(
+        `\n[${phaseLabel}] ${data.before}→${data.after}${tokensInfo}${roleInfo}${dropInfo}\n`
+      )
     );
     screen.restoreCursor();
   });
