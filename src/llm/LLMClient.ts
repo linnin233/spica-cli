@@ -60,6 +60,52 @@ export class LLMClient extends EventEmitter {
 
   // ── AbortController management ──────────────────────────────────────────
 
+  // Track external-signal abort handlers so we can remove stale listeners.
+  // The same externalSignal (agent.currentAbortController.signal) is reused
+  // across all LLM calls within a single tool loop. Each addEventListener
+  // call accumulates listeners on that signal, exceeding Node's default
+  // MaxListeners (10) after ~8 tool-loop iterations.
+  //
+  // createRequestController is serialized (one streaming call at a time),
+  // so a single tracked handler is sufficient. createStandaloneController
+  // runs concurrently (compression summary), tracked separately.
+
+  /**
+   * Link an external AbortSignal (from the agent's interrupt controller)
+   * to an internal AbortController. Cleans up the previously-tracked handler
+   * for the same slot to prevent listener accumulation on the reused signal.
+   */
+  private linkExternalSignal(
+    controller: AbortController,
+    externalSignal: AbortSignal,
+    handlerRef: { handler: (() => void) | null },
+  ): void {
+    if (externalSignal.aborted) {
+      controller.abort();
+      return;
+    }
+
+    // Remove previous listener — the same externalSignal is reused across
+    // multiple LLM calls within a single runLoop / tool loop.
+    if (handlerRef.handler) {
+      externalSignal.removeEventListener('abort', handlerRef.handler);
+      handlerRef.handler = null;
+    }
+
+    const onAbort = () => {
+      externalSignal.removeEventListener('abort', onAbort);
+      handlerRef.handler = null;
+      controller.abort();
+    };
+
+    externalSignal.addEventListener('abort', onAbort);
+    handlerRef.handler = onAbort;
+  }
+
+  /** Reusable handler-ref objects (avoids allocation on each call). */
+  private _reqHandlerRef = { handler: null as (() => void) | null };
+  private _standaloneHandlerRef = { handler: null as (() => void) | null };
+
   /**
    * Create a fresh AbortController for a new request, aborting any previous one.
    * Links the provided external signal so the controller aborts when the external
@@ -76,17 +122,8 @@ export class LLMClient extends EventEmitter {
     const controller = new AbortController();
     this.abortController = controller;
 
-    // Link external signal (from agent's currentAbortController)
     if (externalSignal) {
-      if (externalSignal.aborted) {
-        controller.abort();
-      } else {
-        const onAbort = () => {
-          externalSignal.removeEventListener('abort', onAbort);
-          controller.abort();
-        };
-        externalSignal.addEventListener('abort', onAbort);
-      }
+      this.linkExternalSignal(controller, externalSignal, this._reqHandlerRef);
     }
 
     return controller;
@@ -95,20 +132,14 @@ export class LLMClient extends EventEmitter {
   /**
    * Create a controller that does NOT touch this.abortController.
    * Used by generateForCompression — runs concurrently with streaming requests.
+   * Uses a separate handler slot to avoid clobbering the streaming request's
+   * abort handler.
    */
   private createStandaloneController(externalSignal?: AbortSignal): AbortController {
     const controller = new AbortController();
 
     if (externalSignal) {
-      if (externalSignal.aborted) {
-        controller.abort();
-      } else {
-        const onAbort = () => {
-          externalSignal.removeEventListener('abort', onAbort);
-          controller.abort();
-        };
-        externalSignal.addEventListener('abort', onAbort);
-      }
+      this.linkExternalSignal(controller, externalSignal, this._standaloneHandlerRef);
     }
 
     return controller;
