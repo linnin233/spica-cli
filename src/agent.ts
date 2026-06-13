@@ -24,6 +24,8 @@ import {
 } from './storage/projectState';
 import { loadSession } from './utils/session';
 import { runPreHooks, runPostHooks } from './hooks';
+import { classifyIntent } from './cli/skillGate';
+import { isCorrection, saveLearning, type FailureRecord } from './core/learnings';
 import {
   createCheckpoint,
   listCheckpoints,
@@ -196,6 +198,61 @@ export class SpicaAgent extends EventEmitter {
   getLLM(): LLMClient | null {
     return this.llm;
   }
+
+  // ── Compression accessors (typed — replaces string-index access from compression.ts) ──
+
+  /** @internal — used by compression.ts Phase 2 background summary */
+  getDeferredSummary(): ChatMessage | null { return this._deferredSummary; }
+  setDeferredSummary(msg: ChatMessage | null): void { this._deferredSummary = msg; }
+
+  /** @internal — used by compression.ts Phase 2 background summary */
+  getPendingCompression(): Promise<void> | null { return this._pendingCompression; }
+  setPendingCompression(p: Promise<void> | null): void { this._pendingCompression = p; }
+
+  /** @internal — used by compression.ts to prevent concurrent compaction */
+  isCompacting(): boolean { return this._compacting; }
+  setCompacting(v: boolean): void { this._compacting = v; }
+
+  // ── Init accessors (typed — replaces string-index access from init.ts) ──
+
+  /** @internal — used by init.ts */
+  setLLM(llm: LLMClient): void { this.llm = llm; }
+
+  /** @internal — used by init.ts for session loading */
+  getFullHistory(): ChatMessage[] { return this._fullHistory; }
+  setFullHistory(msgs: ChatMessage[]): void { this._fullHistory = msgs; }
+
+  /** @internal — used by init.ts for session sync tracking */
+  getLastSyncedProviderIndex(): number { return this._lastSyncedProviderIndex; }
+  setLastSyncedProviderIndex(idx: number): void { this._lastSyncedProviderIndex = idx; }
+
+  /** @internal — used by init.ts */
+  isInitialized(): boolean { return this._initialized; }
+  setInitialized(v: boolean): void { this._initialized = v; }
+
+  /** @internal — used by init.ts */
+  getInitPromise(): Promise<void> | null { return this._initPromise; }
+  setInitPromise(p: Promise<void> | null): void { this._initPromise = p; }
+
+  /** @internal — used by init.ts */
+  getProviderName(): string | undefined { return this._providerName; }
+
+  /** @internal — used by init.ts */
+  getTodosInternal(): Todo[] { return this._todos; }
+  setTodosInternal(todos: Todo[]): void { this._todos = todos; }
+
+  /** @internal — used by init.ts */
+  getProjectConfigInternal(): ProjectConfig { return this.projectConfig; }
+  setProjectConfigInternal(config: ProjectConfig): void { this.projectConfig = config; }
+
+  /** @internal — used by init.ts */
+  getWorkspacePathInternal(): string { return this.workspacePath; }
+  setWorkspacePathInternal(path: string): void { this.workspacePath = path; }
+
+  /** @internal — used by init.ts for cached skills */
+  getCachedSkills(): SkillDefinition[] { return this._cachedSkills; }
+  setCachedSkills(skills: SkillDefinition[]): void { this._cachedSkills = skills; }
+
   private workspacePath: string;
   private projectConfig: ProjectConfig = {};
   private _todos: Todo[] = [];
@@ -790,6 +847,22 @@ export class SpicaAgent extends EventEmitter {
 
       this.emit('message', { role: 'user', content: prompt });
 
+      // Skill gate: classify user intent and nudge LLM toward relevant skill
+      const suggestedSkill = classifyIntent(prompt);
+      if (suggestedSkill) {
+        this.emit('skill_suggested', { skill: suggestedSkill, prompt: prompt.slice(0, 100) });
+        this.agentAddMessage({
+          role: 'system',
+          content: `[SKILL HINT] The skill "${suggestedSkill}" may be relevant to this task. Use the skill tool to load full instructions: skill(name="${suggestedSkill}")`,
+        });
+      }
+
+      // Auto-learning: detect user corrections and persist them
+      if (isCorrection(prompt)) {
+        saveLearning(this.workspacePath, prompt).catch(() => {});
+        this.emit('learning_detected', { source: 'correction', text: prompt.slice(0, 100) });
+      }
+
       const toolDefinitions = getAllToolDefinitions();
       // 重置 reasoning 状态（每次新请求前）
       this.reasoningReceived = false;
@@ -900,12 +973,8 @@ export class SpicaAgent extends EventEmitter {
             break;
           }
 
-          // 添加提示消息，让LLM继续尝试
-          this.agentAddMessage({
-            role: 'user' as const,
-            content:
-              '[SYSTEM] Previous response was empty. Please continue working on the task and provide a response or use tools.',
-          });
+          // 不添加额外消息 — generateFromHistory 会基于现有历史继续生成
+          // 添加虚假的 user 消息会污染对话历史，让 LLM 困惑
 
           // 重新调用LLM获取新响应
           this.emit('waiting_for_llm');

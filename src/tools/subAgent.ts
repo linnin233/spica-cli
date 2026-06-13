@@ -17,33 +17,60 @@ export interface SubAgentTask {
   type?: SubAgentType;
   skill?: string;
   model?: string; // Optional model override for this task (e.g., 'haiku' for mechanical, 'opus' for design)
+  isolation?: 'worktree'; // Run in an isolated git worktree to prevent file conflicts
 }
 
 export interface SubAgentConfig {
   allowedTools: string[] | '*'; // Allowed tools, '*' means all
-  timeout: number; // Timeout in milliseconds
+  timeout: number; // Timeout in milliseconds (base, adjusted by task complexity)
   description: string; // Type description
+}
+
+// Base timeouts — floors that adapt upward based on task complexity.
+// Prompt length is used as a complexity proxy: longer prompts → more work.
+const BASE_TIMEOUTS: Record<SubAgentType, number> = {
+  explore: 90_000,
+  review: 120_000,
+  fix: 180_000,
+  build: 300_000,
+};
+
+const MAX_TIMEOUTS: Record<SubAgentType, number> = {
+  explore: 180_000,   // 2× base
+  review: 240_000,    // 2× base
+  fix: 360_000,       // 2× base
+  build: 600_000,     // 2× base
+};
+
+/** Compute adaptive timeout: base + prompt-length bonus, capped at 2× base. */
+export function computeTimeout(type: SubAgentType, promptLength: number): number {
+  const base = BASE_TIMEOUTS[type] || 120_000;
+  const max = MAX_TIMEOUTS[type] || base * 2;
+
+  // Each 100 chars over 500 adds 10% to the base timeout
+  const complexityBonus = Math.max(0, (promptLength - 500) / 100) * (base * 0.10);
+  return Math.min(max, Math.floor(base + complexityBonus));
 }
 
 export const SUB_AGENT_CONFIGS: Record<SubAgentType, SubAgentConfig> = {
   explore: {
     allowedTools: ['glob', 'grep', 'read', 'directory_list', 'file_exists'],
-    timeout: 90000,
+    timeout: BASE_TIMEOUTS.explore,
     description: 'Read-only exploration, locate files and code',
   },
   review: {
     allowedTools: ['glob', 'grep', 'read', 'directory_list', 'lint', 'file_exists'],
-    timeout: 120000,
+    timeout: BASE_TIMEOUTS.review,
     description: 'Code review, find issues',
   },
   fix: {
     allowedTools: ['read', 'edit', 'bash', 'lint'],
-    timeout: 180000,
+    timeout: BASE_TIMEOUTS.fix,
     description: 'Fix specific issues, minimal changes',
   },
   build: {
     allowedTools: '*', // All tools
-    timeout: 300000,
+    timeout: BASE_TIMEOUTS.build,
     description: 'Full feature implementation',
   },
 };
@@ -96,13 +123,6 @@ export function summarizeResult(result: string, maxLength: number = 400): string
     /issue/i,
     /warning/i,
     /critical/i,
-    /完成/,
-    /成功/,
-    /失败/,
-    /错误/,
-    /找到/,
-    /修复/,
-    /通过/,
   ];
 
   const isSignalLine = (l: string): boolean => signalPatterns.some(p => p.test(l));

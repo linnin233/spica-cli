@@ -3,13 +3,14 @@ import { getInputQueue } from '../../cli/ui/queue';
 import type { SlashHandler } from './types';
 
 export const statusHandler: SlashHandler = async (_args, ctx) => {
-  const msgs = ctx.agent.getMessages().length;
+  // Use context messages (includes system prompts) for token estimation.
+  // _fullHistory omits system prompts set directly on the provider.
+  const contextMsgs = ctx.agent.getContextMessages();
+  const msgs = contextMsgs.length;
   const queue = getInputQueue();
   const queueStatus = queue.getStatus();
 
-  const usedTokens = ctx.tokenCounter.estimateMessages(
-    ctx.agent.getMessages()
-  );
+  const usedTokens = ctx.tokenCounter.estimateMessages(contextMsgs);
 
   ctx.screen.appendScroll(COLORS.primary.bold('\nStatus\n'));
   ctx.screen.appendScroll(COLORS.muted('─'.repeat(60) + '\n'));

@@ -40,13 +40,17 @@ export const TOOLS_DEFINITIONS: ToolDefinition[] = [
     name: 'edit',
     batchHint: 'write' as const,
     description:
-      'Edit file by exact text replacement. Read first. Auto-checks syntax after edit. Returns syntaxErrors if issues found.',
+      'Edit file by exact text replacement. Read first. Auto-checks syntax after edit. Returns error if oldString matches multiple times (use replace_all:true or file_multi_edit).',
     parameters: {
       type: 'object' as const,
       properties: {
         path: { type: 'string', description: 'File path' },
         oldString: { type: 'string', description: 'Text to replace (exact)' },
         newString: { type: 'string', description: 'New text' },
+        replace_all: {
+          type: 'boolean',
+          description: 'Replace all occurrences of oldString. Default: false. Set to true to replace every match.',
+        },
       },
       required: ['path', 'oldString', 'newString'],
     },
@@ -244,7 +248,7 @@ export const TOOLS_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'bash',
     batchHint: 'write' as const,
-    description: 'Run shell command. Timeout returns error - AI should decide retry strategy.',
+    description: 'Run shell command. Timeout returns error - AI should decide retry strategy. Use sandbox:true for untrusted commands (requires bubblewrap).',
     parameters: {
       type: 'object' as const,
       properties: {
@@ -253,6 +257,10 @@ export const TOOLS_DEFINITIONS: ToolDefinition[] = [
         detached: { type: 'boolean', description: 'Run in background (tmux/screen)' },
         interactive: { type: 'boolean', description: 'Enable PTY interaction' },
         maxOutputLength: { type: 'number', description: 'Max output chars (default 50000)' },
+        sandbox: {
+          type: 'boolean',
+          description: 'Run inside bwrap sandbox (no network, read-only system, writable workspace only). Falls back gracefully if bwrap not installed.',
+        },
       },
       required: ['command'],
     },

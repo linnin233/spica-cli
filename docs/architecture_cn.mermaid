@@ -1,8 +1,7 @@
 graph TB
     %% ═══════════════════════════════════════════════════════
-    %% spica-cli 架构图（代码审计后生成）
-    %% 事件: 34. 工具: 33. .spica/: 11 路径.
-    %% 更新: 2026-06-13 — 模型别名 / 压缩v2 / subagent 流式.
+    %% spica-cli 架构图（代码审计验证 2026-06-13）
+    %% 事件: 42. 工具: 33. 技能: 14. .spica/: 11 路径.
     %% ═══════════════════════════════════════════════════════
 
     %% ==================== 展示层 ====================
@@ -10,45 +9,45 @@ graph TB
         direction TB
         TUI["<b>TUI 模式</b><br/>全屏终端<br/>screenManager / scrollback<br/>状态栏 / thinking 动画"]
         SIMPLE["<b>简单模式</b><br/>--no-tui / 非 TTY<br/>readline / 纯文本输出"]
-        CMD["<b>斜杠命令 (25 个)</b><br/>/help /init /history /summary<br/>/compact /archive /view /rename<br/>/delete /clear /reset /new<br/>/checkpoint list|show|restore|clean<br/>/skill list|install|uninstall<br/>/mcp status|init|tools|disconnect<br/>/queue /q /undo /status"]
+        CMD["<b>斜杠命令</b><br/>/help /init /history /summary<br/>/compact /archive /view /rename<br/>/delete /clear /reset /new<br/>/checkpoint list|show|restore|clean<br/>/skill list|install|uninstall<br/>/mcp status|init|tools|disconnect<br/>/queue /q /undo /status"]
         IQ["<b>输入队列</b><br/>最多 50 条 / 处理期间缓冲<br/>/queue 查看 / /undo 撤销<br/>处理完成后自动排空"]
-        UI["<b>UI 组件</b><br/>diff 渲染 / spinner<br/>流式输出 / bracketed paste"]
+        UI["<b>UI 组件</b><br/>diff 渲染 / spinner<br/>流式输出 / bracketed paste<br/>fixedBox / tableRenderer / scrollback"]
     end
 
     %% ==================== 应用层 ====================
     subgraph APP["⚙️ 应用层 Application"]
         direction TB
-        AGENT["<b>SpicaAgent</b> (src/agent.ts)<br/>EventEmitter 编排器<br/>processInput / executeTools<br/>_fullHistory (追加写入)<br/>工具冲突检测<br/>消息自动清理<br/>危险命令扫描"]
+        AGENT["<b>SpicaAgent</b> (src/agent.ts)<br/>EventEmitter 编排器<br/>processInput / executeTools / runLoop<br/>_fullHistory (追加持久化)<br/>getContextMessages (LLM 上下文)<br/>工具冲突检测<br/>消息自动清理<br/>危险命令扫描"]
 
-        GATE["<b>Skill Gate</b> (src/cli/skillGate.ts)<br/>自动触发判定分类<br/>路径匹配 / 工具白名单"]
+        GATE["<b>Skill Gate</b> (src/cli/skillGate.ts)<br/>意图分类 (8 个类别)<br/>SKILL HINT 注入 runLoop<br/>路径匹配 / 工具白名单"]
 
-        EVENTS["<b>事件总线 (34 事件)</b><br/><br/>▸ stream / reasoning / message<br/>▸ tool_call / tool_result<br/>▸ agent_interrupted / agent_stopped_on_error<br/>▸ context_compressed / context_warning<br/>▸ sub_agent_start/done/error<br/>▸ sub_agent_tool_call/tool_result<br/>▸ sub_agent_message/reasoning<br/>▸ sub_agent_stream / sub_agent_warning<br/>▸ monitor_event / monitor_error<br/>▸ hook_blocked / hook_warning / hook_log<br/>▸ diff_preview / workspace_changed<br/>▸ todos_set / todo_update<br/>▸ tool_aborted / tool_stuck_warning<br/>▸ queue_injected / empty_input<br/>▸ token_usage / waiting_for_llm<br/>▸ connection_error / retry_attempt<br/>▸ error_suggestion / checkpoint_*<br/>▸ initialized / projectLoaded/Created"]
+        EVENTS["<b>事件总线 (42 事件)</b><br/><br/>▸ 核心: stream / reasoning / message<br/>▸ 工具: tool_call / tool_result<br/>▸ 生命周期: initialized / done<br/>▸ 中断: agent_interrupted<br/>▸ 压缩: context_compressed / context_warning<br/>▸ 子代理: sub_agent_start/done/error<br/>  sub_agent_tool_call/tool_result<br/>  sub_agent_message/reasoning/stream<br/>  sub_agent_warning/early_exit/retry<br/>▸ 监控: monitor_event / monitor_error<br/>▸ Hooks: hook_blocked/warning/log<br/>▸ + 14 更多 (详见 agent.ts emits)"]
 
-        INTR["<b>中断处理</b><br/>AbortController 每请求独立<br/>cancelSeq 高水位标记<br/>SIGKILL 杀进程组<br/>ESC×2 触发 / 200ms 去抖<br/>保留工具结果不丢失"]
+        INTR["<b>中断处理</b><br/>AbortController 每请求独立<br/>cancelSeq 高水位标记<br/>SIGKILL 杀进程组<br/>ESC×2 触发 / 200ms 去抖<br/>保留部分工具结果不丢失"]
 
-        SESSION["<b>会话 & 归档</b><br/>两态模型 / 数据流解耦<br/>活跃 → session.json<br/>历史 → sessions/&lt;id&gt;.json<br/>归档时 LLM 生成摘要<br/>自动清理 (保留 50)"]
+        SESSION["<b>会话 & 归档</b><br/>两态模型 (解耦)<br/>活跃 → session.json<br/>历史 → sessions/&lt;id&gt;.json<br/>归档时 LLM 生成摘要<br/>自动清理 (保留 50)"]
 
-        SUB["<b>子代理 (9 事件)</b><br/>explore · review · fix · build<br/>模型选择 (model per task)<br/>流式输出 (per-subagent 缓冲)<br/>并行实现冲突警告<br/>最多 3 并行 / 提前退出信号<br/>结构化状态码"]
+        SUB["<b>子代理 (4 种类型)</b><br/>explore: 只读 (90s→180s)<br/>review: +lint (120s→240s)<br/>fix: +edit (180s→360s)<br/>build: 全部工具 (300s→600s)<br/>自适应超时: prompt 长度加成<br/>worktree 隔离选项<br/>最多 3 并行 / 提前退出信号<br/>per-task 模型覆盖"]
 
         PMON["<b>ProcessMonitor</b><br/>PID 追踪 / 进程组强杀<br/>卡死检测 (SIGKILL)<br/>超时管理"]
 
-        LEARN["<b>教训系统</b><br/>.spica/learnings/*.md<br/>按日期命名 (YYYY-MM-DD)<br/>启动时注入系统提示"]
+        LEARN["<b>教训系统</b><br/>自动检测用户纠正<br/>6 个正则模式<br/>保存到 .spica/learnings/<br/>YYYY-MM-DD-topic.md<br/>启动时注入系统提示"]
     end
 
     %% ==================== 领域层 ====================
     subgraph DOMAIN["🧠 领域层 Domain"]
         direction TB
-        LLM["<b>LLMClient</b> (src/llm/LLMClient.ts)<br/>OpenAI 兼容流式接口<br/>temperature=0.3<br/>stream + reasoning 双通道<br/>指数退避重试"]
+        LLM["<b>LLMClient</b> (src/llm/LLMClient.ts)<br/>OpenAI 兼容流式接口<br/>temperature=0.3<br/>stream + reasoning 双通道<br/>rate limiter (请求 + token/分钟)<br/>指数退避重试<br/>abort-controller 去重 (共享辅助)"]
 
-        PROV["<b>Provider</b> (OpenAICompatible.ts)<br/>单一适配器对接所有 API<br/>model: 默认 / models: 别名→ID 映射<br/>resolveModel() 自动解析<br/>OpenAI · DeepSeek · Gemini<br/>Groq · Anthropic 代理 · 本地"]
+        PROV["<b>Provider</b> (OpenAICompatible.ts)<br/>单一适配器对接所有 API<br/>model: 默认 / models: 别名→ID 映射<br/>resolveModel() 自动解析<br/>分隔前缀缓存 (stable + variable)<br/>OpenAI · DeepSeek · Gemini<br/>Groq · Anthropic 代理 · 本地"]
 
-        TOK["<b>TokenCounter + 压缩</b><br/>tiktoken 真实 tokenizer<br/>缓存前缀感知截断<br/>graduated keep tiers (10–25 条)<br/>双阶段: 规则截断 + LLM 摘要<br/>重度丢弃时同步等待摘要 (>50%)<br/>60% 触发 / 目标 40%"]
+        TOK["<b>TokenCounter + 压缩 v2</b><br/>tiktoken 真实 tokenizer<br/>缓存前缀感知截断<br/>分级保留 (10–25 条)<br/>双阶段: 规则截断 + LLM 摘要<br/>重度丢弃同步等待摘要 (>50%)<br/>per-role 内容限制 (自适应)<br/>60% 触发 / 目标 40%"]
 
-        TOOLS["<b>33 工具 (registry.ts)</b><br/><br/>📁 <b>文件 (11)</b>: read write edit<br/>  file_multi_edit file_replace<br/>  file_insert file_delete file_copy<br/>  file_move file_exists file_patch<br/>🔍 <b>搜索 (4)</b>: glob grep<br/>  directory_list directory_create<br/>💻 <b>Shell (5)</b>: bash monitor<br/>  task_stop git workspace<br/>✅ <b>质量 (5)</b>: lint test format<br/>  code_health test_quality_check<br/>🌐 <b>Web (3)</b>: web_search<br/>  web_fetch gh<br/>📋 <b>任务 (5)</b>: todo_write todo_read<br/>  task skill question"]
+        TOOLS["<b>33 工具</b> (registry.ts + impl/)<br/><br/>📁 <b>文件 (11)</b>: read write edit<br/>  file_multi_edit file_replace<br/>  file_insert file_delete file_copy<br/>  file_move file_exists file_patch<br/>🔍 <b>搜索 (4)</b>: glob grep<br/>  directory_list directory_create<br/>💻 <b>Shell (5)</b>: bash (sandbox)<br/>  monitor task_stop git workspace<br/>✅ <b>质量 (5)</b>: lint test format<br/>  code_health test_quality_check<br/>🌐 <b>Web (3)</b>: web_search<br/>  web_fetch gh<br/>📋 <b>任务 (5)</b>: todo_write todo_read<br/>  task skill question<br/><br/>自动: 语法检查 · 工具缓存 (30s TTL)<br/>沙箱 (bwrap) · replace_all 检测"]
 
         MCP["<b>MCP 客户端</b><br/>@modelcontextprotocol/sdk<br/>外部工具服务器<br/>内置: playwright"]
 
-        HOOKS["<b>Hooks 系统</b><br/>PreToolUse / PostToolUse<br/>动作: block · confirm · warn · log<br/>全局 + 项目双层级<br/>项目 ≤ 全局严格度"]
+        HOOKS["<b>Hooks 系统</b><br/>PreToolUse / PostToolUse<br/>动作: block · confirm · warn · log<br/>全局 (~/.spica/) + 项目 (.spica/)<br/>项目 ≤ 全局严格度"]
 
         SKILLS["<b>14 内置技能</b><br/>brainstorming · systematic-debugging<br/>test-driven-development · verification<br/>executing-plans · writing-plans<br/>dispatching-parallel-agents<br/>subagent-driven-development<br/>requesting-code-review · receiving<br/>finishing-a-development-branch<br/>using-git-worktrees · writing-skills<br/>using-superpowers"]
     end
@@ -56,7 +55,7 @@ graph TB
     %% ==================== 基础设施层 ====================
     subgraph INFRA["💾 基础设施层 Infrastructure"]
         direction TB
-        GLOBAL["<b>~/.spica/settings.json</b><br/>providers (含模型别名) · MCP · skills · hooks<br/>单文件 / 嵌套 section<br/>chmod 600 / .gitignore 保护"]
+        GLOBAL["<b>~/.spica/settings.json</b><br/>providers (含模型别名)<br/>MCP servers · skills · hooks<br/>单文件 / 嵌套 section<br/>chmod 600 / .gitignore 保护"]
 
         ACTIVE["<b>.spica/session.json</b><br/>活跃会话<br/>追加写入 _fullHistory<br/>压缩不截断历史"]
 
@@ -66,9 +65,9 @@ graph TB
 
         TASKS["<b>.spica/tasks.json</b><br/>持久化任务列表<br/>启动时自动恢复"]
 
-        LEARNINGS["<b>.spica/learnings/</b><br/>YYYY-MM-DD-topic.md<br/>用户纠正持久化<br/>启动时注入系统提示"]
+        LEARNINGS["<b>.spica/learnings/</b><br/>YYYY-MM-DD-topic.md<br/>用户纠正 / 持久化<br/>启动时注入系统提示"]
 
-        SNAPS["<b>.spica/snapshots/</b><br/>checkpoint 文件快照<br/>仅 git-tracked 变更文件<br/>不污染 git / 自动清理(保留20)"]
+        SNAPS["<b>.spica/snapshots/</b><br/>checkpoint 文件快照<br/>仅 git-tracked 变更文件<br/>不污染 git<br/>自动清理 (保留 20)"]
 
         CHKJSON["<b>.spica/checkpoints.json</b><br/>checkpoint 元数据索引<br/>id / 时间戳 / 文件 / 预览"]
 
@@ -87,7 +86,7 @@ graph TB
     CMD --> AGENT
     IQ --> AGENT
 
-    %% Agent ↔ LLM
+    %% Agent ↔ LLM (双向)
     AGENT <--> LLM
     PROV --> LLM
     TOK --> LLM
@@ -110,7 +109,7 @@ graph TB
     SESSION --> ACTIVE
     ACTIVE --> HIST
 
-    %% 子代理
+    %% 子代理 (双向)
     AGENT --> SUB
     SUB --> AGENT
 
@@ -123,7 +122,7 @@ graph TB
     %% Skill Gate
     GATE --> AGENT
 
-    %% Hooks + Skills
+    %% Hooks + Skills (拦截工具使用)
     HOOKS --> AGENT
     HOOKS --> TOOLS
     SKILLS --> AGENT

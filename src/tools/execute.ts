@@ -27,6 +27,7 @@ import {
 } from './helpers';
 import type { ToolResult, ToolEventCallback } from './helpers';
 
+import { getCachedResult, setCachedResult, invalidateCache } from './cache';
 import { mcpToolNameMap } from './registry';
 import { executeWorkspace } from './impl/workspace';
 import { executeDirectoryCreate, executeDirectoryList } from './impl/directory';
@@ -65,13 +66,42 @@ export async function executeTool(
   };
   name = TOOL_ALIASES[name] || name;
 
+  // Check read-only cache before execution
+  const cached = getCachedResult(name, safeArgs);
+  if (cached !== null) {
+    return { success: true, output: cached };
+  }
+
+  // Invalidate cache before any write tool
+  const WRITE_TOOLS = new Set([
+    'write', 'edit', 'file_multi_edit', 'file_replace', 'file_insert',
+    'file_delete', 'file_copy', 'file_move', 'file_patch', 'directory_create',
+    'bash', 'git', 'format',
+  ]);
+  if (WRITE_TOOLS.has(name)) {
+    invalidateCache();
+  }
+
+  // Track whether to cache this result (read-only tools only)
+  const READ_TOOLS_CACHE = new Set(['read', 'glob', 'grep', 'directory_list', 'file_exists']);
+  const shouldCache = READ_TOOLS_CACHE.has(name);
+
+  // Wrapper that caches successful read-tool results
+  const withCache = async (fn: () => Promise<ToolResult>): Promise<ToolResult> => {
+    const result = await fn();
+    if (result.success && shouldCache) {
+      setCachedResult(name, safeArgs, result.output || result.content || '');
+    }
+    return result;
+  };
+
   try {
     switch (name) {
       case 'workspace':
         return await executeWorkspace(safeArgs);
 
       case 'read':
-        return await executeFileRead(safeArgs);
+        return await withCache(() => executeFileRead(safeArgs));
 
       case 'write': {
         const writePath = resolvePath(safeArgs.path);
@@ -130,6 +160,7 @@ export async function executeTool(
 
         const oldStr = String(safeArgs.oldString || '');
         const newStr = String(safeArgs.newString || '');
+        const replaceAll = safeArgs.replace_all === true;
 
         if (!fileContent.includes(oldStr)) {
           return {
@@ -138,7 +169,25 @@ export async function executeTool(
           };
         }
 
-        const newContent = fileContent.replace(oldStr, newStr);
+        // Count occurrences — if multiple and replace_all not set, return error
+        if (!replaceAll) {
+          let count = 0;
+          let idx = 0;
+          while ((idx = fileContent.indexOf(oldStr, idx)) !== -1) {
+            count++;
+            idx += oldStr.length;
+          }
+          if (count > 1) {
+            return {
+              success: false,
+              error: `Found ${count} matches for the given text. Use replace_all: true to replace all, or file_multi_edit to handle each occurrence separately.`,
+            };
+          }
+        }
+
+        const newContent = replaceAll
+          ? fileContent.split(oldStr).join(newStr)
+          : fileContent.replace(oldStr, newStr);
         const diff = generateEditDiff(oldStr, newStr);
 
         await fs.writeFile(editPath, newContent, 'utf-8');
@@ -147,9 +196,11 @@ export async function executeTool(
         const syntaxResult = await runSyntaxCheck(editPath);
         const syntaxWarning = formatSyntaxResult(syntaxResult, editPath);
 
+        const occurrenceNote = replaceAll ? ` (${fileContent.split(oldStr).length - 1} occurrences)` : '';
+
         return {
           success: true,
-          output: `Edited ${editPath}${syntaxWarning}`,
+          output: `Edited ${editPath}${occurrenceNote}${syntaxWarning}`,
           diff,
           syntaxErrors: syntaxResult.hasErrors ? syntaxResult.errors : undefined,
         };
@@ -167,12 +218,31 @@ export async function executeTool(
         for (const edit of edits) {
           const oldStr = String(edit.oldString || '');
           const newStr = String(edit.newString || '');
+          const edReplaceAll = edit.replace_all === true;
 
           if (!newContent.includes(oldStr)) {
             return { success: false, error: `Text not found: "${oldStr.slice(0, 30)}..."` };
           }
 
-          newContent = newContent.replace(oldStr, newStr);
+          // Count occurrences for multi-match detection
+          if (!edReplaceAll) {
+            let count = 0;
+            let idx = 0;
+            while ((idx = newContent.indexOf(oldStr, idx)) !== -1) {
+              count++;
+              idx += oldStr.length;
+            }
+            if (count > 1) {
+              return {
+                success: false,
+                error: `Found ${count} matches for "${oldStr.slice(0, 30)}...". Use replace_all: true in this edit, or split into separate edits.`,
+              };
+            }
+          }
+
+          newContent = edReplaceAll
+            ? newContent.split(oldStr).join(newStr)
+            : newContent.replace(oldStr, newStr);
           diffs.push(generateEditDiff(oldStr, newStr));
           editCount++;
         }
@@ -387,7 +457,7 @@ export async function executeTool(
       }
 
       case 'file_exists':
-        return await executeFileExists(safeArgs);
+        return await withCache(() => executeFileExists(safeArgs));
 
       case 'file_delete':
         return await executeFileDelete(safeArgs);
@@ -402,13 +472,13 @@ export async function executeTool(
         return await executeDirectoryCreate(safeArgs);
 
       case 'directory_list':
-        return await executeDirectoryList(safeArgs);
+        return await withCache(() => executeDirectoryList(safeArgs));
 
       case 'glob':
-        return await executeGlob(safeArgs);
+        return await withCache(() => executeGlob(safeArgs));
 
       case 'grep':
-        return await executeGrep(safeArgs);
+        return await withCache(() => executeGrep(safeArgs));
 
       case 'bash':
         return await executeBash(safeArgs, eventCallback);

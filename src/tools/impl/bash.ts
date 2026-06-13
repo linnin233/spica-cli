@@ -2,6 +2,7 @@ import fs from 'fs-extra';
 import { execa } from 'execa';
 import { resolve as pathResolve } from 'path';
 import { getBashPath, getBashOrFallback } from '../../utils/platform';
+import { prepareSandbox } from '../sandbox';
 import {
   isWindows,
   WORKSPACE,
@@ -107,6 +108,19 @@ export async function executeBash(
       );
     }
 
+    // Sandbox: wrap command in bwrap if sandbox:true
+    const useSandbox = safeArgs.sandbox === true;
+    let sandboxWarning: string | undefined;
+    if (useSandbox && !detached && !interactive) {
+      const sandboxResult = await prepareSandbox(command, true, WORKSPACE);
+      if (sandboxResult.sandboxed) {
+        // Will execute inside bwrap — replace command
+        safeArgs._sandboxedCommand = sandboxResult.command;
+      } else if (sandboxResult.warning) {
+        sandboxWarning = sandboxResult.warning;
+      }
+    }
+
     // 分离模式：使用 tmux 运行（用户可 attach 查看）
     if (detached) {
       if (isWindows) {
@@ -161,7 +175,8 @@ Write-Output $proc.Id;
       };
     }
 
-    const actualCommand = command;
+    // Use sandboxed command if sandbox was applied
+    const actualCommand = safeArgs._sandboxedCommand || command;
 
     // 在 Windows 上优先使用 Git Bash（支持 head/grep/管道等 Unix 命令）
     const bashShellInfo = getBashOrFallback();
@@ -275,9 +290,12 @@ Write-Output $proc.Id;
         };
       }
 
+      const sandboxNote = sandboxWarning ? `\n⚠ ${sandboxWarning}` : '';
+      const sandboxTag = useSandbox && !sandboxWarning ? ' [sandboxed]' : '';
+
       return {
         success: bashResult.exitCode === 0,
-        output: bashResult.exitCode === 0 ? output : undefined,
+        output: bashResult.exitCode === 0 ? output + sandboxNote + sandboxTag : undefined,
         error: bashResult.exitCode !== 0 ? output : undefined,
       };
     } catch (bashError: any) {

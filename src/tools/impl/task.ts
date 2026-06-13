@@ -1,4 +1,7 @@
-import { SubAgentTask, getSubAgentConfig, summarizeResult, type SubAgentResult } from '../subAgent';
+import { execa } from 'execa';
+import fs from 'fs-extra';
+import { join } from 'path';
+import { SubAgentTask, getSubAgentConfig, computeTimeout, summarizeResult, type SubAgentResult } from '../subAgent';
 import { WORKSPACE } from '../helpers';
 import type { ToolResult, ToolEventCallback } from '../helpers';
 
@@ -9,6 +12,101 @@ interface TaskResult {
   error?: string;
 }
 
+// ── Worktree isolation helpers ────────────────────────────────────────────
+
+interface WorktreeHandle {
+  worktreePath: string;
+  branchName: string;
+}
+
+/** Create a git worktree for isolated sub-agent work. Returns null on failure. */
+async function createWorktree(basePath: string, taskIndex: number): Promise<WorktreeHandle | null> {
+  const suffix = `${Date.now().toString(36)}`;
+  const branchName = `spica-wt-${taskIndex}-${suffix}`;
+  const worktreePath = join(basePath, '.spica', 'worktrees', branchName);
+
+  try {
+    // Ensure we're in a git repo
+    await execa('git', ['rev-parse', '--git-dir'], { cwd: basePath, timeout: 5000, reject: true });
+
+    // Create the worktree
+    await fs.ensureDir(join(basePath, '.spica', 'worktrees'));
+    await execa('git', ['worktree', 'add', worktreePath, '-b', branchName], {
+      cwd: basePath,
+      timeout: 10000,
+      reject: true,
+    });
+
+    return { worktreePath, branchName };
+  } catch {
+    // Not a git repo, or worktree creation failed — fall back to normal mode
+    return null;
+  }
+}
+
+/** Check if a worktree has uncommitted changes and commit them. */
+async function commitWorktreeChanges(
+  basePath: string,
+  handle: WorktreeHandle,
+  taskLabel: string
+): Promise<boolean> {
+  try {
+    const status = await execa('git', ['status', '--porcelain'], {
+      cwd: handle.worktreePath,
+      timeout: 5000,
+      reject: false,
+    });
+
+    if (!status.stdout.trim()) return false; // No changes
+
+    await execa('git', ['add', '-A'], { cwd: handle.worktreePath, timeout: 5000 });
+    await execa('git', ['commit', '-m', `subagent(${taskLabel}): isolated worktree changes`], {
+      cwd: handle.worktreePath,
+      timeout: 10000,
+      reject: false,
+    });
+
+    // Merge back to the original branch
+    const originalBranch = await execa('git', ['branch', '--show-current'], {
+      cwd: basePath,
+      timeout: 5000,
+      reject: false,
+    });
+    if (originalBranch.stdout.trim()) {
+      await execa('git', ['merge', '--no-ff', handle.branchName, '-m',
+        `merge: subagent changes from ${handle.branchName}`], {
+        cwd: basePath,
+        timeout: 15000,
+        reject: false,
+      });
+    }
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Remove a worktree and its branch. */
+async function cleanupWorktree(basePath: string, handle: WorktreeHandle): Promise<void> {
+  try {
+    // Remove the worktree directory
+    await execa('git', ['worktree', 'remove', handle.worktreePath, '--force'], {
+      cwd: basePath,
+      timeout: 10000,
+      reject: false,
+    });
+    // Delete the branch
+    await execa('git', ['branch', '-D', handle.branchName], {
+      cwd: basePath,
+      timeout: 5000,
+      reject: false,
+    });
+  } catch {
+    // Best-effort cleanup — if it fails, the worktree stays on disk
+  }
+}
+
 export async function executeTask(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Tool arguments are dynamic
   args: Record<string, any>,
@@ -17,11 +115,11 @@ export async function executeTask(
   const tasks = args.tasks as SubAgentTask[];
   const externalSignal = args._abortSignal as AbortSignal | undefined;
 
-  // 限制最多3个并行任务
+  // Limit: max 3 parallel tasks
   if (tasks.length > 3) {
     return {
       success: false,
-      error: '最多支持3个并行任务。请将任务拆分为多次调用。',
+      error: 'Maximum 3 parallel sub-agents supported. Split your tasks into multiple task() calls.',
     };
   }
 
@@ -96,7 +194,25 @@ export async function executeTask(
           return { status: 'BLOCKED', taskLabel, error: 'Early exit — sibling subagent already solved the task' };
         }
 
-        const taskAgent = new SpicaAgent(undefined, WORKSPACE);
+        // Worktree isolation: create an isolated git worktree for this sub-agent.
+        // Prevents file conflicts between parallel fix/build sub-agents.
+        let worktree: WorktreeHandle | null = null;
+        const useIsolation = task.isolation === 'worktree';
+        const taskWorkspace = WORKSPACE;
+
+        if (useIsolation) {
+          worktree = await createWorktree(taskWorkspace, i);
+          if (worktree && eventCallback) {
+            eventCallback('sub_agent_warning', {
+              message: `Isolated worktree: ${worktree.worktreePath}`,
+            });
+          }
+        }
+
+        const taskAgent = new SpicaAgent(
+          undefined,
+          worktree?.worktreePath || taskWorkspace
+        );
 
         // 设置工具白名单（限制subagent权限，避免context pollution）
         if (config.allowedTools !== '*') {
@@ -135,12 +251,15 @@ export async function executeTask(
         taskAgent.on('reasoning', reasoningHandler);
         taskAgent.on('stream', streamHandler);
 
-        // 创建超时 AbortController
+        // 创建超时 AbortController — 使用自适应超时
+        const adaptiveTimeout = task.type
+          ? computeTimeout(task.type, task.prompt.length)
+          : config.timeout;
         const timeoutController = new AbortController();
         const timeoutId = setTimeout(() => {
           timeoutController.abort();
           taskAgent.interrupt();
-        }, config.timeout);
+        }, adaptiveTimeout);
 
         // 监听外部中断信号（父 agent 中断）和 sibling early-exit
         let abortHandler: (() => void) | null = null;
@@ -222,6 +341,16 @@ export async function executeTask(
           }
           taskAgent.dispose();
 
+          // Worktree cleanup: commit changes and merge back
+          if (worktree) {
+            try {
+              await commitWorktreeChanges(taskWorkspace, worktree, taskLabel);
+            } catch {
+              // Non-fatal — changes stay in the worktree
+            }
+            await cleanupWorktree(taskWorkspace, worktree);
+          }
+
           // Truncate raw result before summarization
           const MAX_RAW_RESULT = 3000;
           const truncatedResult =
@@ -234,8 +363,9 @@ export async function executeTask(
           if (!earlyExitTriggered && tasks.length > 1) {
             const definitiveMarkers = [
               /✓/,
-              /成功/,
-              /完成/,
+              /success/i,
+              /done/i,
+              /complete/i,
               /fixed/i,
               /resolved/i,
               /implemented/i,
@@ -259,7 +389,7 @@ export async function executeTask(
 
           // Determine status: DONE or DONE_WITH_CONCERNS
           const hasConcerns =
-            /however|but|note:|warning|concern|注意|但是|不过|警告/i.test(summary);
+            /however|but|note:|warning|concern/i.test(summary);
           const status = hasConcerns ? 'DONE_WITH_CONCERNS' : 'DONE';
 
           if (eventCallback) {
@@ -283,6 +413,11 @@ export async function executeTask(
           }
           taskAgent.interrupt();
           taskAgent.dispose();
+
+          // Clean up worktree on error (don't merge — changes may be broken)
+          if (worktree) {
+            await cleanupWorktree(taskWorkspace, worktree);
+          }
 
           lastError = String(err.message || err || 'Unknown error');
 

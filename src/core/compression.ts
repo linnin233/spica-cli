@@ -32,9 +32,9 @@ export async function startNonBlockingCompression(
   targetTokens: number,
   signal?: AbortSignal
 ): Promise<void> {
-  const llm: LLMClient | null = agent['llm'];
+  const llm: LLMClient | null = agent.getLLM();
   if (!llm) return;
-  agent['_compacting'] = true;
+  agent.setCompacting(true);
 
   try {
     const allMessages = llm.getMessages();
@@ -114,15 +114,28 @@ export async function startNonBlockingCompression(
     const selected = [...prefixNonSystem, ...selectedCompressible];
     const oldMessages = nonSystem.filter(m => !selected.includes(m));
 
-    const maxContentLength = Math.max(2000, Math.floor(contextWindow * 0.05));
+    // Per-role adaptive content limits.
+    // Base limit bumped from 2000→4000 (0.05→0.10×window) so important tool output
+    // and file content survive compression.
+    const baseContentLimit = Math.max(4000, Math.floor(contextWindow * 0.10));
+    const getContentLimit = (m: ChatMessage): number => {
+      // User messages are kept in full (user intent is critical, typically short)
+      if (m.role === 'user') return Infinity;
+      // Tool results and assistant-with-toolcalls get extra space — they contain evidence
+      if (m.role === 'tool') return baseContentLimit * 1.5;
+      if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) return baseContentLimit * 1.2;
+      // Plain assistant text gets standard limit
+      return baseContentLimit;
+    };
 
     const truncatedRecent = selected.map(m => {
       // Don't truncate cache-prefix messages — they're needed for cache hits
       if (prefixSet.has(m)) return m;
 
+      const limit = getContentLimit(m);
       const truncatedContent =
-        (m.content || '').length > maxContentLength
-          ? (m.content || '').slice(0, maxContentLength) + '...[truncated]'
+        (m.content || '').length > limit
+          ? (m.content || '').slice(0, limit) + '...[truncated]'
           : m.content;
 
       const maxToolCalls = Math.max(3, Math.min(10, Math.floor(contextWindow / 25000)));
@@ -156,7 +169,7 @@ export async function startNonBlockingCompression(
     // summary synchronously. The LLM needs this context on the CURRENT request,
     // not the next one — otherwise it works with severely truncated context.
     if (oldMessages.length > selectedCompressible.length) {
-      agent['_compacting'] = false;
+      agent.setCompacting(false);
       try {
         const summaryMsg = await generateSummary(llm, oldMessages, signal);
         if (summaryMsg.content && summaryMsg.content.trim()) {
@@ -168,7 +181,7 @@ export async function startNonBlockingCompression(
       } catch {
         // Fall through — summary is best-effort
       } finally {
-        agent['_compacting'] = true;
+        agent.setCompacting(true);
       }
       return;
     }
@@ -176,25 +189,25 @@ export async function startNonBlockingCompression(
     // Light drop: summary runs in background for next request.
     // Guard: if a previous Phase 2 is still running, skip — don't orphan
     // its promise (which would discard its result when overwritten).
-    if (agent['_pendingCompression']) {
-      agent['_compacting'] = false;
+    if (agent.getPendingCompression()) {
+      agent.setCompacting(false);
       return;
     }
 
-    agent['_pendingCompression'] = (async () => {
+    agent.setPendingCompression((async () => {
       try {
         const summaryMsg = await generateSummary(llm, oldMessages, signal);
         if (summaryMsg.content && summaryMsg.content.trim()) {
-          agent['_deferredSummary'] = summaryMsg;
+          agent.setDeferredSummary(summaryMsg);
         }
       } catch {
         // generateSummary has its own fallback and shouldn't throw, but guard anyway
-        agent['_deferredSummary'] = null;
+        agent.setDeferredSummary(null);
       }
-      agent['_pendingCompression'] = null;
-    })();
+      agent.setPendingCompression(null);
+    })());
   } finally {
-    agent['_compacting'] = false;
+    agent.setCompacting(false);
   }
 }
 
@@ -204,14 +217,14 @@ export async function startNonBlockingCompression(
  * the previous request's background compression.
  */
 export function applyPendingSummary(agent: SpicaAgent): void {
-  const llm: LLMClient | null = agent['llm'];
+  const llm: LLMClient | null = agent.getLLM();
   if (!llm) return;
 
   // Atomically read and clear both fields to prevent race with
   // background Phase 2 completion between check and use.
-  const deferredSummary: ChatMessage | null = agent['_deferredSummary'];
-  const pendingCompression = agent['_pendingCompression'];
-  agent['_deferredSummary'] = null;
+  const deferredSummary: ChatMessage | null = agent.getDeferredSummary();
+  const pendingCompression = agent.getPendingCompression();
+  agent.setDeferredSummary(null);
 
   if (!deferredSummary) return;
 
@@ -219,7 +232,7 @@ export function applyPendingSummary(agent: SpicaAgent): void {
   if (pendingCompression) {
     // Still in progress — restore for next request.
     // Don't block the current request.
-    agent['_deferredSummary'] = deferredSummary;
+    agent.setDeferredSummary(deferredSummary);
     return;
   }
 

@@ -525,7 +525,7 @@ export async function runInteractiveMode(
                 tokenCounter.setContextWindow(provider.getContextWindow());
               }
               const usedTokens = tokenCounter.estimateMessages(
-                agent.getMessages(),
+                agent.getContextMessages(),
               );
               const contextWindow = provider?.getContextWindow() || 128000;
               const usagePercent = (usedTokens / contextWindow) * 100;

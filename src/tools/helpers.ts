@@ -18,7 +18,7 @@ export function getWorkspace(): string {
 }
 
 // Active monitors (used by monitor + task_stop)
-export let activeMonitors: Map<
+export const activeMonitors: Map<
   string,
   { process: any; command: string; description: string; startTime: number }
 > = new Map();
@@ -510,7 +510,7 @@ export function applyUnifiedPatch(original: string, patchText: string): PatchRes
   const originalLines = original.split('\n');
   const patchLines = patchText.split('\n');
 
-  let result: string[] = [];
+  const result: string[] = [];
   let lineIdx = 0;
 
   for (let i = 0; i < patchLines.length; i++) {

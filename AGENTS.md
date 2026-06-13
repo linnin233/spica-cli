@@ -29,7 +29,7 @@ spica-cli is an AI coding agent CLI with interactive and single-task modes. It s
 - `src/utils/` — Settings, project config, session, history, platform, message cleaner, logger, bell
 - `src/builtin-skills/superpowers/` — 14 built-in skills
 
-**Stats:** ~87 source files, 62 test files (~149 git tracked `.ts` files)
+**Stats:** 81 source files, 67 test files (160 git tracked `.ts` files)
 
 ## Existing Instruction Files
 
@@ -69,7 +69,7 @@ npm run test:run -- --coverage    # Run with coverage (requires @vitest/coverage
 
 **Test environment:** vitest 1.6, `environment: 'node'`, `globals: true` (no need to import `describe`/`it`/`expect`). Config in `vitest.config.ts`.
 
-**Coverage:** Uses v8 provider. Coverage excludes `src/builtin-skills/`.
+**Coverage:** Uses v8 provider (`@vitest/coverage-v8` — must install separately: `npm install @vitest/coverage-v8`). Coverage excludes `src/builtin-skills/`.
 
 **Known flaky tests:**
 - `src/cli/ui/__tests__/tuiPty.test.ts` — PTY tests (14 tests): `node-pty` Windows agent unavailable for `npx tsx` (Windows only)
@@ -85,7 +85,7 @@ CI (ubuntu) typically passes all tests, but session and boundary tests may fail 
 ## Lint
 
 ```bash
-npm run lint         # Run ESLint on src/**/*.ts (0 errors, ~91 warnings)
+npm run lint         # Run ESLint on src/**/*.ts (0 errors, ~99 warnings)
 npm run lint:fix     # Auto-fix lint issues (~3 warnings fixable)
 npm run lint:strict  # Fail on warnings (--max-warnings 0, not used in CI)
 ```

@@ -144,7 +144,7 @@ program
     const agent = new SpicaAgent(providerName, process.cwd());
     state.setAgent(agent);
 
-    setupAgentEvents(agent, false);
+    const cleanupEvents = setupAgentEvents(agent, false);
 
     try {
       await agent.init();
@@ -157,6 +157,9 @@ program
         console.log(COLORS.error(`Error: ${errorMsg}`));
       }
       playBell("error");
+    } finally {
+      cleanupEvents();
+      agent.dispose();
     }
 
     state.setAgent(null);

@@ -4,6 +4,7 @@ import { COLORS } from './ui/colors';
 import { TokenCounter } from '../llm/TokenCounter';
 import { getRuntimeState } from '../core/RuntimeState';
 import { execSync } from 'child_process';
+import { getAllToolDefinitions } from '../tools/index';
 import {
   getTerminalWidth,
   truncateToWidth,
@@ -699,20 +700,44 @@ export function setupAgentEvents(
 }
 
 // 格式化运行统计
+// Uses the LLM provider's actual message list (which includes system prompts)
+// rather than _fullHistory (which is append-only for session persistence).
+// Tool definitions are sent as a separate 'tools' parameter and estimated separately.
 export function formatRunStats(
   elapsedMs: number,
   agent: SpicaAgent,
   tokenCounter: TokenCounter
 ): string {
-  const messages = agent.getMessages();
-  const usedTokens = tokenCounter.estimateMessages(messages);
+  // Use provider messages — the actual context sent to the API (includes system prompts)
+  const contextMessages = agent.getContextMessages();
+  const msgTokens = tokenCounter.estimateMessages(contextMessages);
   const contextWindow = tokenCounter.getContextWindow();
 
-  const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant');
+  const lastAssistant = [...contextMessages].reverse().find(m => m.role === 'assistant');
   const outputTokens = lastAssistant ? tokenCounter.estimateMessage(lastAssistant) : 0;
+
+  // Tool definitions are sent as a separate 'tools' parameter in the API request.
+  // Estimate their token cost using the same format the provider sends to the API.
+  let toolDefsTokens = 0;
+  try {
+    const allDefs = getAllToolDefinitions();
+    if (allDefs.length > 0) {
+      const apiJson = JSON.stringify(
+        allDefs.map((t: any) => ({
+          type: 'function',
+          function: { name: t.name, description: t.description, parameters: t.parameters },
+        }))
+      );
+      toolDefsTokens = tokenCounter.estimateTokens(apiJson);
+    }
+  } catch {
+    // If registry fails (e.g. MCP not initialized), skip tool estimation
+  }
+
+  const usedTokens = msgTokens + toolDefsTokens;
   const inputTokens = Math.max(0, usedTokens - outputTokens);
 
-  const toolCallCount = messages.filter(m => m.role === 'tool').length;
+  const toolCallCount = contextMessages.filter(m => m.role === 'tool').length;
 
   const elapsed = elapsedMs < 1000 ? `${elapsedMs}ms` : `${(elapsedMs / 1000).toFixed(1)}s`;
 

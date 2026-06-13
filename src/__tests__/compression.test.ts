@@ -100,18 +100,21 @@ describe('Compression Integration', () => {
       // Find truncated message (should exist due to 5000 char content at end)
       const truncatedMsg = finalMessages.find(m => m.content?.includes('[truncated]'));
       expect(truncatedMsg).toBeDefined();
-      // Window is 1000, so maxContentLength = Math.max(2000, Math.floor(1000 * 0.05)) = 2000
-      const expectedLen = 2000 + '...[truncated]'.length; // 2014
+      // Window is 1000, base limit = Math.max(4000, Math.floor(1000 * 0.10)) = 4000
+      // Assistant with no toolCalls → base limit (4000)
+      const expectedLen = 4000 + '...[truncated]'.length; // 4014
       expect(truncatedMsg!.content!.length).toBe(expectedLen);
     });
 
     it('should truncate multiple long messages when they are in recentMessages', async () => {
-      // Long messages at the END to ensure they're in recentMessages
+      // Long messages at the END to ensure they're in recentMessages.
+      // User messages are never truncated (limit = Infinity), so only the
+      // assistant message with >4000 chars will be truncated.
       testMessages = [
         { role: 'user', content: 'X'.repeat(400) },
         { role: 'assistant', content: 'Y'.repeat(400) },
-        { role: 'user', content: 'Z'.repeat(3000) }, // Will be truncated
-        { role: 'assistant', content: 'W'.repeat(4000) }, // Will be truncated
+        { role: 'user', content: 'Z'.repeat(3000) }, // User → not truncated (Infinity limit)
+        { role: 'assistant', content: 'W'.repeat(5000) }, // Assistant → truncated at 4000
       ];
 
       await agent.compact();
