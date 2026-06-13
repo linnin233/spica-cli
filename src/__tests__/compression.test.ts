@@ -152,10 +152,16 @@ describe('Compression Integration', () => {
 
       await agent.compact();
 
-      const finalMessages = mockLLM.setMessages.mock.calls[0][0];
+      // Check the last setMessages call (applyPendingSummary may add the summary
+      // after Phase 1 truncation)
+      const allCalls = mockLLM.setMessages.mock.calls;
+      const finalMessages = allCalls[allCalls.length - 1][0];
       // Compact应该减少消息数量并生成summary
       expect(finalMessages.length).toBeGreaterThan(0);
-      expect(finalMessages[0].content).toContain('[COMPACTED CONTEXT');
+      const hasContext = finalMessages.some(
+        (m: { content?: string }) => m.content?.includes('[COMPACTED CONTEXT')
+      );
+      expect(hasContext).toBe(true);
       // 由于context window很小（1000），compact可能移除大部分消息
       // 只验证不会崩溃和产生有效消息
     });
@@ -191,11 +197,13 @@ describe('Compression Integration', () => {
 
       // Compression should succeed and produce a result
       expect(mockLLM.setMessages).toHaveBeenCalled();
-      const finalMessages = mockLLM.setMessages.mock.calls[0][0];
+      const allCalls = mockLLM.setMessages.mock.calls;
+      const finalMessages = allCalls[allCalls.length - 1][0];
       expect(finalMessages.length).toBeGreaterThan(0);
       // System prompt or summary should be present
       const hasSummaryOrSystem = finalMessages.some(
-        m => m.content?.includes('[COMPACTED CONTEXT') || m.role === 'system'
+        (m: { content?: string; role: string }) =>
+          m.content?.includes('[COMPACTED CONTEXT') || m.role === 'system'
       );
       expect(hasSummaryOrSystem).toBe(true);
     });

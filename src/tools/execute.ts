@@ -198,7 +198,7 @@ export async function executeTool(
 
         const originalContent = await fs.readFile(patchPath, 'utf-8');
 
-        // 备份旧文件
+        // Backup original file before patching
         try {
           const backupDir = join(WORKSPACE, '.spica', 'backups');
           await fs.ensureDir(backupDir);
@@ -206,8 +206,8 @@ export async function executeTool(
           const safeName = safeArgs.path.replace(/[/\\]/g, '_');
           const backupPath = join(backupDir, `${timestamp}-${safeName}`);
           await fs.writeFile(backupPath, originalContent, 'utf-8');
-        } catch {
-          /* 新文件无需备份 */
+        } catch (backupErr) {
+          // Non-fatal: continue without backup
         }
 
         const patchResult = applyUnifiedPatch(originalContent, patchText);

@@ -240,6 +240,9 @@ ${parts.join('\n')}`;
     const sessionPath = join(sessionsDir, `${session.id}.json`);
     fs.writeJsonSync(sessionPath, session, { spaces: 2 });
 
+    // Clean up old sessions (keep max 50 recent)
+    cleanupOldSessions(sessionsDir, 50);
+
     return summary;
   } catch {
     return '';

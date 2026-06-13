@@ -1226,6 +1226,8 @@ export class SpicaAgent extends EventEmitter {
 
               // 不清理 tool messages，保留完整历史
               // cleanMessages 会在下次 generate 时处理不完整序列
+              // Sync provider-added messages (tool results, partial assistant response) to full history
+              this.syncFullHistory();
 
               const resultsSummary = toolResults
                 .map(t => `${t.name}: ${t.result.slice(0, 100)}`)

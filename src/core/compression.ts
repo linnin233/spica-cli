@@ -173,7 +173,13 @@ export async function startNonBlockingCompression(
       return;
     }
 
-    // Light drop: summary runs in background for next request
+    // Light drop: summary runs in background for next request.
+    // Guard: if a previous Phase 2 is still running, skip — don't orphan
+    // its promise (which would discard its result when overwritten).
+    if (agent['_pendingCompression']) {
+      agent['_compacting'] = false;
+      return;
+    }
 
     agent['_pendingCompression'] = (async () => {
       try {
@@ -198,25 +204,35 @@ export async function startNonBlockingCompression(
  * the previous request's background compression.
  */
 export function applyPendingSummary(agent: SpicaAgent): void {
-  const deferredSummary: ChatMessage | null = agent['_deferredSummary'];
   const llm: LLMClient | null = agent['llm'];
-  if (!deferredSummary || !llm) return;
+  if (!llm) return;
+
+  // Atomically read and clear both fields to prevent race with
+  // background Phase 2 completion between check and use.
+  const deferredSummary: ChatMessage | null = agent['_deferredSummary'];
+  const pendingCompression = agent['_pendingCompression'];
+  agent['_deferredSummary'] = null;
+
+  if (!deferredSummary) return;
 
   // Wait for in-flight compression if still running
-  if (agent['_pendingCompression']) {
-    // Still in progress — we'll catch it next time.
+  if (pendingCompression) {
+    // Still in progress — restore for next request.
     // Don't block the current request.
+    agent['_deferredSummary'] = deferredSummary;
     return;
   }
 
   const messages = llm.getMessages();
-  const summary = deferredSummary;
-  agent['_deferredSummary'] = null;
 
   // Insert after system messages, before conversation
   const sysCount = messages.filter(m => m.role === 'system').length;
-  messages.splice(sysCount, 0, summary);
-  llm.setMessages(messages);
+  const newMessages = [
+    ...messages.slice(0, sysCount),
+    deferredSummary,
+    ...messages.slice(sysCount),
+  ];
+  llm.setMessages(newMessages);
 
   // Note: no 'context_compressed' emit here — Phase 1 truncation already reported
   // the actual compression. Summary insertion is an internal detail (+1 message).
