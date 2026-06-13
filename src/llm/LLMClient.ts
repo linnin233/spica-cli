@@ -227,7 +227,7 @@ export class LLMClient extends EventEmitter {
   }
 
   async continueWithAllToolResults(
-    toolResults: Array<{ name: string; result: string; id?: string }>,
+    toolResults: Array<{ name: string; result: string; id?: string; noTruncate?: boolean }>,
     tools?: ToolDefinition[],
     postToolMessages?: ChatMessage[],
     externalSignal?: AbortSignal
@@ -236,9 +236,11 @@ export class LLMClient extends EventEmitter {
     const lastMessage = this.provider.getMessages()[this.provider.getMessages().length - 1];
 
     // 1. 先添加所有 tool 结果消息（确保紧跟在 assistant tool_calls 后）
-    for (const { name, result, id } of toolResults) {
+    for (const { name, result, id, noTruncate } of toolResults) {
       const toolCallId = id || lastMessage.toolCalls?.find(tc => tc.name === name)?.id || '';
-      this.provider.addToolMessage(toolCallId, result);
+      // Skill tools must not be truncated — incomplete instructions break agent behavior
+      const skipTruncate = noTruncate || name === 'skill';
+      this.provider.addToolMessage(toolCallId, result, skipTruncate);
     }
 
     // 2. 再添加 post-tool 消息（如 REQUIRED_SKILL）

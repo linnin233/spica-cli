@@ -495,12 +495,12 @@ export class OpenAICompatibleProvider extends BaseProvider {
   }
 
   // 添加tool结果消息
-  addToolMessage(toolCallId: string, result: string): void {
+  addToolMessage(toolCallId: string, result: string, noTruncate?: boolean): void {
     const exists = this.messages.some(m => m.role === 'tool' && m.toolCallId === toolCallId);
     if (exists) return;
 
     let trimmedResult = result;
-    if (result.length > this.toolResultMaxChars) {
+    if (!noTruncate && result.length > this.toolResultMaxChars) {
       const truncated = result.slice(0, this.toolResultMaxChars);
       const omitted = result.length - this.toolResultMaxChars;
       trimmedResult =
