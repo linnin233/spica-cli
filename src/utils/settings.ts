@@ -363,6 +363,7 @@ export async function getProviderConfig(providerName?: string): Promise<Provider
     apiKey,
     baseUrl,
     model,
+    models: fileConfig?.models,
     description: fileConfig?.description,
   };
 }
