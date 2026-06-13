@@ -1,0 +1,148 @@
+graph TB
+    %% ═══════════════════════════════════════════════════════
+    %% spica-cli 架构图（代码审计后生成）
+    %% 事件：32 emit, 31 listen. 工具: 33. .spica/: 11 路径.
+    %% ═══════════════════════════════════════════════════════
+
+    %% ==================== 展示层 ====================
+    subgraph PRES["🎨 展示层 Presentation"]
+        direction TB
+        TUI["<b>TUI 模式</b><br/>全屏终端<br/>screenManager / scrollback<br/>状态栏 / thinking 动画"]
+        SIMPLE["<b>简单模式</b><br/>--no-tui / 非 TTY<br/>readline / 纯文本输出"]
+        CMD["<b>斜杠命令 (25 个)</b><br/>/help /init /history /summary<br/>/compact /archive /view /rename<br/>/delete /clear /reset /new<br/>/checkpoint list|show|restore|clean<br/>/skill list|install|uninstall<br/>/mcp status|init|tools|disconnect<br/>/queue /q /undo /status"]
+        IQ["<b>输入队列</b><br/>最多 50 条 / 处理期间缓冲<br/>/queue 查看 / /undo 撤销<br/>处理完成后自动排空"]
+        UI["<b>UI 组件</b><br/>diff 渲染 / spinner<br/>流式输出 / bracketed paste"]
+    end
+
+    %% ==================== 应用层 ====================
+    subgraph APP["⚙️ 应用层 Application"]
+        direction TB
+        AGENT["<b>SpicaAgent</b> (src/agent.ts)<br/>EventEmitter 编排器<br/>processInput / executeTools<br/>_fullHistory (追加写入)<br/>工具冲突检测<br/>消息自动清理<br/>危险命令扫描"]
+
+        GATE["<b>Skill Gate</b> (src/cli/skillGate.ts)<br/>自动触发判定分类<br/>路径匹配 / 工具白名单"]
+
+        EVENTS["<b>事件总线 (32 事件)</b><br/><br/>▸ stream / reasoning / message<br/>▸ tool_call / tool_result<br/>▸ agent_interrupted / agent_stopped_on_error<br/>▸ context_compressed / context_warning<br/>▸ sub_agent_start/done/error<br/>▸ sub_agent_tool_call/tool_result<br/>▸ sub_agent_message/reasoning<br/>▸ monitor_event / monitor_error<br/>▸ hook_blocked / hook_warning / hook_log<br/>▸ diff_preview / workspace_changed<br/>▸ todos_set / todo_update<br/>▸ tool_aborted / tool_stuck_warning<br/>▸ queue_injected / empty_input<br/>▸ token_usage / waiting_for_llm<br/>▸ connection_error / retry_attempt<br/>▸ error_suggestion / checkpoint_*<br/>▸ initialized / projectLoaded/Created"]
+
+        INTR["<b>中断处理</b><br/>AbortController 每请求独立<br/>cancelSeq 高水位标记<br/>SIGKILL 杀进程组<br/>ESC×2 触发 / 200ms 去抖<br/>保留工具结果不丢失"]
+
+        SESSION["<b>会话 & 归档</b><br/>两态模型<br/>活跃 → session.json<br/>历史 → sessions/&lt;id&gt;.json<br/>归档时 LLM 生成摘要<br/>saveSession / archiveSession"]
+
+        SUB["<b>子代理 (7 事件)</b><br/>explore (只读 / 30s)<br/>review (+lint / 60s)<br/>fix (+edit / 120s)<br/>build (全工具 / 180s)<br/>最多 3 并行 / 提前退出信号"]
+
+        PMON["<b>ProcessMonitor</b><br/>PID 追踪 / 进程组强杀<br/>卡死检测 (SIGKILL)<br/>超时管理"]
+
+        LEARN["<b>教训系统</b><br/>.spica/learnings/*.md<br/>按日期命名 (YYYY-MM-DD)<br/>启动时注入系统提示"]
+    end
+
+    %% ==================== 领域层 ====================
+    subgraph DOMAIN["🧠 领域层 Domain"]
+        direction TB
+        LLM["<b>LLMClient</b> (src/llm/LLMClient.ts)<br/>OpenAI 兼容流式接口<br/>temperature=0.3<br/>stream + reasoning 双通道<br/>指数退避重试"]
+
+        PROV["<b>Provider</b> (OpenAICompatible.ts)<br/>单一适配器对接所有 API<br/>可配置 baseUrl + model<br/>OpenAI · DeepSeek · Gemini<br/>Groq · Anthropic 代理 · 本地"]
+
+        TOK["<b>TokenCounter</b> (tiktoken)<br/>真实 tokenizer 非估算<br/>上下文窗口管理<br/>60% 触发压缩"]
+
+        TOOLS["<b>33 工具 (registry.ts)</b><br/><br/>📁 <b>文件 (11)</b>: read write edit<br/>  file_multi_edit file_replace<br/>  file_insert file_delete file_copy<br/>  file_move file_exists file_patch<br/>🔍 <b>搜索 (4)</b>: glob grep<br/>  directory_list directory_create<br/>💻 <b>Shell (5)</b>: bash monitor<br/>  task_stop git workspace<br/>✅ <b>质量 (5)</b>: lint test format<br/>  code_health test_quality_check<br/>🌐 <b>Web (3)</b>: web_search<br/>  web_fetch gh<br/>📋 <b>任务 (5)</b>: todo_write todo_read<br/>  task skill question"]
+
+        MCP["<b>MCP 客户端</b><br/>@modelcontextprotocol/sdk<br/>外部工具服务器<br/>内置: playwright"]
+
+        HOOKS["<b>Hooks 系统</b><br/>PreToolUse / PostToolUse<br/>动作: block · confirm · warn · log<br/>全局 + 项目双层级<br/>项目 ≤ 全局严格度"]
+
+        SKILLS["<b>14 内置技能</b><br/>brainstorming · systematic-debugging<br/>test-driven-development · verification<br/>executing-plans · writing-plans<br/>dispatching-parallel-agents<br/>subagent-driven-development<br/>requesting-code-review · receiving<br/>finishing-a-development-branch<br/>using-git-worktrees · writing-skills<br/>using-superpowers"]
+    end
+
+    %% ==================== 基础设施层 ====================
+    subgraph INFRA["💾 基础设施层 Infrastructure"]
+        direction TB
+        GLOBAL["<b>~/.spica/settings.json</b><br/>providers · MCP · skills · hooks<br/>单文件 / 嵌套 section<br/>chmod 600 / .gitignore 保护"]
+
+        ACTIVE["<b>.spica/session.json</b><br/>活跃会话<br/>追加写入 _fullHistory<br/>压缩不截断历史"]
+
+        HIST["<b>.spica/sessions/&lt;id&gt;.json</b><br/>历史会话<br/>每次归档一份<br/>LLM 或本地摘要"]
+
+        STATE["<b>.spica/state.json</b><br/>项目状态<br/>todos / decisions / checkpoints"]
+
+        TASKS["<b>.spica/tasks.json</b><br/>持久化任务列表<br/>启动时自动恢复"]
+
+        LEARNINGS["<b>.spica/learnings/</b><br/>YYYY-MM-DD-topic.md<br/>用户纠正持久化<br/>启动时注入系统提示"]
+
+        SNAPS["<b>.spica/snapshots/</b><br/>checkpoint 文件快照<br/>仅 git-tracked 变更文件<br/>不污染 git / 自动清理(保留20)"]
+
+        CHKJSON["<b>.spica/checkpoints.json</b><br/>checkpoint 元数据索引<br/>id / 时间戳 / 文件 / 预览"]
+
+        BACKUPS["<b>.spica/backups/</b><br/>write/edit 时自动创建<br/>带时间戳单文件备份"]
+
+        PSKILLS["<b>.spica/skills.json<br/>.spica/skills/</b><br/>项目级技能覆盖<br/>SKILL.md 目录格式"]
+
+        PHOOKS["<b>.spica/hooks.json</b><br/>项目级 hooks 覆盖<br/>严格度须 ≥ 全局"]
+    end
+
+    %% ==================== 数据流 ====================
+
+    %% 用户 → UI → 队列 → Agent
+    TUI --> IQ
+    SIMPLE --> IQ
+    CMD --> AGENT
+    IQ --> AGENT
+
+    %% Agent ↔ LLM
+    AGENT <--> LLM
+    PROV --> LLM
+    TOK --> LLM
+    LLM --> AGENT
+
+    %% Agent → 工具 → 回
+    AGENT --> TOOLS
+    MCP --> TOOLS
+    TOOLS --> AGENT
+
+    %% Agent → 事件 → UI
+    AGENT --> EVENTS
+    EVENTS --> UI
+
+    %% 中断
+    INTR --> AGENT
+
+    %% 会话流
+    AGENT --> SESSION
+    SESSION --> ACTIVE
+    ACTIVE --> HIST
+
+    %% 子代理
+    AGENT --> SUB
+    SUB --> AGENT
+
+    %% 进程监控
+    AGENT --> PMON
+
+    %% 教训 → 系统提示
+    LEARN --> AGENT
+
+    %% Skill Gate
+    GATE --> AGENT
+
+    %% Hooks + Skills
+    HOOKS --> AGENT
+    HOOKS --> TOOLS
+    SKILLS --> AGENT
+    SKILLS --> TOOLS
+
+    %% 基础设施依赖
+    GLOBAL --> LLM
+    GLOBAL --> PROV
+    AGENT --> STATE
+    AGENT --> TASKS
+    SESSION --> HIST
+    LEARN --> LEARNINGS
+
+    %% Checkpoint
+    AGENT --> SNAPS
+    SNAPS --> CHKJSON
+
+    %% 备份
+    TOOLS --> BACKUPS
+
+    %% 项目配置
+    PSKILLS --> SKILLS
+    PHOOKS --> HOOKS

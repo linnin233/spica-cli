@@ -52,71 +52,102 @@ spica run "fix the bug"                          # 单次任务
 
 ## 架构
 
+> 源码: [docs/architecture_cn.mermaid](docs/architecture_cn.mermaid)。渲染: [docs/architecture_cn.png](docs/architecture_cn.png)
+
 ```mermaid
 graph TB
-    subgraph Presentation["Presentation 层"]
-        TUI["TUI 模式\n全屏终端"]
-        Simple["简单模式\n--no-tui"]
-        Cmds["CLI 命令\n/archive /compact ..."]
-        InputQ["输入队列\n处理期间缓冲"]
-        UIComp["UI 组件\nspinner, diff, scrollback"]
+    subgraph PRES["🎨 展示层 Presentation"]
+        direction TB
+        TUI["<b>TUI 模式</b><br/>全屏终端<br/>screenManager / scrollback<br/>状态栏 / thinking 动画"]
+        SIMPLE["<b>简单模式</b><br/>--no-tui / 非 TTY<br/>readline / 纯文本输出"]
+        CMD["<b>斜杠命令 (25 个)</b><br/>/help /init /history /summary<br/>/compact /archive /view /rename<br/>/delete /clear /reset /new<br/>/checkpoint list|show|restore|clean<br/>/skill list|install|uninstall<br/>/mcp status|init|tools|disconnect<br/>/queue /q /undo /status"]
+        IQ["<b>输入队列</b><br/>最多 50 条 / 处理期间缓冲<br/>/queue 查看 / /undo 撤销<br/>处理完成后自动排空"]
+        UI["<b>UI 组件</b><br/>diff 渲染 / spinner<br/>流式输出 / bracketed paste"]
     end
 
-    subgraph Application["Application 层"]
-        Agent["<b>SpicaAgent</b>\nEventEmitter 编排器\nprocessInput / executeTools\n_fullHistory / provider.messages"]
-        Events["事件总线\nstream, tool_call, tool_result\nmessage, interrupt, done"]
-        Interrupt["中断处理\nAbortController\ncancelSeq"]
-        Session["会话与归档\n两态模型\nsaveSession / archiveSession"]
-        Subagent["子代理\nexplore / review / fix / build"]
+    subgraph APP["⚙️ 应用层 Application"]
+        direction TB
+        AGENT["<b>SpicaAgent</b> (src/agent.ts)<br/>EventEmitter 编排器<br/>processInput / executeTools<br/>_fullHistory (追加写入)<br/>工具冲突检测<br/>消息自动清理<br/>危险命令扫描"]
+        GATE["<b>Skill Gate</b> (src/cli/skillGate.ts)<br/>自动触发判定分类<br/>路径匹配 / 工具白名单"]
+        EVENTS["<b>事件总线 (32 事件)</b><br/>stream · reasoning · message<br/>tool_call · tool_result<br/>agent_interrupted · agent_stopped_on_error<br/>context_compressed · context_warning<br/>sub_agent_start/done/error<br/>sub_agent_tool_call/tool_result<br/>sub_agent_message/reasoning<br/>monitor_event · monitor_error<br/>hook_blocked · hook_warning · hook_log<br/>+ 更多 (参见源码)"]
+        INTR["<b>中断处理</b><br/>AbortController 每请求独立<br/>cancelSeq 高水位标记<br/>SIGKILL 杀进程组<br/>ESC×2 触发 / 200ms 去抖<br/>保留工具结果不丢失"]
+        SESSION["<b>会话 & 归档</b><br/>活跃 → session.json<br/>历史 → sessions/&lt;id&gt;.json<br/>归档时 LLM 生成摘要<br/>saveSession / archiveSession"]
+        SUB["<b>子代理 (7 事件)</b><br/>explore (只读 / 30s)<br/>review (+lint / 60s)<br/>fix (+edit / 120s)<br/>build (全工具 / 180s)<br/>最多 3 并行 / 提前退出信号"]
+        PMON["<b>ProcessMonitor</b><br/>PID 追踪 / 进程组强杀<br/>卡死检测 (SIGKILL)<br/>超时管理"]
+        LEARN["<b>教训系统</b><br/>.spica/learnings/*.md<br/>按日期命名 (YYYY-MM-DD)<br/>启动时注入系统提示"]
     end
 
-    subgraph Domain["Domain 层"]
-        LLM["LLMClient\nOpenAI 兼容流式\nRateLimiter, TokenCounter"]
-        Providers["LLM 供应商\nOpenAI, Anthropic\nDeepSeek, Gemini, Groq"]
-        Tools["工具系统\n33 个内置工具\nfile, bash, git, grep, glob"]
-        MCP["MCP 客户端\n外部工具服务器"]
-        Skills["技能与钩子\n14 个内置技能\nPreToolUse / PostToolUse"]
+    subgraph DOMAIN["🧠 领域层 Domain"]
+        direction TB
+        LLM["<b>LLMClient</b><br/>OpenAI 兼容流式接口<br/>temperature=0.3<br/>stream + reasoning 双通道<br/>指数退避重试"]
+        PROV["<b>Provider (OpenAICompatible.ts)</b><br/>单一适配器对接所有 API<br/>可配置 baseUrl + model<br/>OpenAI · DeepSeek · Gemini<br/>Groq · Anthropic 代理 · 本地"]
+        TOK["<b>TokenCounter</b> (tiktoken)<br/>真实 tokenizer 非估算<br/>上下文窗口管理<br/>60% 触发压缩"]
+        TOOLS["<b>33 工具</b><br/>📁 文件 (11) · 🔍 搜索 (4)<br/>💻 Shell (5) · ✅ 质量 (5)<br/>🌐 Web (3) · 📋 任务 (5)<br/>详见下方工具表"]
+        MCP["<b>MCP 客户端</b><br/>@modelcontextprotocol/sdk<br/>外部工具服务器<br/>内置: playwright"]
+        HOOKS["<b>Hooks 系统</b><br/>PreToolUse / PostToolUse<br/>block · confirm · warn · log<br/>全局 + 项目双层级"]
+        SKILLS["<b>14 内置技能</b><br/>brainstorming · systematic-debugging<br/>test-driven-development · verification<br/>executing-plans · writing-plans<br/>dispatching-parallel-agents<br/>subagent-driven-development<br/>requesting-code-review · receiving<br/>finishing-a-development-branch<br/>using-git-worktrees · writing-skills<br/>using-superpowers"]
     end
 
-    subgraph Infrastructure["Infrastructure 层"]
-        GlobalCfg["全局配置\n~/.spica/\nproviders, MCP, hooks"]
-        ActiveSess["活跃会话\n.spica/session.json\n追加写入，永不截断"]
-        HistSess["历史会话\n.spica/sessions/&lt;id&gt;.json\n每会话一份"]
-        ProjState["项目状态\n.spica/state.json\ntodos, decisions"]
+    subgraph INFRA["💾 基础设施层 Infrastructure"]
+        direction TB
+        GLOBAL["<b>~/.spica/settings.json</b><br/>providers · MCP · skills · hooks<br/>单文件 / chmod 600"]
+        ACTIVE["<b>.spica/session.json</b><br/>活跃 / 追加写入<br/>永不截断"]
+        HIST["<b>.spica/sessions/&lt;id&gt;.json</b><br/>每次归档一份<br/>LLM 摘要"]
+        STATE["<b>.spica/state.json</b><br/>todos / decisions"]
+        TASKS["<b>.spica/tasks.json</b><br/>持久化任务列表"]
+        LEARNINGS["<b>.spica/learnings/</b><br/>YYYY-MM-DD-topic.md<br/>启动时注入"]
+        SNAPS["<b>.spica/snapshots/</b><br/>checkpoint 文件快照<br/>自动清理 (保留20)"]
+        CHKJSON["<b>.spica/checkpoints.json</b><br/>元数据索引"]
+        BACKUPS["<b>.spica/backups/</b><br/>写入时自动备份"]
     end
 
-    %% 数据流
-    TUI --> InputQ
-    Simple --> InputQ
-    InputQ --> Agent
-    Cmds --> Agent
-    Agent <--> LLM
-    Providers --> LLM
-    LLM --> Agent
-    Agent --> Tools
-    MCP --> Tools
-    Tools --> Agent
-    Agent --> Events
-    Events --> UIComp
-    Interrupt --> Agent
-    Agent --> Session
-    Session --> ActiveSess
-    ActiveSess --> HistSess
-    Agent --> Subagent
-    Subagent --> Agent
-    Agent --> ProjState
-    GlobalCfg --> LLM
-    Skills --> Agent
-    Skills --> Tools
+    TUI --> IQ
+    SIMPLE --> IQ
+    CMD --> AGENT
+    IQ --> AGENT
+    AGENT <--> LLM
+    PROV --> LLM
+    TOK --> LLM
+    LLM --> AGENT
+    AGENT --> TOOLS
+    MCP --> TOOLS
+    TOOLS --> AGENT
+    AGENT --> EVENTS
+    EVENTS --> UI
+    INTR --> AGENT
+    AGENT --> SESSION
+    SESSION --> ACTIVE
+    ACTIVE --> HIST
+    AGENT --> SUB
+    SUB --> AGENT
+    AGENT --> PMON
+    LEARN --> AGENT
+    GATE --> AGENT
+    HOOKS --> AGENT
+    HOOKS --> TOOLS
+    SKILLS --> AGENT
+    SKILLS --> TOOLS
+    GLOBAL --> LLM
+    GLOBAL --> PROV
+    AGENT --> STATE
+    AGENT --> TASKS
+    SESSION --> HIST
+    LEARN --> LEARNINGS
+    AGENT --> SNAPS
+    SNAPS --> CHKJSON
+    TOOLS --> BACKUPS
 ```
 
 ![架构图](docs/architecture_cn.png)
+
+Mermaid 源码: [docs/architecture_cn.mermaid](docs/architecture_cn.mermaid)<br/>
+渲染: `mmdc -i docs/architecture_cn.mermaid -o docs/architecture_cn.png -w 2400 -H 3600 -b white -s 2`
 
 ## 工具
 
 | 类别 | 工具 |
 |------|------|
-| 文件 | `file_read` `file_write` `file_edit` `file_multi_edit` `file_replace` `file_insert` `file_delete` `file_copy` `file_move` `file_exists` `file_patch` |
+| 文件 | `read` `write` `edit` `file_multi_edit` `file_replace` `file_insert` `file_delete` `file_copy` `file_move` `file_exists` `file_patch` |
 | 搜索 | `glob` `grep` `directory_list` `directory_create` |
 | Shell | `bash` `monitor` `task_stop` `git` `workspace` |
 | 质量 | `lint` `test` `format` `code_health` `test_quality_check` |
@@ -128,14 +159,23 @@ graph TB
 | 命令 | 说明 |
 |------|------|
 | `/help` | 命令列表 |
+| `/init` | 为当前项目初始化 AGENTS.md |
 | `/archive` | 归档会话+摘要，开始新会话 |
-| `/history` | 浏览历史会话（只读） |
+| `/history` | 浏览历史会话或消息历史 |
+| `/view` | 查看会话详情 |
+| `/rename` | 重命名会话 |
+| `/delete` | 删除会话 |
+| `/clear` | 清空当前会话 |
+| `/reset` | 重置 agent 状态 |
+| `/new` | 开始全新会话 |
 | `/summary` | 当前会话进度摘要 |
 | `/compact` | 压缩上下文 |
-| `/checkpoint` | Checkpoint 管理 |
-| `/skill` | Skill 管理 |
-| `/mcp` | MCP 管理 |
-| `/status` | 会话状态 |
+| `/checkpoint` | Checkpoint 管理（列表、查看、恢复、清理） |
+| `/skill` | Skill 管理（列表、安装、卸载） |
+| `/mcp` | MCP 管理（状态、初始化、工具、断开） |
+| `/status` | 会话状态（token、模型、分支） |
+| `/queue` | 显示或撤销排队输入 |
+| `/q` | /queue 的快捷方式 |
 
 ## 配置
 
