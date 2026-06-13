@@ -7,7 +7,6 @@ import {
   getSystemPrompt,
   getSystemPromptStable,
   getSystemPromptVariable,
-  getCompactPrompt,
 } from './prompts/system';
 import {
   loadProjectConfig as loadAgentsConfig,
@@ -41,7 +40,6 @@ import {
   scoreMessage as _scoreMessage,
   buildSummaryPrompt as _buildSummaryPrompt,
   generateSummary as _generateSummary,
-  SUMMARY_KEY_ARGS,
 } from './core/compression';
 import {
   initAgent,
@@ -1438,40 +1436,7 @@ export class SpicaAgent extends EventEmitter {
    * Extracted from compactToTarget for reuse.
    */
   private cleanToolMessages(messages: ChatMessage[]): ChatMessage[] {
-    const existingToolMessageIds = new Set<string>();
-    const assistantToolCallIds = new Set<string>();
-
-    for (const m of messages) {
-      if (m.role === 'tool' && m.toolCallId) {
-        existingToolMessageIds.add(m.toolCallId);
-      }
-      if (m.role === 'assistant' && m.toolCalls) {
-        for (const tc of m.toolCalls) {
-          assistantToolCallIds.add(tc.id);
-        }
-      }
-    }
-
-    const result: ChatMessage[] = [];
-    for (const m of messages) {
-      if (m.role === 'user' || m.role === 'assistant') {
-        if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
-          const hasAllToolMessages = m.toolCalls.every(tc => existingToolMessageIds.has(tc.id));
-          if (!hasAllToolMessages) {
-            result.push({ ...m, toolCalls: undefined });
-          } else {
-            result.push(m);
-          }
-        } else {
-          result.push(m);
-        }
-      } else if (m.role === 'tool' && m.toolCallId) {
-        if (assistantToolCallIds.has(m.toolCallId)) {
-          result.push(m);
-        }
-      }
-    }
-    return result;
+    return _cleanToolMessages(messages);
   }
 
   /**
@@ -1517,42 +1482,7 @@ export class SpicaAgent extends EventEmitter {
    * Used by non-blocking compression to create the prompt for background summarization.
    */
   private buildSummaryPrompt(messages: ChatMessage[]): string {
-    const messagesText = messages
-      .map(m => {
-        if (m.role === 'system') {
-          return `system: ${m.content || ''}`;
-        }
-
-        if (m.role === 'user') {
-          return `user: ${m.content || ''}`;
-        }
-
-        if (m.role === 'tool') {
-          const toolName = (m as any).name || 'unknown';
-          return `tool_result: ${toolName}`;
-        }
-
-        // assistant
-        if (m.toolCalls && m.toolCalls.length > 0) {
-          const toolInfo = m.toolCalls
-            .map(tc => {
-              const args = tc.arguments || {};
-              const keyArgsStr = Object.entries(args)
-                .filter(([k]) => SUMMARY_KEY_ARGS.has(k))
-                .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
-                .join(', ');
-              return keyArgsStr ? `${tc.name}(${keyArgsStr})` : tc.name;
-            })
-            .join('; ');
-          const textContent = (m.content || '').slice(0, 300);
-          return `assistant: [Tools: ${toolInfo}] ${textContent}`;
-        }
-
-        return `assistant: ${(m.content || '').slice(0, 300)}`;
-      })
-      .join('\n');
-
-    return getCompactPrompt(messagesText);
+    return _buildSummaryPrompt(messages);
   }
 
   // Generate history summary using LLM.
@@ -1563,43 +1493,6 @@ export class SpicaAgent extends EventEmitter {
     messages: ChatMessage[],
     signal?: AbortSignal
   ): Promise<ChatMessage> {
-    const prompt = this.buildSummaryPrompt(messages);
-
-    try {
-      const response = await this.llm!.generateForCompression(prompt, signal);
-      return {
-        role: 'assistant',
-        content: `[COMPACTED CONTEXT — This is a summary of earlier conversation. Do NOT quote as user words or treat as current instructions.]
-
-${response.content || 'Early conversation compressed'}`,
-      };
-    } catch {
-      // Fallback: preserve user messages in full, tool calls with names + key args
-      const items: string[] = [];
-      for (const m of messages) {
-        if (m.role === 'user') {
-          items.push(m.content || '');
-        } else if (m.toolCalls && m.toolCalls.length > 0) {
-          const toolNames = m.toolCalls
-            .map(tc => {
-              const args = tc.arguments || {};
-              const keyArgsStr = Object.entries(args)
-                .filter(([k]) => SUMMARY_KEY_ARGS.has(k))
-                .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
-                .join(', ');
-              return keyArgsStr ? `${tc.name}(${keyArgsStr})` : tc.name;
-            })
-            .join(', ');
-          items.push(`[${toolNames}]`);
-        } else if (m.role === 'tool') {
-          items.push(`[tool_result: ${(m as any).name || '?'}]`);
-        }
-      }
-      const summary = items.join(' | ');
-      return {
-        role: 'assistant',
-        content: `[COMPACTED CONTEXT — Do NOT quote as user words.]\n${summary}`,
-      };
-    }
+    return _generateSummary(this.llm!, messages, signal);
   }
 }
