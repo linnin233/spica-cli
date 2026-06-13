@@ -4,7 +4,29 @@ import { COLORS } from './ui/colors';
 import { TokenCounter } from '../llm/TokenCounter';
 import { getRuntimeState } from '../core/RuntimeState';
 import { execSync } from 'child_process';
-import * as os from 'os';
+import {
+  getTerminalWidth,
+  truncateToWidth,
+  getCharDisplayWidth,
+  getStringDisplayWidth,
+  isFullWidth,
+  buildStatusText,
+  formatArgsCompact,
+  formatToolArgs,
+  countDiffLines,
+  countMatches,
+  countFiles,
+  countTestPassed,
+  countTestFailed,
+  countLintErrors,
+  countAgents,
+  formatToolSummary,
+  formatElapsed,
+  getMainArg,
+} from './formatting';
+import type { ToolResultData } from './formatting';
+import { resetToolTracking, registerToolCall, matchToolResult, calcElapsedMs, displayToolResult, isInterruptAlreadyShown, markInterruptShown, type ToolCallRecord } from './results';
+import { subAgentState, displaySubAgentPanel, type SubAgentRecord } from './subagentPanel';
 
 // 事件数据类型定义
 interface ConnectionErrorData {
@@ -27,16 +49,6 @@ interface ToolCallData {
   id?: string; // 工具调用 ID（用于匹配结果）
 }
 
-interface ToolResultData {
-  name: string;
-  success: boolean;
-  output?: string;
-  error?: string;
-  diff?: string;
-  syntaxErrors?: string[];
-  content?: string;
-  id?: string; // 工具调用 ID（用于匹配）
-}
 
 interface ContextWarningData {
   level: string;
@@ -178,848 +190,12 @@ interface MessageData {
 const screen = getScreenManager();
 const state = getRuntimeState();
 
-// ============================================
-// 工具调用追踪系统（解决并行调用结果匹配问题）
-// ============================================
-
-interface ToolCallRecord {
-  seq: number; // 序号（用于显示）
-  name: string; // 工具名称
-  args: Record<string, unknown>; // 参数
-  startTime: number; // 开始时间（用于计算耗时）
-  id?: string; // 工具调用 ID
-  outputLines: string[]; // 输出缓冲（verbose 模式）
-}
-
-// 当前活跃的工具调用（按序号索引）
-const activeToolCalls: Map<number, ToolCallRecord> = new Map();
-// ID 到序号的映射（用于匹配结果）
-const idToSeq: Map<string, number> = new Map();
-// 下一个序号
-let nextToolSeq = 1;
-// 当前批次的工具调用数量（用于显示并行状态）
-let batchToolCount = 0;
-
-// Interrupt 状态：防止多次显示 interrupt 消息
-let interruptDisplayed = false;
-let lastInterruptCancelSeq = 0;
-
-// 重置工具追踪状态（每次新对话开始时）
-function resetToolTracking(): void {
-  activeToolCalls.clear();
-  idToSeq.clear();
-  nextToolSeq = 1;
-  batchToolCount = 0;
-  // 🔴 同时重置 interrupt 状态
-  interruptDisplayed = false;
-  lastInterruptCancelSeq = 0;
-}
-
-// 注册工具调用
-function registerToolCall(data: ToolCallData): number {
-  const seq = nextToolSeq++;
-  const record: ToolCallRecord = {
-    seq,
-    name: data.name,
-    args: data.arguments || {},
-    startTime: Date.now(),
-    id: data.id,
-    outputLines: [],
-  };
-  activeToolCalls.set(seq, record);
-  if (data.id) {
-    idToSeq.set(data.id, seq);
-  }
-  batchToolCount++;
-  return seq;
-}
-
-// 匹配工具结果（通过 ID 或名称）
-function matchToolResult(data: ToolResultData): ToolCallRecord | null {
-  // 优先通过 ID 匹配
-  if (data.id && idToSeq.has(data.id)) {
-    const seq = idToSeq.get(data.id)!;
-    const record = activeToolCalls.get(seq);
-    if (record) {
-      idToSeq.delete(data.id);
-      activeToolCalls.delete(seq);
-      return record;
-    }
-  }
-
-  // 备用：通过名称匹配最近的未完成调用
-  // 注意：并行调用同名工具时可能匹配错误，但这是 fallback
-  for (const [seq, record] of activeToolCalls) {
-    if (record.name === data.name) {
-      activeToolCalls.delete(seq);
-      if (record.id) idToSeq.delete(record.id);
-      return record;
-    }
-  }
-
-  return null;
-}
-
-// 计算耗时
-function calcElapsedMs(startTime: number): number {
-  return Date.now() - startTime;
-}
-
-// ============================================
-// 终端宽度自适应
-// ============================================
-
-function getTerminalWidth(): number {
-  return screen.state.terminalWidth || process.stdout.columns || 80;
-}
-
-// 截断字符串到指定宽度（考虑中文字符宽度）
-function truncateToWidth(str: string, maxWidth: number): string {
-  const width = getStringDisplayWidth(str);
-  if (width <= maxWidth) return str;
-
-  // 从末尾截断
-  let result = '';
-  let currentWidth = 0;
-  const graphemes = Array.from(str);
-
-  for (const char of graphemes) {
-    const charWidth = getCharDisplayWidth(char);
-    if (currentWidth + charWidth > maxWidth - 3) {
-      return result + '...';
-    }
-    result += char;
-    currentWidth += charWidth;
-  }
-  return result;
-}
-
-function getCharDisplayWidth(char: string): number {
-  if (char === '\n') return 0;
-  if (char === '\t') return 2;
-  const codePoint = char.codePointAt(0);
-  if (!codePoint) return 1;
-  // Emoji 和其他复杂 grapheme cluster 宽度为 2
-  if (char.length > 1 || codePoint > 0xffff) return 2;
-  // 全角字符宽度为 2
-  if (isFullWidth(char)) return 2;
-  return 1;
-}
-
-function getStringDisplayWidth(str: string): number {
-  let width = 0;
-  const graphemes = Array.from(str);
-  for (const char of graphemes) {
-    width += getCharDisplayWidth(char);
-  }
-  return width;
-}
-
-function isFullWidth(char: string): boolean {
-  const codePoint = char.codePointAt(0) || 0;
-  // CJK 统一汉字范围
-  if (codePoint >= 0x4e00 && codePoint <= 0x9fff) return true;
-  // CJK 扩展 A
-  if (codePoint >= 0x3400 && codePoint <= 0x4dbf) return true;
-  // CJK 扩展 B-F
-  if (codePoint >= 0x20000 && codePoint <= 0x2ceaf) return true;
-  // 日文平假名、片假名
-  if (codePoint >= 0x3040 && codePoint <= 0x30ff) return true;
-  // 韩文
-  if (codePoint >= 0xac00 && codePoint <= 0xd7af) return true;
-  // 全角符号
-  if (codePoint >= 0xff00 && codePoint <= 0xffef) return true;
-  return false;
-}
-
-// ============================================
-// 格式化函数
-// ============================================
-
-// 构建状态栏文本（状态 | 模型 | 分支 | 工作区）
-function buildStatusText(agent: SpicaAgent, model: string | undefined): string {
-  const isBusy = state.isProcessing();
-  const statusText = isBusy ? COLORS.warning('busy') : COLORS.success('idle');
-
-  // Git 分支（无 repo 则不显示）
-  const branch = state.getCurrentBranch();
-  const branchInfo = branch ? ` | ${branch}` : '';
-
-  // 工作区路径显示（智能缩写）
-  const workspace = agent.getWorkspacePath();
-  const homeDir = os.homedir();
-  let displayPath = workspace;
-
-  // 缩写用户目录为 ~
-  if (workspace.startsWith(homeDir)) {
-    displayPath = '~' + workspace.slice(homeDir.length);
-  }
-
-  // 路径过长时显示最后两级
-  if (displayPath.length > 30) {
-    const parts = displayPath.split(/[/\\]/);
-    if (parts.length > 2) {
-      displayPath = '...' + parts.slice(-2).join('/');
-    }
-  }
-
-  return `${statusText} | ${model || '?'}${branchInfo} | ${displayPath}`;
-}
-
-// 格式化参数（简洁版）
-function formatArgsCompact(args: Record<string, unknown>, maxWidth: number): string {
-  if (!args || Object.keys(args).length === 0) return '';
-
-  // 过滤掉内部参数
-  const filteredKeys = Object.keys(args).filter(k => !k.startsWith('_'));
-  if (filteredKeys.length === 0) return '';
-
-  const parts = filteredKeys.slice(0, 3).map(k => {
-    const v = args[k];
-    if (typeof v === 'string') {
-      // 路径只显示文件名
-      if (k === 'path' || k === 'source' || k === 'destination') {
-        const filename = v.split('/').pop() || v.split('\\').pop() || v;
-        return filename.length > 20 ? filename.slice(0, 17) + '...' : filename;
-      }
-      // 其他字符串截断
-      if (v.length > 15) return v.slice(0, 12) + '...';
-      return v;
-    }
-    if (typeof v === 'number' || typeof v === 'boolean') {
-      return String(v);
-    }
-    return k;
-  });
-
-  const result = parts.join(' ');
-  return truncateToWidth(result, maxWidth);
-}
-
-// Format key tool args for subagent display (brief, one arg max)
-function formatToolArgs(toolName: string, args: Record<string, unknown>): string {
-  if (!args || Object.keys(args).length === 0) return '';
-
-  const filtered = Object.keys(args).filter(k => !k.startsWith('_'));
-  if (filtered.length === 0) return '';
-
-  // Pick the most informative arg per tool type
-  const keyArg = ((): string | null => {
-    switch (toolName) {
-      case 'read':
-      case 'file_read':
-        return typeof args.path === 'string' ? (args.path as string).replace(/.*\//, '') : null;
-      case 'write':
-      case 'file_write':
-      case 'edit':
-      case 'file_edit':
-        return typeof args.path === 'string' ? (args.path as string).replace(/.*\//, '') : null;
-      case 'grep':
-        return typeof args.pattern === 'string' ? (args.pattern as string).slice(0, 30) : null;
-      case 'glob':
-        return typeof args.pattern === 'string' ? (args.pattern as string).slice(0, 30) : null;
-      case 'bash':
-        return typeof args.command === 'string' ? (args.command as string).slice(0, 40) : null;
-      case 'directory_list':
-        return typeof args.path === 'string' ? (args.path as string).replace(/.*\//, '') : null;
-      default: {
-        // Show first string arg
-        const firstStr = filtered.find(k => typeof args[k] === 'string');
-        if (firstStr) {
-          const v = args[firstStr] as string;
-          return v.length > 30 ? v.slice(0, 27) + '...' : v;
-        }
-        return null;
-      }
-    }
-  })();
-
-  return keyArg ? `(${keyArg})` : '';
-}
-
-// 工具摘要辅助函数
-function countDiffLines(text: string, prefix: '+' | '-'): number {
-  return text.split('\n').filter(l => l.startsWith(prefix) && !l.startsWith(prefix + prefix))
-    .length;
-}
-
-function countMatches(output: string): number {
-  const match = output.match(/(\d+)\s+matches/i) || output.match(/Found\s+(\d+)/i);
-  return match ? parseInt(match[1], 10) : 0;
-}
-
-function countFiles(output: string): number {
-  const lines = output.split('\n').filter(l => l.trim() && !l.includes('found'));
-  return lines.length;
-}
-
-function countTestPassed(output: string): number {
-  const match = output.match(/(\d+)\s+passed/i) || output.match(/✓\s+(\d+)/);
-  return match ? parseInt(match[1], 10) : 0;
-}
-
-function countTestFailed(output: string): number {
-  const match = output.match(/(\d+)\s+failed/i) || output.match(/✗\s+(\d+)/);
-  return match ? parseInt(match[1], 10) : 0;
-}
-
-function countLintErrors(output: string): number {
-  const match = output.match(/(\d+)\s+errors/i) || output.match(/(\d+)\s+problems/i);
-  return match ? parseInt(match[1], 10) : 0;
-}
-
-function countAgents(output: string): number {
-  const match = output.match(/(\d+)\s+agents/i) || output.match(/(\d+)\s+tasks/i);
-  return match ? parseInt(match[1], 10) : 0;
-}
-
-// 格式化工具结果摘要
-function formatToolSummary(data: {
-  name: string;
-  success: boolean;
-  output?: string;
-  error?: string;
-  content?: string;
-}): string {
-  if (!data.success) {
-    const errorMsg = data.error || '';
-    // 显示第一行错误，截断到 80 字符足够判断原因
-    const firstLine = errorMsg.split('\n')[0];
-    const shortErr = firstLine.length > 80 ? firstLine.slice(0, 80) + '...' : firstLine;
-    return `err: ${shortErr}`;
-  }
-
-  const name = data.name;
-  const output = data.output || '';
-
-  switch (name) {
-    case 'read': {
-      const fileContent = data.content || '';
-      const lines = fileContent ? fileContent.split('\n').length : 0;
-      return `${lines} lines`;
-    }
-    case 'write':
-    case 'edit':
-    case 'file_multi_edit':
-    case 'file_patch': {
-      const added = countDiffLines(output, '+');
-      const removed = countDiffLines(output, '-');
-      if (added > 0 && removed > 0) {
-        return `+${added}/-${removed}`;
-      } else if (added > 0) {
-        return `+${added}`;
-      } else if (removed > 0) {
-        return `-${removed}`;
-      }
-      return 'done';
-    }
-    case 'file_replace':
-    case 'file_insert': {
-      return output.includes('replaced') || output.includes('inserted') ? output : 'done';
-    }
-    case 'file_exists': {
-      return output || 'exists';
-    }
-    case 'file_delete':
-      return 'deleted';
-    case 'file_copy':
-    case 'file_move': {
-      return output || 'done';
-    }
-    case 'directory_create':
-      return 'created';
-    case 'directory_list': {
-      const items = output.split('\n').filter(l => l.trim()).length;
-      return `${items} items`;
-    }
-    case 'bash': {
-      const bashLines = output.split('\n').filter(l => l.trim()).length;
-      const timeMatch = output.match(/\((\d+\.?\d*)s\)/);
-      const time = timeMatch ? timeMatch[1] : '';
-      return time ? `${bashLines} lines, ${time}s` : `${bashLines} lines`;
-    }
-    case 'grep': {
-      const matchCount = countMatches(output);
-      return matchCount > 0 ? `${matchCount} matches` : '0 matches';
-    }
-    case 'glob': {
-      const fileCount = countFiles(output);
-      return fileCount > 0 ? `${fileCount} files` : '0 files';
-    }
-    case 'test': {
-      const passed = countTestPassed(output);
-      const failed = countTestFailed(output);
-      if (failed > 0) {
-        return `${passed}✓ ${failed}✗`;
-      }
-      return passed > 0 ? `${passed}✓` : 'done';
-    }
-    case 'lint': {
-      const errors = countLintErrors(output);
-      return errors > 0 ? `${errors} errors` : 'clean';
-    }
-    case 'git':
-      return 'done';
-    case 'monitor': {
-      const taskId = data.content || '';
-      return taskId || 'started';
-    }
-    case 'task_stop':
-      return 'stopped';
-    case 'skill':
-      return 'loaded';
-    case 'task': {
-      const agentCount = countAgents(output);
-      if (agentCount > 0) return `${agentCount} agents`;
-      // Show first successful subagent description
-      const doneMatch = output.match(/✓ ([^\n]+)/);
-      if (doneMatch) return doneMatch[1].slice(0, 40);
-      const failMatch = output.match(/✗ ([^\n]+)/);
-      if (failMatch) return `failed: ${failMatch[1].slice(0, 30)}`;
-      return 'done';
-    }
-    case 'web_search': {
-      const results = output.split('\n').filter(l => l.includes('http')).length;
-      return results > 0 ? `${results} results` : 'done';
-    }
-    case 'web_fetch': {
-      const len = output.length;
-      return len > 1000 ? `${Math.floor(len / 1000)}kb` : `${len} chars`;
-    }
-    case 'gh': {
-      // gh命令结果
-      if (output.includes('created')) return 'created';
-      if (output.includes('merged')) return 'merged';
-      if (output.includes('closed')) return 'closed';
-      return 'done';
-    }
-    case 'todo_write': {
-      // Extract stats: "Task List (3/5 done, 1 active, 1 pending)"
-      const statsMatch = output.match(
-        /\((\d+)\/(\d+)\s*done,\s*(\d+)\s*active,\s*(\d+)\s*pending\)/
-      );
-      if (statsMatch) {
-        return `${statsMatch[1]}/${statsMatch[2]} done, ${statsMatch[3]} active`;
-      }
-      return 'saved';
-    }
-    case 'todo_read': {
-      const lines = output.split('\n').filter(l => /^\[(DONE|ACTV|PEND)\]/.test(l));
-      if (lines.length > 0) {
-        return `${lines.length} tasks`;
-      }
-      return 'empty';
-    }
-    case 'workspace':
-      return output.slice(0, 30) || 'done';
-    case 'question':
-      return 'asked';
-    case 'format':
-      return 'formatted';
-    case 'code_health':
-    case 'test_quality_check': {
-      const issues = output
-        .split('\n')
-        .filter(l => l.includes('✗') || l.includes('warning')).length;
-      return issues > 0 ? `${issues} issues` : 'clean';
-    }
-    default:
-      return 'done';
-  }
-}
-
-// 格式化耗时
-function formatElapsed(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 10000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${Math.floor(ms / 1000)}s`;
-}
-
-// ============================================
-// 新的工具显示格式
-// ============================================
-
-// 简洁的工具结果显示（统一格式）
-function displayToolResult(record: ToolCallRecord, data: ToolResultData): void {
-  const elapsed = formatElapsed(calcElapsedMs(record.startTime));
-  const icon = data.success ? COLORS.success('✓') : COLORS.error('✗');
-  const summary = formatToolSummary(data);
-
-  if (state.isVerboseMode()) {
-    // Verbose模式：完整显示所有内容
-    screen.appendScroll(COLORS.tool(`\n${record.name}`));
-
-    // 根据工具类型显示关键参数
-    switch (record.name) {
-      case 'read':
-      case 'write':
-      case 'edit':
-      case 'file_multi_edit':
-      case 'file_patch':
-      case 'file_replace':
-      case 'file_insert':
-      case 'file_delete':
-      case 'file_copy':
-      case 'file_move':
-      case 'file_exists': {
-        const path = record.args.path as string;
-        if (path) screen.appendScroll(COLORS.file(` ${path}`));
-        break;
-      }
-      case 'bash': {
-        const cmd = record.args.command as string;
-        if (cmd) screen.appendScroll(COLORS.muted(`\n  cmd: ${cmd}\n`));
-        break;
-      }
-      case 'grep': {
-        const pattern = record.args.pattern as string;
-        const path = record.args.path as string;
-        if (pattern) screen.appendScroll(COLORS.muted(` pattern: ${pattern}`));
-        if (path) screen.appendScroll(COLORS.file(` ${path}`));
-        break;
-      }
-      case 'glob': {
-        const pattern = record.args.pattern as string;
-        if (pattern) screen.appendScroll(COLORS.muted(` ${pattern}`));
-        break;
-      }
-      case 'web_search':
-      case 'web_fetch': {
-        const query = (record.args.query || record.args.url) as string | undefined;
-        if (query) screen.appendScroll(COLORS.muted(` ${query}`));
-        break;
-      }
-      case 'git': {
-        const action = record.args.action as string;
-        if (action) screen.appendScroll(COLORS.muted(` ${action}`));
-        break;
-      }
-      case 'test':
-      case 'lint': {
-        const path = record.args.path as string;
-        if (path) screen.appendScroll(COLORS.file(` ${path}`));
-        break;
-      }
-      case 'directory_list':
-      case 'directory_create': {
-        const path = record.args.path as string;
-        if (path) screen.appendScroll(COLORS.file(` ${path}`));
-        break;
-      }
-      case 'todo_write': {
-        const todoItems = record.args.todos as any[];
-        if (todoItems?.length) {
-          const done = todoItems.filter((t: any) => t.status === 'completed').length;
-          screen.appendScroll(COLORS.muted(` ${todoItems.length} tasks (${done} done)`));
-        }
-        break;
-      }
-      case 'todo_read': {
-        // No args to show — tool reads from disk
-        break;
-      }
-      case 'workspace': {
-        const path = record.args.path as string;
-        if (path) screen.appendScroll(COLORS.file(` ${path}`));
-        break;
-      }
-      case 'skill': {
-        const skillName = record.args.name || (record.args.skill as string);
-        if (skillName) screen.appendScroll(COLORS.muted(` ${skillName}`));
-        break;
-      }
-      case 'question': {
-        const questionText = record.args.question as string;
-        if (questionText) screen.appendScroll(COLORS.muted(` ${questionText.slice(0, 60)}`));
-        break;
-      }
-      case 'task': {
-        const taskList = record.args.tasks as any[];
-        if (taskList?.length) {
-          const descs = taskList
-            .map((t: any) => (t.description || t.prompt || '').slice(0, 30))
-            .join(', ');
-          screen.appendScroll(COLORS.muted(` ${descs}`));
-        }
-        break;
-      }
-      case 'task_stop': {
-        const taskId = record.args.task_id as string;
-        if (taskId) screen.appendScroll(COLORS.muted(` ${taskId}`));
-        break;
-      }
-      case 'monitor': {
-        const desc = record.args.description as string;
-        if (desc) screen.appendScroll(COLORS.muted(` ${desc.slice(0, 60)}`));
-        break;
-      }
-      default:
-        break;
-    }
-
-    screen.appendScroll(COLORS.muted(` → `));
-    screen.appendScroll(COLORS.primary(`${summary}`));
-    screen.appendScroll(` ${icon}`);
-    screen.appendScroll(COLORS.muted(` ${elapsed}\n`));
-
-    // 显示完整输出（不截断）
-    const output = data.output || data.error || '';
-    if (output) {
-      screen.appendScroll(COLORS.muted(`\n  Output:\n`));
-      for (const line of output.split('\n')) {
-        screen.appendScroll(COLORS.muted(`  ${line}\n`));
-      }
-    }
-
-    // 显示完整diff（如果有）
-    if (data.diff) {
-      screen.appendScroll(COLORS.muted(`\n  Diff:\n`));
-      for (const line of data.diff.split('\n')) {
-        if (line.startsWith('+')) {
-          screen.appendScroll(COLORS.diffAdd(`  ${line}\n`));
-        } else if (line.startsWith('-')) {
-          screen.appendScroll(COLORS.diffRemove(`  ${line}\n`));
-        } else {
-          screen.appendScroll(COLORS.muted(`  ${line}\n`));
-        }
-      }
-    }
-  } else {
-    // Compact模式：完整显示（工具名+参数+结果），带缩进
-    screen.appendScroll(COLORS.muted('  ')); // 缩进
-    screen.appendScroll(COLORS.tool(`${record.name}`));
-
-    // 根据工具类型显示关键参数
-    switch (record.name) {
-      case 'read':
-      case 'write':
-      case 'edit':
-      case 'file_multi_edit':
-      case 'file_patch':
-      case 'file_replace':
-      case 'file_insert':
-      case 'file_delete':
-      case 'file_copy':
-      case 'file_move':
-      case 'file_exists': {
-        const path = record.args.path as string;
-        if (path) screen.appendScroll(COLORS.file(` ${path}`));
-        break;
-      }
-      case 'bash': {
-        const cmd = (record.args.command as string) || '';
-        if (cmd) {
-          // 截断超长命令，保持单行可读
-          const shortCmd = cmd.length > 50 ? cmd.slice(0, 50) + '...' : cmd;
-          screen.appendScroll(COLORS.muted(` ${shortCmd}`));
-        }
-        break;
-      }
-      case 'grep': {
-        const pattern = record.args.pattern as string;
-        const path = record.args.path as string;
-        if (pattern) screen.appendScroll(COLORS.muted(` ${pattern}`));
-        if (path) screen.appendScroll(COLORS.file(` ${path}`));
-        break;
-      }
-      case 'glob': {
-        const pattern = record.args.pattern as string;
-        if (pattern) screen.appendScroll(COLORS.muted(` ${pattern}`));
-        break;
-      }
-      case 'web_search':
-      case 'web_fetch': {
-        const query = (record.args.query || record.args.url) as string | undefined;
-        if (query) screen.appendScroll(COLORS.muted(` ${query}`));
-        break;
-      }
-      case 'git': {
-        const action = record.args.action as string;
-        if (action) screen.appendScroll(COLORS.muted(` ${action}`));
-        break;
-      }
-      case 'test':
-      case 'lint': {
-        const path = record.args.path as string;
-        if (path) screen.appendScroll(COLORS.file(` ${path}`));
-        break;
-      }
-      case 'directory_list':
-      case 'directory_create': {
-        const path = record.args.path as string;
-        if (path) screen.appendScroll(COLORS.file(` ${path}`));
-        break;
-      }
-      case 'todo_write': {
-        const todoItems = record.args.todos as any[];
-        if (todoItems?.length) {
-          const done = todoItems.filter((t: any) => t.status === 'completed').length;
-          screen.appendScroll(COLORS.muted(` ${todoItems.length} tasks (${done} done)`));
-        }
-        break;
-      }
-      case 'todo_read': {
-        // No args to show — tool reads from disk
-        break;
-      }
-      case 'workspace': {
-        const path = record.args.path as string;
-        if (path) screen.appendScroll(COLORS.file(` ${path}`));
-        break;
-      }
-      case 'skill': {
-        const skillName = record.args.name || (record.args.skill as string);
-        if (skillName) screen.appendScroll(COLORS.muted(` ${skillName}`));
-        break;
-      }
-      case 'question': {
-        const questionText = record.args.question as string;
-        if (questionText) screen.appendScroll(COLORS.muted(` ${questionText.slice(0, 40)}`));
-        break;
-      }
-      case 'task': {
-        const taskList = record.args.tasks as any[];
-        if (taskList?.length) {
-          const descs = taskList
-            .map((t: any) => (t.description || t.prompt || '').slice(0, 20))
-            .join(', ');
-          screen.appendScroll(COLORS.muted(` ${descs}`));
-        }
-        break;
-      }
-      case 'task_stop': {
-        const taskId = record.args.task_id as string;
-        if (taskId) screen.appendScroll(COLORS.muted(` ${taskId}`));
-        break;
-      }
-      case 'monitor': {
-        const desc = record.args.description as string;
-        if (desc) screen.appendScroll(COLORS.muted(` ${desc.slice(0, 40)}`));
-        break;
-      }
-      case 'format': {
-        const fmtPath = record.args.path as string;
-        if (fmtPath) screen.appendScroll(COLORS.file(` ${fmtPath}`));
-        break;
-      }
-      case 'code_health':
-      case 'test_quality_check': {
-        const chPath = record.args.path as string;
-        if (chPath) screen.appendScroll(COLORS.file(` ${chPath}`));
-        break;
-      }
-      default:
-        break;
-    }
-
-    screen.appendScroll(COLORS.muted(` → `));
-    screen.appendScroll(COLORS.primary(`${summary}`));
-    screen.appendScroll(` ${icon}`);
-    screen.appendScroll(COLORS.muted(` ${elapsed}\n`));
-  }
-}
-
-// 获取工具的主要参数（用于显示）
-function getMainArg(name: string, args: Record<string, unknown>): string | null {
-  switch (name) {
-    case 'read':
-    case 'write':
-    case 'edit':
-    case 'file_multi_edit':
-      return (args.path as string) || null;
-    case 'bash':
-      return (args.command as string) || null;
-    case 'grep':
-      return (args.pattern as string) || null;
-    case 'glob':
-      return (args.pattern as string) || null;
-    default:
-      return null;
-  }
-}
-
-// ============================================
-// Subagent 状态面板
-// ============================================
-
-interface SubAgentRecord {
-  id: string;
-  type: string;
-  description: string;
-  status: 'running' | 'done' | 'error';
-  startTime: number;
-  summary?: string;
-  error?: string;
-  toolCount: number;
-  label: string; // short prefix for output lines
-}
-
-const activeSubAgents: Map<string, SubAgentRecord> = new Map();
-let subAgentSeq = 0;
-
-function displaySubAgentPanel(): void {
-  const termWidth = getTerminalWidth();
-  const agents = Array.from(activeSubAgents.values());
-
-  if (agents.length === 0) return;
-
-  // 面板标题
-  const running = agents.filter(a => a.status === 'running').length;
-  const done = agents.filter(a => a.status === 'done').length;
-  const error = agents.filter(a => a.status === 'error').length;
-
-  const title = `Subagents (${running} running, ${done} done, ${error} error)`;
-  const boxWidth = Math.min(termWidth - 4, Math.max(getStringDisplayWidth(title) + 4, 40));
-
-  screen.appendScroll(COLORS.secondary(`\n┌${'─'.repeat(boxWidth - 2)}┐\n`));
-  screen.appendScroll(
-    COLORS.secondary(
-      `│ ${title}${' '.repeat(Math.max(0, boxWidth - 2 - getStringDisplayWidth(title)))}│\n`
-    )
-  );
-
-  // 每个 subagent 的状态
-  for (const agent of agents.slice(0, 3)) {
-    // 最多显示 3 个
-    const elapsed = formatElapsed(Date.now() - agent.startTime);
-    const statusIcon = agent.status === 'running' ? '⏳' : agent.status === 'done' ? '✓' : '✗';
-    const statusColor =
-      agent.status === 'running'
-        ? COLORS.warning
-        : agent.status === 'done'
-          ? COLORS.success
-          : COLORS.error;
-
-    const desc = truncateToWidth(agent.description, 35);
-    const line = `${statusIcon} ${agent.label} ${desc} (${elapsed})`;
-    screen.appendScroll(
-      statusColor(
-        `│ ${line}${' '.repeat(Math.max(0, boxWidth - 2 - getStringDisplayWidth(line)))}│\n`
-      )
-    );
-
-    // Show summary or error detail for completed agents
-    if (agent.status === 'error' && agent.error) {
-      const errLine = `   err: ${truncateToWidth(agent.error, boxWidth - 8)}`;
-      screen.appendScroll(COLORS.error(`│ ${errLine}${' '.repeat(Math.max(0, boxWidth - 2 - getStringDisplayWidth(errLine)))}│\n`));
-    } else if (agent.status === 'done' && agent.summary) {
-      const sumLine = `   ${truncateToWidth(agent.summary, boxWidth - 5)}`;
-      screen.appendScroll(COLORS.muted(`│ ${sumLine}${' '.repeat(Math.max(0, boxWidth - 2 - getStringDisplayWidth(sumLine)))}│\n`));
-    }
-  }
-
-  if (agents.length > 3) {
-    screen.appendScroll(
-      COLORS.muted(`│ ... (${agents.length - 3} more)${' '.repeat(Math.max(0, boxWidth - 15))}│\n`)
-    );
-  }
-
-  screen.appendScroll(COLORS.secondary(`└${'─'.repeat(boxWidth - 2)}┘\n`));
-}
 
 // ============================================
 // 主事件处理
 // ============================================
+
+let subAgentSeq = 0;
 
 export function setupAgentEvents(
   agent: SpicaAgent,
@@ -1044,7 +220,7 @@ export function setupAgentEvents(
     reasoningStarted = false;
     justSwitchedFromReasoning = false;
     resetToolTracking();
-    activeSubAgents.clear();
+    subAgentState.clear();
     subAgentSeq = 0;
     // 清除thinking动画
     screen.clearThinkingAnimation();
@@ -1224,8 +400,7 @@ export function setupAgentEvents(
     const type = data.type || 'sub';
     // Generate unique label: [#1 explore], [#2 review], etc.
     const label = `[#${subAgentSeq} ${type}]`;
-    activeSubAgents.set(data.id, {
-      id: data.id,
+    subAgentState.add(data.id, {
       type,
       description: truncateToWidth(data.description || data.prompt.slice(0, 60), 50),
       status: 'running',
@@ -1240,7 +415,7 @@ export function setupAgentEvents(
 
   on('sub_agent_tool_call', (data: SubAgentToolCallData) => {
     // Track tool count
-    const record = activeSubAgents.get(data.id);
+    const record = subAgentState.get(data.id);
     if (record) record.toolCount++;
 
     // Show tool call with subagent label and key args
@@ -1250,7 +425,7 @@ export function setupAgentEvents(
   });
 
   on('sub_agent_tool_result', (data: SubAgentToolResultData) => {
-    const record = activeSubAgents.get(data.id);
+    const record = subAgentState.get(data.id);
     const prefix = record?.label || '[sub]';
     const icon = data.success ? '✓' : '✗';
     const colorFn = data.success ? COLORS.success : COLORS.error;
@@ -1258,7 +433,7 @@ export function setupAgentEvents(
   });
 
   on('sub_agent_done', (data: SubAgentDoneData) => {
-    const record = activeSubAgents.get(data.id);
+    const record = subAgentState.get(data.id);
     if (record) {
       record.status = 'done';
       record.summary = truncateToWidth(data.summary || 'done', 60);
@@ -1269,7 +444,7 @@ export function setupAgentEvents(
   });
 
   on('sub_agent_error', (data: SubAgentErrorData) => {
-    const record = activeSubAgents.get(data.id);
+    const record = subAgentState.get(data.id);
     if (record) {
       record.status = 'error';
       record.error = truncateToWidth(data.error, 80);
@@ -1282,7 +457,7 @@ export function setupAgentEvents(
   // Subagent text output — show what subagent is saying
   on('sub_agent_message', (data: SubAgentMessageData) => {
     if (data.role === 'assistant' && data.content) {
-      const record = activeSubAgents.get(data.id);
+      const record = subAgentState.get(data.id);
       const prefix = record?.label || '[sub]';
       const lines = data.content.split('\n');
       for (const line of lines) {
@@ -1296,7 +471,7 @@ export function setupAgentEvents(
   // Subagent reasoning — show with reasoning color
   on('sub_agent_reasoning', (data: SubAgentReasoningData) => {
     if (data.content && data.content.trim()) {
-      const record = activeSubAgents.get(data.id);
+      const record = subAgentState.get(data.id);
       const prefix = record?.label || '[sub]';
       const lines = data.content.split('\n');
       for (const line of lines) {
@@ -1354,14 +529,10 @@ export function setupAgentEvents(
     // 🔴 基于 cancelSeq 防止重复显示（只显示最新的 cancelSeq）
     const currentCancelSeq = data.cancelSeq || 0;
 
-    // 如果是同一个 cancelSeq 已经显示过，不重复显示
-    if (currentCancelSeq === lastInterruptCancelSeq && interruptDisplayed) {
+    if (isInterruptAlreadyShown(currentCancelSeq)) {
       return;
     }
-
-    // 新的 cancelSeq，显示消息
-    lastInterruptCancelSeq = currentCancelSeq;
-    interruptDisplayed = true;
+    markInterruptShown(currentCancelSeq);
 
     screen.appendScroll(COLORS.warning(`\n[interrupt] stopped\n`));
     if (data.toolResults && data.toolResults.length > 0) {
