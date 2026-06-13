@@ -12,15 +12,15 @@ graph TB
 
     subgraph AGENT["⚙️ SpicaAgent — Core Loop"]
         direction TB
-        LOOP["<b>runLoop()</b><br/>1. applyPendingSummary<br/>2. token check → compress if >60%<br/>3. callLLMWithRetry (10×)<br/>4. syncFullHistory<br/>5. executeTools (parallel/batch)<br/>6. continueWithAllToolResults<br/>7. loop until text response"]
-        MSG["<b>Three-Way Message Split</b><br/>_fullHistory → session persistence (untouched)<br/>provider.msgs → LLM context (compressed)<br/>toolDefs → API tools param"]
+        LOOP["<b>runLoop()</b><br/>1. applyPendingSummary<br/>2. token check → compress if >threshold<br/>3. callLLMWithRetry (10×)<br/>4. syncFullHistory<br/>5. executeTools (parallel/batch)<br/>6. continueWithAllToolResults<br/>7. loop until text response<br/><br/>+ AgentState (6 states, validated)<br/>+ ProgressTracker (survives compression)<br/>+ idle compression (30s inactivity)"]
+        MSG["<b>Three-Way Message Split</b><br/>_fullHistory → session persistence (untouched)<br/>provider.msgs → LLM context (compressed)<br/>toolDefs → lazy-loaded API tools param<br/>INVARIANT: system prompts only in provider"]
         SYNC["<b>syncFullHistory()</b><br/>index-based: provider→_fullHistory<br/>prevents desync from cleanMessages()"]
     end
 
     subgraph COMPRESS["🗜️ Compression v3 — Two-Phase"]
         direction LR
-        P1["<b>Phase 1</b> (instant)<br/>score messages → keep top N<br/>cache-prefix preserved<br/>per-role content limits<br/>restore cachePrefixEnd"]
-        P2["<b>Phase 2</b> (background)<br/>LLM summary of dropped msgs<br/>tool names + 500-char results<br/>heavy drop (>50%) → sync wait<br/>light drop (≤50%) → deferred"]
+        P1["<b>Phase 1</b> (instant, never blocks)<br/>score msgs → keep top N<br/>info-density scoring (+err/+content/-noise)<br/>cache-prefix preserved + validated<br/>per-role content limits<br/>adaptive thresholds by window size"]
+        P2["<b>Phase 2</b> (background, non-blocking)<br/>LLM summary + quality validation<br/>heavy drop → fallback summary now<br/>  + LLM summary deferred<br/>light drop → deferred summary"]
         P1 -->|"dropped msgs"| P2
         P2 -.->|"summary injected<br/>next runLoop"| LOOP
     end
@@ -28,20 +28,20 @@ graph TB
     subgraph LLM["🧠 LLMClient + Provider"]
         direction TB
         CLIENT["<b>LLMClient</b><br/>streaming · rate limiter · retry<br/>AbortSignal dedup (handler-refs)"]
-        PROV["<b>Provider</b><br/>split-prefix caching<br/>msg[0]=stable · msg[1]=variable<br/>cachePrefixEnd preserved (v3)"]
-        TOKEN["<b>TokenCounter</b><br/>tiktoken · 60% trigger · 40% target"]
+        PROV["<b>Provider</b><br/>split-prefix caching<br/>msg[0]=stable · msg[1]=variable<br/>cachePrefixEnd restored + validated"]
+        TOKEN["<b>TokenCounter</b><br/>tiktoken · adaptive thresholds<br/><32K:50% · 32-64K:55% · >200K:65%"]
     end
 
     subgraph TOOLS["🔧 Tools (33)"]
         FILE["File (11) + Search (4)"]
         SHELL["Shell (5): bash(sandbox) + git"]
-        QA["Quality (5) + Web (3) + Task (5)"]
+        QA["Quality (5) + Web (3) + Task (5)<br/>lazy loading: 16 tools on first use"]
     end
 
     subgraph STORAGE["💾 Persistence"]
         ACTIVE["session.json<br/>← _fullHistory<br/>(never truncated)"]
         HIST["sessions/&lt;id&gt;.json<br/>LLM summary on archive"]
-        OTHER["state.json · tasks.json<br/>checkpoints.json · snapshots/<br/>backups/ · learnings/"]
+        OTHER["state.json · tasks.json · tool-usage.json<br/>checkpoints.json · snapshots/<br/>backups/ · learnings/"]
     end
 
     %% Edges

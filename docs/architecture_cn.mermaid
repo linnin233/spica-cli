@@ -28,18 +28,20 @@ graph TB
 
         subgraph AGENT_SUB["SpicaAgent (src/agent.ts) — EventEmitter 编排器"]
             direction TB
-            AGENT_CORE["<b>核心循环</b><br/>runLoop(prompt, maxIter=50)<br/>  → applyPendingSummary（注入延迟摘要）<br/>  → token 检查（60% 触发阈值）<br/>  → startNonBlockingCompression<br/>  → callLLMWithRetry（10 次重试，指数退避）<br/>  → syncFullHistory（provider→_fullHistory）<br/>  → executeTools（并行/批处理）<br/>  → continueWithAllToolResults<br/>  → 循环直到 LLM 返回纯文本<br/>processInput: 队列→runLoop→saveSession"]
-            AGENT_MSG["<b>三重消息分离</b><br/>_fullHistory: 追加不截断，会话持久化<br/>  getMessages() → _fullHistory<br/>  getFullHistory() → _fullHistory<br/>  agentAddMessage() → 同时写入两者<br/>provider.msgs: LLM API 上下文，可压缩<br/>  getContextMessages() → provider.getMessages()<br/>  syncFullHistory() → 基于索引同步<br/>toolDefs: 独立 `tools` API 参数 (~3,500 tok)"]
+            AGENT_STATE["<b>AgentState 状态机</b>（src/core/AgentState.ts）<br/>6 种显式状态，验证转换<br/>uninitialized→initializing→idle↔processing<br/>  ↔compacting / interrupted<br/>替代散落的布尔标志"]
+            AGENT_CORE["<b>核心循环</b><br/>runLoop(prompt, maxIter=50)<br/>  → applyPendingSummary（注入延迟摘要）<br/>  → token 检查（自适应阈值）<br/>  → startNonBlockingCompression（永不阻塞）<br/>  → callLLMWithRetry（10 次重试，指数退避）<br/>  → syncFullHistory（provider→_fullHistory）<br/>  → executeTools（并行/批处理）<br/>  → 循环直到 LLM 返回纯文本<br/>scheduleIdleCompression: 30s 不活跃定时器"]
+            AGENT_MSG["<b>三重消息分离</b><br/>_fullHistory: 追加不截断，会话持久化<br/>  不变量：系统提示词仅在 provider.msgs<br/>  从不在 _fullHistory 中<br/>provider.msgs: LLM API 上下文，可压缩<br/>  syncFullHistory() → 基于索引同步<br/>toolDefs: 懒加载 `tools` API 参数"]
             AGENT_CONF["<b>工具冲突检测</b><br/>extractResourcePath() 逐工具提取<br/>detectToolConflicts() 分组<br/>顺序执行: 同文件写入<br/>并行执行: 读取 + 不同文件<br/>git: 单一 'git:repo' 资源"]
             AGENT_CLEAN["<b>消息清理器</b><br/>cleanMessages() 清理 provider 后缀<br/>保护 cache prefix 边界<br/>丢弃孤立 tool_calls<br/>write/edit 自动语法检查"]
+            AGENT_PROG["<b>ProgressTracker</b>（src/core/progressTracker.ts）<br/>记录：文件变更、决策、错误、里程碑<br/>toContextBlock() → 紧凑进度摘要<br/>压缩后仍存在（与消息历史分离）"]
         end
 
         GATE["<b>Skill Gate</b> (src/cli/skillGate.ts)<br/>8 种意图分类<br/>SKILL HINT 系统消息注入<br/>路径匹配 · 工具白名单"]
 
         subgraph COMPRESS["压缩 v3 (src/core/compression.ts)"]
             direction TB
-            COMP_PHASE1["<b>阶段 1 — 规则截断</b>（即时生效）<br/>① 从 provider 读取 cachePrefixEnd<br/>② 前缀消息免评分（永远保留）<br/>③ 消息评分: user=10, write/bash=9<br/>   edit=7, [COMPACTED]=10（永生）<br/>④ 分级保留（基于压缩比）<br/>   >3×: 15% 最少 10 · >2×: 25% 最少 15<br/>   >1.5×: 35% 最少 20 · 其他: 50% 最少 25<br/>   下限=10 上限=nonSystem 的 40%<br/>⑤ 逐角色内容限制（自适应）<br/>   user=∞ · tool=1.5× · asst+tc=1.2×<br/>   已含 [TRUNCATED] 标记 → 2× 宽松<br/>   基础=0.10×contextWindow（约 4K 字符）<br/>⑥ llm.setMessages([...sys, ...cleaned])<br/>⑦ 恢复 cachePrefixEnd 以包含<br/>   幸存的前缀消息"]
-            COMP_PHASE2["<b>阶段 2 — LLM 摘要</b>（后台异步）<br/>buildSummaryPrompt(丢弃的消息)<br/>  user 消息: 完整内容<br/>  assistant: 工具名 + 关键参数<br/>  tool_result: 工具名 + 500 字符 + 错误标记<br/>generateForCompression() 独立控制器<br/>  ↓<br/>重度丢弃 (>50%): 同步等待<br/>  → 立即注入摘要（系统消息之后）<br/>轻度丢弃 (≤50%): 后台 Promise<br/>  → 存入 _deferredSummary 供下次使用<br/>  → applyPendingSummary() 下个 runLoop 注入"]
+            COMP_PHASE1["<b>阶段 1 — 规则截断</b>（即时生效，永不阻塞）<br/>① 读取 cachePrefixEnd → 前缀消息免评分<br/>② 评分: user=10, write/bash=9, [COMPACTED]=10<br/>   +错误信号 +2 · 噪声惩罚 -1<br/>   +内容丰富度 +0.5 · 时间衰减 +1.0<br/>③ 分级保留（基于压缩比）<br/>   >3×: 15% 最少 10 · >2×: 25% 最少 15<br/>   >1.5×: 35% 最少 20 · 其他: 50% 最少 25<br/>   下限=10 上限=nonSystem 的 40%<br/>④ 逐角色内容限制（自适应）<br/>   user=∞ · tool=1.5× · asst+tc=1.2×<br/>   已截断 → 2× 宽松 · base=0.10×窗口<br/>⑤ llm.setMessages + restore cachePrefixEnd<br/>⑥ validateCachePrefix() 断言检查"]
+            COMP_PHASE2["<b>阶段 2 — 摘要</b>（后台异步，不阻塞用户）<br/>buildSummaryPrompt(oldMessages)<br/>  user: 完整 · asst: 工具+参数<br/>  tool_result: 工具名 + 500 字符 + 错误标记<br/>validateSummaryQuality(): 拒绝空/套话摘要<br/>  ↓<br/>重度丢弃 (>50%): buildFallbackSummary 即刻<br/>  + 后台 LLM 摘要供下次使用<br/>轻度丢弃 (≤50%): 后台 Promise<br/>  → _deferredSummary → applyPendingSummary()"]
         end
 
         INTR["<b>中断处理器</b><br/>每个 runLoop 独立 AbortController<br/>cancelSeq 高水位标记<br/>SIGKILL 杀进程组 (-pid)<br/>ESC×2 触发 · 200ms 去抖<br/>保留部分工具结果<br/>finally 块清除 pendingCancel"]
@@ -68,10 +70,10 @@ graph TB
         subgraph TOKEN_SUB["TokenCounter + 上下文管理"]
             direction TB
             TOK_COUNT["<b>TokenCounter</b> (src/llm/TokenCounter.ts)<br/>tiktoken 真实分词器 (o200k_base)<br/>estimateMessages() · estimateText()<br/>每模型上下文窗口解析<br/>精确匹配 → 前缀匹配 → 128K 默认"]
-            TOK_COMP["<b>压缩触发条件</b><br/>≥50%: 信息警告（建议子代理）<br/>≥60%: 警告（强烈建议子代理）<br/>>60%: 自动触发压缩<br/>  目标 = contextWindow 的 40%<br/>  非阻塞（阶段 2 后台执行）<br/>  /compact: 手动触发，等待阶段 2 完成"]
+            TOK_COMP["<b>压缩触发条件</b><br/>自适应阈值（按上下文窗口）：<br/>  <32K: 50% · 32-64K: 55%<br/>  64-200K: 60% · >200K: 65%<br/>  目标 = 35-40% of contextWindow<br/>触发：自动（超阈值）+ 空闲（30s）<br/>  + 手动（/compact）<br/>非阻塞：阶段 1 即时，阶段 2 后台"]
         end
 
-        TOOLS["<b>33 个工具</b> (registry.ts + impl/)<br/><br/>📁 <b>文件 (11)</b>: read write edit file_multi_edit<br/>  file_replace file_insert file_delete file_copy<br/>  file_move file_exists file_patch<br/>🔍 <b>搜索 (4)</b>: glob grep directory_list directory_create<br/>💻 <b>Shell (5)</b>: bash(沙箱) monitor task_stop git workspace<br/>✅ <b>质量 (5)</b>: lint test format code_health test_quality_check<br/>🌐 <b>Web (3)</b>: web_search web_fetch gh<br/>📋 <b>任务 (5)</b>: todo_write todo_read task skill question<br/><br/><b>自动功能</b><br/>语法检查（tsc/py_compile/bash -n）<br/>工具缓存: 30s TTL · 沙箱: bwrap<br/>replace_all 检测 · 8K 输出截断"]
+        TOOLS["<b>33 个工具</b> (registry.ts + impl/)<br/><br/>📁 <b>文件 (11)</b>: read write edit file_multi_edit<br/>  file_replace file_insert file_delete file_copy<br/>  file_move file_exists file_patch<br/>🔍 <b>搜索 (4)</b>: glob grep directory_list directory_create<br/>💻 <b>Shell (5)</b>: bash(沙箱) monitor task_stop git workspace<br/>✅ <b>质量 (5)</b>: lint test format code_health test_quality_check<br/>🌐 <b>Web (3)</b>: web_search web_fetch gh<br/>📋 <b>任务 (5)</b>: todo_write todo_read task skill question<br/><br/><b>自动功能</b><br/>语法检查（tsc/py_compile/bash -n）<br/>懒加载: 16 工具首次调用时加载<br/>  省 ~1,500 tok/调用 · 首次执行时提升<br/>工具缓存: 30s TTL · 沙箱: bwrap<br/>工具分析: .spica/tool-usage.json<br/>replace_all 检测 · 8K 输出截断"]
 
         MCP["<b>MCP 客户端</b> (src/mcp/client.ts)<br/>@modelcontextprotocol/sdk<br/>外部工具服务器<br/>内置: playwright"]
 
@@ -99,6 +101,7 @@ graph TB
 
         CHKJSON["<b>.spica/checkpoints.json</b><br/>元数据索引<br/>id / timestamp / files / preview"]
 
+        TOOLUSAGE["<b>.spica/tool-usage.json</b><br/>每工具调用计数<br/>辅助懒加载决策"]
         BACKUPS["<b>.spica/backups/</b><br/>write/edit 自动创建<br/>带时间戳的单文件副本"]
 
         PSKILLS["<b>.spica/skills.json<br/>.spica/skills/</b><br/>项目级技能覆盖<br/>SKILL.md 目录格式"]
