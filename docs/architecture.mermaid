@@ -1,7 +1,8 @@
 graph TB
     %% ═══════════════════════════════════════════════════════
     %% spica-cli Architecture (generated from code audit)
-    %% Events: 32 emit, 31 listen. Tools: 33. .spica/: 11 paths.
+    %% Events: 34. Tools: 33. .spica/: 11 paths.
+    %% Updated: 2026-06-13 — model aliases, compression v2, subagent streaming.
     %% ═══════════════════════════════════════════════════════
 
     %% ==================== PRESENTATION LAYER ====================
@@ -21,13 +22,13 @@ graph TB
 
         GATE["<b>Skill Gate</b> (src/cli/skillGate.ts)<br/>auto-invoke classification<br/>path matching, tool whitelisting"]
 
-        EVENTS["<b>Event Bus (32 agent events)</b><br/><br/>▸ stream, reasoning, message<br/>▸ tool_call, tool_result<br/>▸ agent_interrupted, agent_stopped_on_error<br/>▸ context_compressed, context_warning<br/>▸ sub_agent_start/done/error<br/>▸ sub_agent_tool_call/tool_result<br/>▸ sub_agent_message/reasoning<br/>▸ monitor_event, monitor_error<br/>▸ hook_blocked, hook_warning, hook_log<br/>▸ diff_preview, workspace_changed<br/>▸ todos_set, todo_update<br/>▸ tool_aborted, tool_stuck_warning<br/>▸ queue_injected, empty_input<br/>▸ token_usage, waiting_for_llm<br/>▸ connection_error, retry_attempt<br/>▸ error_suggestion, checkpoint_*<br/>▸ initialized, projectLoaded/Created"]
+        EVENTS["<b>Event Bus (34 agent events)</b><br/><br/>▸ stream, reasoning, message<br/>▸ tool_call, tool_result<br/>▸ agent_interrupted, agent_stopped_on_error<br/>▸ context_compressed, context_warning<br/>▸ sub_agent_start/done/error<br/>▸ sub_agent_tool_call/tool_result<br/>▸ sub_agent_message/reasoning<br/>▸ sub_agent_stream, sub_agent_warning<br/>▸ monitor_event, monitor_error<br/>▸ hook_blocked, hook_warning, hook_log<br/>▸ diff_preview, workspace_changed<br/>▸ todos_set, todo_update<br/>▸ tool_aborted, tool_stuck_warning<br/>▸ queue_injected, empty_input<br/>▸ token_usage, waiting_for_llm<br/>▸ connection_error, retry_attempt<br/>▸ error_suggestion, checkpoint_*<br/>▸ initialized, projectLoaded/Created"]
 
         INTR["<b>Interrupt Handler</b><br/>AbortController per request<br/>cancelSeq (high-water mark)<br/>SIGKILL to process group<br/>ESC×2 trigger, 200ms debounce<br/>preserves tool results"]
 
-        SESSION["<b>Session & Archive</b><br/>two-state model<br/>active → session.json<br/>historical → sessions/&lt;id&gt;.json<br/>LLM summary on archive<br/>saveSession / archiveSession"]
+        SESSION["<b>Session & Archive</b><br/>two-state model, decoupled<br/>active → session.json<br/>historical → sessions/&lt;id&gt;.json<br/>LLM summary on archive<br/>auto-cleanup (keep 50)"]
 
-        SUB["<b>Sub-Agents (7 events)</b><br/>explore (read-only, 30s)<br/>review (+lint, 60s)<br/>fix (+edit, 120s)<br/>build (all tools, 180s)<br/>max 3 parallel, early-exit signal"]
+        SUB["<b>Sub-Agents (9 events)</b><br/>explore · review · fix · build<br/>model override per task<br/>streaming output (per-subagent buffer)<br/>parallel implementation warning<br/>max 3 parallel, early-exit signal<br/>structured status codes"]
 
         PMON["<b>ProcessMonitor</b><br/>PID tracking, process group kill<br/>stuck detection (SIGKILL)<br/>timeout management"]
 
@@ -39,9 +40,9 @@ graph TB
         direction TB
         LLM["<b>LLMClient</b> (src/llm/LLMClient.ts)<br/>OpenAI-compatible streaming<br/>temperature=0.3<br/>stream + reasoning channels<br/>retry with exponential backoff"]
 
-        PROV["<b>Provider</b> (OpenAICompatible.ts)<br/>single adapter for all APIs<br/>configurable baseUrl + model<br/>OpenAI · DeepSeek · Gemini<br/>Groq · Anthropic proxy · local"]
+        PROV["<b>Provider</b> (OpenAICompatible.ts)<br/>single adapter for all APIs<br/>model: default, models: alias→ID map<br/>resolveModel() auto-resolution<br/>OpenAI · DeepSeek · Gemini<br/>Groq · Anthropic proxy · local"]
 
-        TOK["<b>TokenCounter</b> (tiktoken)<br/>real tokenizer, not heuristic<br/>context window management<br/>compression trigger at 60%"]
+        TOK["<b>TokenCounter + Compression</b><br/>tiktoken real tokenizer<br/>cache-prefix-aware truncation<br/>graduated keep tiers (10-25 msgs)<br/>2-phase: rule trunc + LLM summary<br/>sync summary on heavy drop (>50%)<br/>trigger at 60%, target 40%"]
 
         TOOLS["<b>33 Tools (registry.ts)</b><br/><br/>📁 <b>File (11)</b>: read write edit<br/>  file_multi_edit file_replace<br/>  file_insert file_delete file_copy<br/>  file_move file_exists file_patch<br/>🔍 <b>Search (4)</b>: glob grep<br/>  directory_list directory_create<br/>💻 <b>Shell (5)</b>: bash monitor<br/>  task_stop git workspace<br/>✅ <b>Quality (5)</b>: lint test format<br/>  code_health test_quality_check<br/>🌐 <b>Web (3)</b>: web_search<br/>  web_fetch gh<br/>📋 <b>Task (5)</b>: todo_write todo_read<br/>  task skill question"]
 
@@ -55,7 +56,7 @@ graph TB
     %% ==================== INFRASTRUCTURE LAYER ====================
     subgraph INFRA["💾 Infrastructure Layer"]
         direction TB
-        GLOBAL["<b>~/.spica/settings.json</b><br/>providers · MCP · skills · hooks<br/>single file, nested sections<br/>chmod 600, .gitignore protected"]
+        GLOBAL["<b>~/.spica/settings.json</b><br/>providers (w/ model aliases) · MCP · skills · hooks<br/>single file, nested sections<br/>chmod 600, .gitignore protected"]
 
         ACTIVE["<b>.spica/session.json</b><br/>active session<br/>append-only _fullHistory<br/>never truncated by compression"]
 

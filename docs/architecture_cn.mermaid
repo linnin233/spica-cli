@@ -1,7 +1,8 @@
 graph TB
     %% ═══════════════════════════════════════════════════════
     %% spica-cli 架构图（代码审计后生成）
-    %% 事件：32 emit, 31 listen. 工具: 33. .spica/: 11 路径.
+    %% 事件: 34. 工具: 33. .spica/: 11 路径.
+    %% 更新: 2026-06-13 — 模型别名 / 压缩v2 / subagent 流式.
     %% ═══════════════════════════════════════════════════════
 
     %% ==================== 展示层 ====================
@@ -21,13 +22,13 @@ graph TB
 
         GATE["<b>Skill Gate</b> (src/cli/skillGate.ts)<br/>自动触发判定分类<br/>路径匹配 / 工具白名单"]
 
-        EVENTS["<b>事件总线 (32 事件)</b><br/><br/>▸ stream / reasoning / message<br/>▸ tool_call / tool_result<br/>▸ agent_interrupted / agent_stopped_on_error<br/>▸ context_compressed / context_warning<br/>▸ sub_agent_start/done/error<br/>▸ sub_agent_tool_call/tool_result<br/>▸ sub_agent_message/reasoning<br/>▸ monitor_event / monitor_error<br/>▸ hook_blocked / hook_warning / hook_log<br/>▸ diff_preview / workspace_changed<br/>▸ todos_set / todo_update<br/>▸ tool_aborted / tool_stuck_warning<br/>▸ queue_injected / empty_input<br/>▸ token_usage / waiting_for_llm<br/>▸ connection_error / retry_attempt<br/>▸ error_suggestion / checkpoint_*<br/>▸ initialized / projectLoaded/Created"]
+        EVENTS["<b>事件总线 (34 事件)</b><br/><br/>▸ stream / reasoning / message<br/>▸ tool_call / tool_result<br/>▸ agent_interrupted / agent_stopped_on_error<br/>▸ context_compressed / context_warning<br/>▸ sub_agent_start/done/error<br/>▸ sub_agent_tool_call/tool_result<br/>▸ sub_agent_message/reasoning<br/>▸ sub_agent_stream / sub_agent_warning<br/>▸ monitor_event / monitor_error<br/>▸ hook_blocked / hook_warning / hook_log<br/>▸ diff_preview / workspace_changed<br/>▸ todos_set / todo_update<br/>▸ tool_aborted / tool_stuck_warning<br/>▸ queue_injected / empty_input<br/>▸ token_usage / waiting_for_llm<br/>▸ connection_error / retry_attempt<br/>▸ error_suggestion / checkpoint_*<br/>▸ initialized / projectLoaded/Created"]
 
         INTR["<b>中断处理</b><br/>AbortController 每请求独立<br/>cancelSeq 高水位标记<br/>SIGKILL 杀进程组<br/>ESC×2 触发 / 200ms 去抖<br/>保留工具结果不丢失"]
 
-        SESSION["<b>会话 & 归档</b><br/>两态模型<br/>活跃 → session.json<br/>历史 → sessions/&lt;id&gt;.json<br/>归档时 LLM 生成摘要<br/>saveSession / archiveSession"]
+        SESSION["<b>会话 & 归档</b><br/>两态模型 / 数据流解耦<br/>活跃 → session.json<br/>历史 → sessions/&lt;id&gt;.json<br/>归档时 LLM 生成摘要<br/>自动清理 (保留 50)"]
 
-        SUB["<b>子代理 (7 事件)</b><br/>explore (只读 / 30s)<br/>review (+lint / 60s)<br/>fix (+edit / 120s)<br/>build (全工具 / 180s)<br/>最多 3 并行 / 提前退出信号"]
+        SUB["<b>子代理 (9 事件)</b><br/>explore · review · fix · build<br/>模型选择 (model per task)<br/>流式输出 (per-subagent 缓冲)<br/>并行实现冲突警告<br/>最多 3 并行 / 提前退出信号<br/>结构化状态码"]
 
         PMON["<b>ProcessMonitor</b><br/>PID 追踪 / 进程组强杀<br/>卡死检测 (SIGKILL)<br/>超时管理"]
 
@@ -39,9 +40,9 @@ graph TB
         direction TB
         LLM["<b>LLMClient</b> (src/llm/LLMClient.ts)<br/>OpenAI 兼容流式接口<br/>temperature=0.3<br/>stream + reasoning 双通道<br/>指数退避重试"]
 
-        PROV["<b>Provider</b> (OpenAICompatible.ts)<br/>单一适配器对接所有 API<br/>可配置 baseUrl + model<br/>OpenAI · DeepSeek · Gemini<br/>Groq · Anthropic 代理 · 本地"]
+        PROV["<b>Provider</b> (OpenAICompatible.ts)<br/>单一适配器对接所有 API<br/>model: 默认 / models: 别名→ID 映射<br/>resolveModel() 自动解析<br/>OpenAI · DeepSeek · Gemini<br/>Groq · Anthropic 代理 · 本地"]
 
-        TOK["<b>TokenCounter</b> (tiktoken)<br/>真实 tokenizer 非估算<br/>上下文窗口管理<br/>60% 触发压缩"]
+        TOK["<b>TokenCounter + 压缩</b><br/>tiktoken 真实 tokenizer<br/>缓存前缀感知截断<br/>graduated keep tiers (10–25 条)<br/>双阶段: 规则截断 + LLM 摘要<br/>重度丢弃时同步等待摘要 (>50%)<br/>60% 触发 / 目标 40%"]
 
         TOOLS["<b>33 工具 (registry.ts)</b><br/><br/>📁 <b>文件 (11)</b>: read write edit<br/>  file_multi_edit file_replace<br/>  file_insert file_delete file_copy<br/>  file_move file_exists file_patch<br/>🔍 <b>搜索 (4)</b>: glob grep<br/>  directory_list directory_create<br/>💻 <b>Shell (5)</b>: bash monitor<br/>  task_stop git workspace<br/>✅ <b>质量 (5)</b>: lint test format<br/>  code_health test_quality_check<br/>🌐 <b>Web (3)</b>: web_search<br/>  web_fetch gh<br/>📋 <b>任务 (5)</b>: todo_write todo_read<br/>  task skill question"]
 
@@ -55,7 +56,7 @@ graph TB
     %% ==================== 基础设施层 ====================
     subgraph INFRA["💾 基础设施层 Infrastructure"]
         direction TB
-        GLOBAL["<b>~/.spica/settings.json</b><br/>providers · MCP · skills · hooks<br/>单文件 / 嵌套 section<br/>chmod 600 / .gitignore 保护"]
+        GLOBAL["<b>~/.spica/settings.json</b><br/>providers (含模型别名) · MCP · skills · hooks<br/>单文件 / 嵌套 section<br/>chmod 600 / .gitignore 保护"]
 
         ACTIVE["<b>.spica/session.json</b><br/>活跃会话<br/>追加写入 _fullHistory<br/>压缩不截断历史"]
 
