@@ -1,9 +1,10 @@
 import fs from 'fs-extra';
 import { execa } from 'execa';
-import simpleGit from 'simple-git';
+
 import { resolve as pathResolve, isAbsolute, dirname, join, basename } from 'path';
 import fastGlob from 'fast-glob';
 import { SubAgentTask, getSubAgentConfig, summarizeResult } from './subAgent';
+import { executeTask } from './impl/task';
 import { computeDiff, formatDiff, generateEditDiff } from '../cli/ui/diff';
 import { getMCPManager } from '../mcp/client';
 import type { Todo } from '../agent';
