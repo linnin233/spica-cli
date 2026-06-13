@@ -33,6 +33,22 @@ import {
 import { EventEmitter } from 'events';
 import simpleGit from 'simple-git';
 import type { ChatMessage } from './llm/providers/BaseProvider';
+import {
+  cleanMessagesForLLM as _cleanMessagesForLLM,
+  startNonBlockingCompression as _startNonBlockingCompression,
+  applyPendingSummary as _applyPendingSummary,
+  cleanToolMessages as _cleanToolMessages,
+  scoreMessage as _scoreMessage,
+  buildSummaryPrompt as _buildSummaryPrompt,
+  generateSummary as _generateSummary,
+  SUMMARY_KEY_ARGS,
+} from './core/compression';
+import {
+  initAgent,
+  initAgentAsSubAgent,
+  doInit,
+  loadProjectConfig as _loadProjectConfig,
+} from './core/init';
 
 // 解析向后兼容的工具别名
 function resolveAlias(toolName: string): string {
@@ -224,18 +240,6 @@ export class SpicaAgent extends EventEmitter {
     { pattern: /:\(\)\s*\{\s*:\|:&\s*\};:/, label: 'Fork bomb' },
     { pattern: /sudo\s+su\b/, label: 'Switch to root' },
   ];
-
-  // Summary key args — tool arguments worth preserving in compressed summaries
-  private static readonly SUMMARY_KEY_ARGS = new Set([
-    'path',
-    'command',
-    'action',
-    'pattern',
-    'query',
-    'url',
-    'question',
-    'prompt',
-  ]);
 
   // 检查是否为极危险操作
   isDangerousOperation(command: string): boolean {
@@ -596,16 +600,7 @@ export class SpicaAgent extends EventEmitter {
    * @throws Error if initialization fails or is interrupted
    */
   async init() {
-    if (this._initialized) return;
-    if (this._initPromise) return this._initPromise;
-
-    this._initPromise = this._doInit();
-    try {
-      await this._initPromise;
-      this._initialized = true;
-    } finally {
-      this._initPromise = null;
-    }
+    return initAgent(this);
   }
 
   /**
@@ -614,177 +609,15 @@ export class SpicaAgent extends EventEmitter {
    * Inherits the parent's system prompt, workspace, and a summary of recent context.
    */
   async initAsSubAgent(parentAgent: SpicaAgent): Promise<void> {
-    if (this._initialized) return;
-
-    const parentProviderName = parentAgent._providerName || this._providerName;
-    const config = await getProviderConfig(parentProviderName);
-
-    // Fresh LLM client — same API, isolated message history
-    this.llm = new LLMClient({
-      provider: parentProviderName || 'openai',
-      apiKey: config.apiKey,
-      baseUrl: config.baseUrl,
-      model: config.model,
-      name: config.name,
-    });
-
-    // Inherit system prompt from parent
-    const parentMessages = parentAgent.getLLM()?.getMessages() || [];
-    const parentSystemMsg = parentMessages.find(m => m.role === 'system');
-    if (parentSystemMsg?.content) {
-      this.llm.setSystemPrompt(parentSystemMsg.content);
-    }
-
-    // Inject recent context summary — so sub-agent knows what's happening
-    const recentUserMessages = parentMessages
-      .filter(m => m.role === 'user')
-      .slice(-5)
-      .map(m => (m.content || '').slice(0, 300));
-    const recentAssistantActions = parentMessages
-      .filter(m => m.role === 'assistant' && m.toolCalls)
-      .slice(-5)
-      .map(m => {
-        const tools = m.toolCalls?.map(tc => tc.name).join(', ') || '';
-        const content = (m.content || '').slice(0, 120);
-        return `[${tools}] ${content}`;
-      });
-
-    if (recentUserMessages.length > 0 || recentAssistantActions.length > 0) {
-      const contextParts: string[] = [
-        '[SUB-AGENT CONTEXT] You are a sub-agent working on part of a larger task.',
-      ];
-      if (recentUserMessages.length > 0) {
-        contextParts.push(
-          `Recent user requests:\n${recentUserMessages.map(m => `- ${m}`).join('\n')}`
-        );
-      }
-      if (recentAssistantActions.length > 0) {
-        contextParts.push(
-          `Recent actions taken:\n${recentAssistantActions.map(a => `- ${a}`).join('\n')}`
-        );
-      }
-      if (this._todos.length > 0) {
-        const pendingTodos = this._todos.filter(t => t.status !== 'completed').slice(0, 5);
-        if (pendingTodos.length > 0) {
-          contextParts.push(
-            `Current todos:\n${pendingTodos.map(t => `- [${t.status}] ${t.content}`).join('\n')}`
-          );
-        }
-      }
-      this.agentAddMessage({
-        role: 'system',
-        content: contextParts.join('\n\n'),
-      });
-    }
-
-    // Inherit workspace and todos from parent
-    this.workspacePath = parentAgent.getWorkspacePath();
-    this._todos = [...parentAgent.todos];
-
-    // Setup stream forwarding
-    this.llm.on('chunk', (chunk: string) => {
-      this.emit('stream', { chunk });
-    });
-    this.llm.on('reasoning', (content: string) => {
-      this.reasoningReceived = true;
-      this.emit('reasoning', { content });
-    });
-
-    this._initialized = true;
+    return initAgentAsSubAgent(this, parentAgent);
   }
 
   private async _doInit(): Promise<void> {
-    // 初始化Skills（首次运行时复制默认包）
-    await initSkills();
-
-    // 初始化MCP服务器连接
-    try {
-      await initMCP();
-    } catch {
-      console.log('MCP init skipped (no config or servers unavailable)');
-    }
-
-    const config = await getProviderConfig(this._providerName);
-    this.llm = new LLMClient({
-      provider: this._providerName || 'openai',
-      apiKey: config.apiKey,
-      baseUrl: config.baseUrl,
-      model: config.model,
-      name: config.name,
-    });
-
-    // 检查API连接
-    const connectionResult = await this.llm.checkConnection();
-
-    if (!connectionResult.success) {
-      this.emit('connection_error', {
-        type: connectionResult.type,
-        error: connectionResult.error,
-        hint: connectionResult.hint,
-        provider: this._providerName,
-        model: config.model,
-      });
-      throw new Error(
-        `API connection failed: ${connectionResult.type}\n${connectionResult.hint}\nDetails: ${connectionResult.error}`
-      );
-    }
-
-    ensureProjectDir(this.workspacePath);
-
-    // 从session文件加载完整历史（不是损坏的context.json）
-    const session = loadSession(this.workspacePath);
-    if (session && session.messages.length > 0) {
-      // session.messages已经通过cleanMessages清理过了
-      this.llm.setMessages(session.messages);
-      this._fullHistory = [...session.messages];
-      this._lastSyncedProviderIndex = this.llm.getMessages().length - 1;
-    }
-
-    const projectState = loadProjectState(this.workspacePath);
-    if (projectState) {
-      this._todos = projectState.todos;
-    }
-
-    await this.loadProjectConfig();
-
-    // Build skills metadata for system prompt
-    const skills = listSkills(this.workspacePath);
-    const skillsMetadata = skills.map(s => `- ${s.name}: ${s.description}`).join('\n');
-
-    const stablePrompt = getSystemPromptStable(this.projectConfig);
-    const variablePrompt = getSystemPromptVariable(skillsMetadata, this.workspacePath);
-    this.llm.setSystemPromptSplit(stablePrompt, variablePrompt);
-
-    this.llm.on('chunk', (chunk: string) => {
-      this.emit('stream', { chunk });
-    });
-
-    // 追踪 reasoning 状态，用于判断真正的空响应
-    this.llm.on('reasoning', (content: string) => {
-      this.reasoningReceived = true;
-      this.emit('reasoning', { content });
-    });
-
-    this.emit('initialized', {
-      model: config.model,
-      project: this.projectConfig,
-    });
+    return doInit(this);
   }
 
   private async loadProjectConfig(): Promise<void> {
-    // 使用新的 projectConfig.ts（兼容多种格式）
-    const loadedConfig = loadAgentsConfig(this.workspacePath);
-
-    if (loadedConfig) {
-      this.projectConfig = loadedConfig;
-      this.emit('projectLoaded', this.projectConfig);
-    } else {
-      // 无配置文件，自动检测并创建 AGENTS.md
-      const autoConfig = autoDetectProject(this.workspacePath);
-      this.projectConfig = autoConfig;
-      await createAgentsMd(this.workspacePath);
-      this.emit('projectCreated', autoConfig);
-    }
+    return _loadProjectConfig(this);
   }
 
   setTodos(todos: string[]) {
@@ -857,7 +690,7 @@ export class SpicaAgent extends EventEmitter {
   }
 
   private cleanMessagesForLLM(messages: ChatMessage[]): ChatMessage[] {
-    return cleanMessages(messages);
+    return _cleanMessagesForLLM(messages);
   }
 
   /**
@@ -1588,124 +1421,7 @@ export class SpicaAgent extends EventEmitter {
     targetTokens: number,
     signal?: AbortSignal
   ): Promise<void> {
-    if (!this.llm) return;
-    this._compacting = true;
-
-    try {
-      const allMessages = this.llm.getMessages();
-      const systemMessages = allMessages.filter(m => m.role === 'system');
-      const nonSystem = allMessages.filter(m => m.role !== 'system');
-
-      if (nonSystem.length === 0) {
-        this.emit('context_compressed', {
-          before: allMessages.length,
-          after: allMessages.length,
-          tokensBefore: 0,
-          tokensAfter: 0,
-        });
-        return;
-      }
-
-      const tokenCounter = this.llm.getTokenCounter();
-      const provider = this.llm.getProvider();
-      tokenCounter.setContextWindow(provider.getContextWindow());
-      const contextWindow = provider.getContextWindow();
-      const usedTokens = tokenCounter.estimateMessages(nonSystem);
-
-      if (usedTokens < targetTokens) {
-        this.emit('context_compressed', {
-          before: allMessages.length,
-          after: allMessages.length,
-          tokensBefore: usedTokens,
-          tokensAfter: usedTokens,
-        });
-        return;
-      }
-
-      // --- Phase 1: Rule-based truncation (instant) ---
-      const ratio = usedTokens / targetTokens;
-      let keepCount = ratio > 2 ? 5 : ratio > 1.5 ? 8 : 12;
-      const minKeep = Math.max(3, Math.min(8, Math.ceil(contextWindow / 50000)));
-      keepCount = Math.max(
-        minKeep,
-        Math.min(keepCount, Math.max(minKeep + 2, 15), Math.floor(nonSystem.length * 0.25))
-      );
-
-      // Score messages by importance — keep high-value context (file writes, user intent)
-      // even if they're not in the recent tail
-      const scored = nonSystem.map((m, i) => ({
-        msg: m,
-        score: this.scoreMessage(m, i, nonSystem.length),
-      }));
-      const lastCount = Math.max(2, Math.ceil(keepCount / 3)); // always keep recent tail
-      const tail = scored.slice(-lastCount);
-      const head = scored.slice(0, -lastCount);
-      head.sort((a, b) => b.score - a.score);
-      const topHead = head.slice(0, Math.max(0, keepCount - lastCount));
-      const selected = [...topHead, ...tail]
-        .sort((a, b) => {
-          // restore chronological order from original indices
-          const ai = nonSystem.indexOf(a.msg);
-          const bi = nonSystem.indexOf(b.msg);
-          return ai - bi;
-        })
-        .map(s => s.msg);
-
-      const oldMessages = nonSystem.filter(m => !selected.includes(m));
-
-      const maxContentLength = Math.max(500, Math.floor(contextWindow * 0.01));
-
-      const truncatedRecent = selected.map(m => {
-        const truncatedContent =
-          (m.content || '').length > maxContentLength
-            ? (m.content || '').slice(0, maxContentLength) + '...[truncated]'
-            : m.content;
-
-        const maxToolCalls = Math.max(3, Math.min(10, Math.floor(contextWindow / 25000)));
-        let truncatedToolCalls = m.toolCalls;
-        if (m.toolCalls && m.toolCalls.length > maxToolCalls) {
-          truncatedToolCalls = m.toolCalls.slice(0, maxToolCalls);
-          truncatedToolCalls.push({ id: 'truncated', name: '...[truncated]', arguments: {} });
-        }
-
-        return { ...m, content: truncatedContent, toolCalls: truncatedToolCalls };
-      });
-
-      // Clean tool messages
-      const cleaned = this.cleanToolMessages(truncatedRecent);
-
-      // Apply immediately — context shrinks NOW
-      this.llm.setMessages([...systemMessages, ...cleaned]);
-      const newTokens = tokenCounter.estimateMessages(cleaned);
-
-      this.emit('context_compressed', {
-        before: allMessages.length,
-        after: systemMessages.length + cleaned.length,
-        tokensBefore: usedTokens,
-        tokensAfter: newTokens,
-      });
-
-      // --- Phase 2: Background LLM summary (non-blocking) ---
-      if (oldMessages.length === 0) return;
-
-      // Rich prompt with tool names preserved (same format as generateSummary)
-      const summaryPrompt = this.buildSummaryPrompt(oldMessages);
-
-      this._pendingCompression = (async () => {
-        try {
-          const summaryMsg = await this.generateSummary(oldMessages, signal);
-          if (summaryMsg.content && summaryMsg.content.trim()) {
-            this._deferredSummary = summaryMsg;
-          }
-        } catch {
-          // generateSummary has its own fallback and shouldn't throw, but guard anyway
-          this._deferredSummary = null;
-        }
-        this._pendingCompression = null;
-      })();
-    } finally {
-      this._compacting = false;
-    }
+    return _startNonBlockingCompression(this, targetTokens, signal);
   }
 
   /**
@@ -1714,26 +1430,7 @@ export class SpicaAgent extends EventEmitter {
    * the previous request's background compression.
    */
   private applyPendingSummary(): void {
-    if (!this._deferredSummary || !this.llm) return;
-
-    // Wait for in-flight compression if still running
-    if (this._pendingCompression) {
-      // Still in progress — we'll catch it next time.
-      // Don't block the current request.
-      return;
-    }
-
-    const messages = this.llm.getMessages();
-    const summary = this._deferredSummary;
-    this._deferredSummary = null;
-
-    // Insert after system messages, before conversation
-    const sysCount = messages.filter(m => m.role === 'system').length;
-    messages.splice(sysCount, 0, summary);
-    this.llm.setMessages(messages);
-
-    // Note: no 'context_compressed' emit here — Phase 1 truncation already reported
-    // the actual compression. Summary insertion is an internal detail (+1 message).
+    return _applyPendingSummary(this);
   }
 
   /**
@@ -1793,39 +1490,7 @@ export class SpicaAgent extends EventEmitter {
    * - recency bonus: +0.5 for messages in the last 25%
    */
   private scoreMessage(msg: ChatMessage, index: number, total: number): number {
-    const recencyWeight = index > total * 0.75 ? 0.5 : 0;
-
-    if (msg.role === 'user') return 8 + recencyWeight;
-
-    if (msg.role === 'tool') {
-      // Check if this tool result is for a write operation
-      const content = msg.content || '';
-      if (
-        content &&
-        (content.includes('"name":"write"') ||
-          content.includes('"name":"edit"') ||
-          content.includes('file_delete') ||
-          content.includes('file_move') ||
-          content.includes('git add') ||
-          content.includes('git commit') ||
-          content.includes('bash'))
-      )
-        return 4 + recencyWeight;
-      // Read-only tool results are low value
-      return 1 + recencyWeight;
-    }
-
-    if (msg.role === 'assistant') {
-      if (msg.toolCalls && msg.toolCalls.length > 0) {
-        const toolNames = msg.toolCalls.map(tc => tc.name);
-        if (toolNames.some(n => /(write|bash|git)/.test(n))) return 7 + recencyWeight;
-        if (toolNames.some(n => /edit/.test(n))) return 6 + recencyWeight;
-        return 3 + recencyWeight;
-      }
-      return 2 + recencyWeight;
-    }
-
-    return 1 + recencyWeight;
+    return _scoreMessage(msg, index, total);
   }
 
   // Legacy: synchronous compact for backward compatibility
@@ -1873,7 +1538,7 @@ export class SpicaAgent extends EventEmitter {
             .map(tc => {
               const args = tc.arguments || {};
               const keyArgsStr = Object.entries(args)
-                .filter(([k]) => SpicaAgent.SUMMARY_KEY_ARGS.has(k))
+                .filter(([k]) => SUMMARY_KEY_ARGS.has(k))
                 .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
                 .join(', ');
               return keyArgsStr ? `${tc.name}(${keyArgsStr})` : tc.name;
@@ -1919,7 +1584,7 @@ ${response.content || 'Early conversation compressed'}`,
             .map(tc => {
               const args = tc.arguments || {};
               const keyArgsStr = Object.entries(args)
-                .filter(([k]) => SpicaAgent.SUMMARY_KEY_ARGS.has(k))
+                .filter(([k]) => SUMMARY_KEY_ARGS.has(k))
                 .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
                 .join(', ');
               return keyArgsStr ? `${tc.name}(${keyArgsStr})` : tc.name;
