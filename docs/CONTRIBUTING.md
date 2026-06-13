@@ -15,16 +15,55 @@ npm run test
 ```
 spica-cli/
 ├── src/
-│   ├── agent.ts           # Core agent logic
-│   ├── index.ts           # CLI entry point
-│   ├── llm/               # LLM client
-│   ├── tools/             # Tool implementations
-│   ├── cli/               # TUI and events
-│   ├── prompts/           # System prompts
-│   ├── utils/             # Utilities
-│   └── __tests__/         # Tests
-├── docs/                  # Documentation
-├── bin/                   # Executable
+│   ├── agent.ts              # Core agent orchestrator
+│   ├── index.ts              # CLI entry point (commander)
+│   ├── llm/                  # LLM client + providers
+│   │   ├── LLMClient.ts      # Streaming client with rate limiter
+│   │   ├── TokenCounter.ts   # tiktoken token estimation
+│   │   ├── RateLimiter.ts    # Request/token rate limiting
+│   │   └── providers/        # OpenAI-compatible adapters
+│   ├── core/                 # Core modules
+│   │   ├── init.ts           # Agent initialization
+│   │   ├── compression.ts    # Context compression (2-phase)
+│   │   ├── learnings.ts      # Auto-learning extraction
+│   │   ├── RuntimeState.ts   # Singleton session state
+│   │   ├── EventBus.ts       # Pub/sub event bus
+│   │   └── ProcessMonitor.ts # PID tracking + kill
+│   ├── tools/                # Tool definitions + execution
+│   │   ├── registry.ts       # 33 tool definitions
+│   │   ├── execute.ts        # Tool dispatch + cache
+│   │   ├── subAgent.ts       # Sub-agent configs
+│   │   ├── cache.ts          # Tool result cache (30s TTL)
+│   │   ├── sandbox.ts        # bwrap sandbox wrapper
+│   │   └── impl/             # Tool implementations
+│   ├── cli/                  # TUI + event handlers
+│   │   ├── events.ts         # Agent event → TUI display
+│   │   ├── skillGate.ts      # Intent classification
+│   │   ├── formatting.ts     # Output formatting
+│   │   ├── results.ts        # Tool result tracking
+│   │   ├── subagentPanel.ts  # Sub-agent progress display
+│   │   └── ui/               # Terminal UI components
+│   ├── commands/             # CLI command handlers
+│   │   ├── interactive.ts    # TUI mode
+│   │   ├── simpleMode.ts     # Readline mode
+│   │   ├── providers.ts      # Provider management CLI
+│   │   └── slash/            # Slash command handlers
+│   ├── prompts/              # System prompts
+│   │   └── system.ts         # getSystemPromptStable/Variable
+│   ├── skills/               # Skill loader + executor
+│   ├── builtin-skills/       # 14 built-in skills
+│   ├── hooks/                # PreToolUse/PostToolUse hooks
+│   ├── mcp/                  # MCP client (modelcontextprotocol)
+│   ├── storage/              # Persistence (checkpoints, state, tasks)
+│   ├── utils/                # Utilities (session, settings, config)
+│   └── __tests__/            # Tests (mirrors src structure)
+├── docs/                     # Documentation
+│   ├── architecture.mermaid  # Architecture diagram source
+│   ├── MANUAL.md             # User manual
+│   ├── CONTRIBUTING.md       # This file
+│   └── superpowers/          # Skill specs + design docs
+├── bin/                      # Compiled executable
+├── scripts/                  # Build + test scripts
 └── package.json
 ```
 
@@ -88,7 +127,7 @@ Reviewers should check:
 
 #### Documentation
 - [ ] MANUAL.md updated if user-facing
-- [ ] ARCHITECTURE.md updated if structural
+- [ ] README.md + architecture.mermaid updated if structural
 - [ ] Comments for complex code
 
 ## Testing Guidelines
@@ -112,7 +151,7 @@ Reviewers should check:
 
 ### Adding a New Tool
 
-1. Add definition in `getAllToolDefinitions()`:
+1. Add definition in `src/tools/registry.ts` (`TOOLS_DEFINITIONS` array):
 ```typescript
 {
   name: 'my_tool',
@@ -157,14 +196,14 @@ case 'my_tool': {
 this.emit('my_event', { data });
 ```
 
-2. Handle in events.ts:
+2. Handle in cli/events.ts (or formatting.ts / results.ts / subagentPanel.ts):
 ```typescript
 on('my_event', (data) => {
   screen.appendScroll(...);
 });
 ```
 
-3. Document in ARCHITECTURE.md
+3. Document in README.md and docs/architecture.mermaid
 
 ## Release Process
 
@@ -177,7 +216,7 @@ on('my_event', (data) => {
 ## Questions?
 
 - Check MANUAL.md for usage
-- Check ARCHITECTURE.md for design
+- Check README.md + docs/architecture.mermaid for design
 - Check ERROR_HANDLING.md for error patterns
 - Open an issue for bugs
 - Discuss major changes before implementing

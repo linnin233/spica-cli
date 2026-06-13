@@ -124,16 +124,17 @@ spica -p <name>    # Use specific provider
 
 ## Tools
 
-### File Operations (10 tools)
+### File Operations (11 tools)
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
 | `read` | Read file content | path, offset, limit |
 | `write` | Write/create file | path, content |
-| `edit` | Edit by exact replacement | path, oldString, newString |
+| `edit` | Edit by exact replacement | path, oldString, newString, replace_all |
 | `file_multi_edit` | Multiple edits at once | path, edits[] |
 | `file_replace` | Regex replacement | path, pattern, replacement, flags, all |
 | `file_insert` | Insert at line or pattern | path, line, content, after, before |
+| `file_patch` | Apply unified diff patch | path, patch |
 | `file_exists` | Check if exists | path |
 | `file_delete` | Delete file/directory | path |
 | `file_copy` | Copy file | source, destination |
@@ -152,7 +153,7 @@ spica -p <name>    # Use specific provider
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
-| `bash` | Execute shell command | command, timeout, detached, interactive, maxOutputLength |
+| `bash` | Execute shell command | command, timeout, detached, interactive, maxOutputLength, sandbox |
 | `monitor` | Background monitor task | command, description, timeout, persistent |
 | `task_stop` | Stop background task | task_id |
 | `git` | Git operations | action, args |
@@ -172,18 +173,17 @@ spica -p <name>    # Use specific provider
 |------|-------------|----------------|
 | `todo_write` | Write todo list | todos[] |
 | `todo_read` | Read todo list | - |
-| `task` | Parallel sub-agent | tasks[] |
+| `task` | Parallel sub-agent | tasks[] (description, prompt, type, model, isolation) |
 | `skill` | Execute skill | name, args |
 | `lint` | Code linting | fix, files |
 | `test` | Run tests | filter, coverage |
 | `format` | Format code | path |
 
-### Other (4 tools)
+### Other (3 tools)
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
 | `question` | Ask user | text |
-| `file_patch` | Apply diff patch | path, patch |
 | `code_health` | Analyze code quality | path, threshold |
 | `test_quality_check` | Detect test anti-patterns | testFile, threshold |
 
@@ -194,6 +194,9 @@ spica -p <name>    # Use specific provider
 ```json
 // Normal execution
 { "command": "ls -la" }
+
+// Sandboxed (bwrap: read-only system, no network, writable workspace only)
+{ "command": "rm -rf /tmp/build", "sandbox": true }
 
 // Detached (background)
 { "command": "npm run dev", "detached": true }
@@ -269,7 +272,11 @@ Monitor events are streamed via `monitor_event`:
 ├── state.json        # Project state
 ├── tasks.json        # Task persistence
 ├── checkpoints.json  # Checkpoint metadata
-├── snapshots/        # File backups
+├── snapshots/        # Checkpoint file snapshots
+├── backups/          # Auto-backups on write/edit
+├── hooks.json        # Project-level hook overrides
+├── skills.json       # Project-level skill config
+├── skills/           # Project-level skill packages
 └── learnings/        # Project learnings
 ```
 
