@@ -179,19 +179,68 @@ export async function archiveSession(
     if (agent && session.messages.length > 0) {
       // Try LLM summary first
       try {
-        const userMessages = session.messages
-          .filter(m => m.role === 'user')
-          .map(m => m.content || '')
-          .slice(0, 5);
+        // Build a rich but compact prompt: user intents + key actions + files changed
+        const parts: string[] = [];
 
-        const prompt = `Summarize this coding session in 50-100 words. Focus on the main tasks, files modified, and outcomes:\n\n${userMessages.join('\n')}`;
+        // User messages (the actual requests, filtered)
+        const userMsgs = session.messages
+          .filter(m => m.role === 'user')
+          .map(m => (m.content || '').replace(/\n/g, ' ').trim())
+          .filter(m => m.length > 0 && m.length < 500)
+          .slice(0, 3);
+        if (userMsgs.length > 0) {
+          parts.push(`User requests: ${userMsgs.map(m => m.slice(0, 200)).join(' | ')}`);
+        }
+
+        // Key tool actions (write/edit/bash with file paths or commands)
+        const toolActions: string[] = [];
+        for (const m of session.messages) {
+          if (m.toolCalls) {
+            for (const tc of m.toolCalls) {
+              const args = tc.arguments || {};
+              if (['write', 'edit', 'file_multi_edit'].includes(tc.name) && args.path) {
+                toolActions.push(`${tc.name} ${(args.path as string).replace(/.*\//, '')}`);
+              } else if (tc.name === 'bash' && args.command) {
+                const cmd = (args.command as string).slice(0, 60);
+                toolActions.push(`bash ${cmd}`);
+              }
+            }
+          }
+        }
+        // Deduplicate and limit
+        const uniqueActions = [...new Set(toolActions)].slice(0, 8);
+        if (uniqueActions.length > 0) {
+          parts.push(`Key actions: ${uniqueActions.join(', ')}`);
+        }
+
+        // Final outcome — last assistant message without tool calls
+        const finalMsg = [...session.messages].reverse().find(
+          m => m.role === 'assistant' && !m.toolCalls && (m.content || '').trim().length > 10
+        );
+        if (finalMsg) {
+          const firstLine = (finalMsg.content || '').split('\n')[0].slice(0, 200);
+          parts.push(`Outcome: ${firstLine}`);
+        }
+
+        const prompt = `Summarize this coding session in 1-2 sentences (max 100 words). What was the user trying to accomplish, what was done, and what was the result?
+
+${parts.join('\n')}`;
 
         const response = await agent.generateDirect(prompt);
-        if (response.content) {
-          summary = response.content.slice(0, 300);
+        if (response.content && response.content.trim() && response.content.length > 10) {
+          // Filter out useless LLM responses
+          const text = response.content.trim();
+          if (!text.includes("don't have") && !text.includes('no information') && !text.includes('Could you please')) {
+            summary = text.slice(0, 300);
+          }
         }
       } catch {
-        // Fallback to simple summary
+        // Fallback to local summary
+        summary = generateSessionSummary(session.messages);
+      }
+
+      // If LLM produced nothing useful, use local fallback
+      if (!summary || summary.length < 15) {
         summary = generateSessionSummary(session.messages);
       }
     } else {
