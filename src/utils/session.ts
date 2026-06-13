@@ -85,39 +85,21 @@ export function saveSession(
   }
 }
 
-// Generate simple summary from messages — natural language, no template prefixes
+// Generate simple summary from messages — natural language, one sentence describing
+// what was attempted and what files were changed. Serves as fallback when LLM is unavailable.
 export function generateSessionSummary(messages: ChatMessage[]): string {
   if (messages.length === 0) return '';
 
-  // Extract actual user requests — skip skill prompts, system injections, emotional outbursts
-  const userMessages = messages
+  // Extract the first meaningful user message (the primary task request)
+  const firstUserMsg = messages
     .filter(m => m.role === 'user')
     .map(m => (m.content || '').replace(/\n/g, ' ').trim())
-    .filter(m => {
-      if (m.length === 0) return false;
-      // Skip injected skill prompts (long templates > 500 chars)
-      if (m.length > 500) return false;
-      // Skip messages starting with markdown headings or template markers
-      if (m.startsWith('#') || m.startsWith('##') || m.startsWith('<')) return false;
-      // Skip messages containing template section headers
+    .find(m => {
+      if (m.length === 0 || m.length > 500) return false;
+      if (m.startsWith('#') || m.startsWith('<') || m.startsWith('[')) return false;
       if (/\b(Overview|Instructions|Guidelines|Prerequisites|Workflow)\b/i.test(m.slice(0, 100))) return false;
-      // Skip system injections
-      if (m.startsWith('[QUEUED') || m.startsWith('[SYSTEM]')) return false;
-      // Skip pure symbols / emotional outbursts with no technical content
-      if (/^[？?！!。.…，,、\s]+$/.test(m)) return false;
-      // Skip emotional venting with no actionable content (short, question-heavy)
-      if (m.length < 80 && (m.includes('为什么') || m.includes('到底') || m.includes('怎么回事')) && !/[a-zA-Z_/.]+/.test(m)) return false;
       return true;
-    })
-    .slice(0, 5);
-
-  // Build a natural-language summary
-  const parts: string[] = [];
-
-  if (userMessages.length > 0) {
-    const cleaned = userMessages.map(m => m.slice(0, 120));
-    parts.push(cleaned.join('; '));
-  }
+    });
 
   // Collect files modified
   const filePaths = new Set<string>();
@@ -132,34 +114,34 @@ export function generateSessionSummary(messages: ChatMessage[]): string {
     }
   }
 
-  // Try to extract the assistant's final conclusion (always last assistant message without tool calls)
-  const finalAssistantMsg = [...messages].reverse().find(
-    m => m.role === 'assistant' && !m.toolCalls && (m.content || '').trim().length > 0
+  // Extract final assistant conclusion
+  const finalMsg = [...messages].reverse().find(
+    m => m.role === 'assistant' && !m.toolCalls && (m.content || '').trim().length > 10
   );
-  if (finalAssistantMsg && parts.length === 0) {
-    // Use the first sentence of the final response as fallback summary
-    const firstSentence = (finalAssistantMsg.content || '').split(/[.。\n]/)[0].trim();
-    if (firstSentence.length > 10 && firstSentence.length < 200) {
-      parts.push(firstSentence);
-    }
-  }
 
-  if (parts.length === 0 && filePaths.size === 0) {
-    return `${messages.length} messages`;
+  // Build summary: what was requested + what was changed + outcome
+  const parts: string[] = [];
+
+  if (firstUserMsg) {
+    parts.push(firstUserMsg.slice(0, 150));
   }
 
   if (filePaths.size > 0) {
     const files = Array.from(filePaths)
       .slice(0, 5)
       .map(f => f.replace(/.*\//, ''));
-    if (parts.length > 0) {
-      parts[0] += ` — modified ${files.join(', ')}`;
-    } else {
-      parts.push(`Modified ${files.join(', ')}`);
+    parts.push(`modified ${files.join(', ')}`);
+  }
+
+  if (finalMsg) {
+    const firstSentence = (finalMsg.content || '').split(/[.。\n]/)[0].trim();
+    if (firstSentence.length > 10 && firstSentence.length < 200) {
+      parts.push(firstSentence);
     }
   }
 
-  return parts.join('. ').slice(0, 300);
+  if (parts.length === 0) return `${messages.length} messages`;
+  return parts.join(' — ').slice(0, 300);
 }
 
 // Archive session — moves active session to historical, generating a summary.
@@ -222,8 +204,13 @@ export async function archiveSession(
           parts.push(`Outcome: ${firstLine}`);
         }
 
-        const prompt = `Summarize this coding session in 1-2 sentences (max 100 words). What was the user trying to accomplish, what was done, and what was the result?
+        const prompt = `Summarize this coding session in 1-2 sentences (max 120 words). Include:
+- What the user wanted to accomplish
+- What was actually done (key files modified/created)
+- Whether the task was completed or still in progress
+- Any errors or blockers encountered
 
+Session data:
 ${parts.join('\n')}`;
 
         const response = await agent.generateDirect(prompt);

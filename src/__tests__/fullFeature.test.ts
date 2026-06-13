@@ -58,7 +58,7 @@ describe('CLI Commands', () => {
       const result = await runCli(['show', 'aliyunglm5']);
       expect(result.stdout).toContain('name:');
       expect(result.stdout).toContain('url:');
-      expect(result.stdout).toContain('model:');
+      expect(result.stdout).toContain('default:');
     },
     10000
   );

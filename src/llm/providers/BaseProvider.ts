@@ -97,6 +97,11 @@ export abstract class BaseProvider extends EventEmitter {
     this.cachePrefixEnd = sysCount > 0 ? sysCount - 1 : -1;
   }
 
+  /** Get the cache prefix boundary index for compression-aware truncation. */
+  getCachePrefixEnd(): number {
+    return this.cachePrefixEnd;
+  }
+
   // Mark current messages end as cache prefix boundary
   markCachePrefixEnd(): void {
     this.cachePrefixEnd = this.messages.length - 1;

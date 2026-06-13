@@ -7,7 +7,8 @@
 ### Provider Management
 
 ```bash
-spica set <name> <url> <apiKey> <model>  # Add/update provider
+spica set <name> <url> <apiKey> [model]  # Add/update provider
+    --models fast:id1,pro:id2            #   with model aliases
 spica use <name>                         # Switch default provider
 spica list                               # List all providers
 spica show [name]                        # Show provider details
@@ -17,13 +18,31 @@ spica remove --all                       # Remove all providers
 
 Example:
 ```bash
-spica set deepseek https://api.deepseek.com/v1 sk-xxx deepseek-chat
+# Add provider with multiple models
+spica set deepseek https://api.deepseek.com/v1 sk-xxx deepseek-v4-pro \
+  --models fast:deepseek-v4-flash,pro:deepseek-v4-pro
+
 spica use deepseek
 spica list
 # Output:
 # ● deepseek (default)
 # ○ openai
 ```
+
+### Model Alias Management
+
+```bash
+spica models list [provider]              # List model aliases
+spica models set <provider> <alias> <id>  # Add alias (e.g., fast → model-id)
+spica models remove <provider> <alias>    # Remove alias
+spica models default <provider> <alias>   # Change default model
+spica models resolve <provider> [alias]   # Resolve alias → actual model ID
+```
+
+Each provider has one `model` (default) and optional `models` (alias→ID map).
+Subagents can use `"model": "fast"` to select a specific model via alias.
+If the value looks like a real model ID (contains digits or `-`), it is used directly
+without going through the alias map.
 
 ### Session
 

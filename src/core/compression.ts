@@ -68,39 +68,58 @@ export async function startNonBlockingCompression(
     }
 
     // --- Phase 1: Rule-based truncation (instant) ---
-    const ratio = usedTokens / targetTokens;
-    let keepCount = ratio > 2 ? 5 : ratio > 1.5 ? 8 : 12;
-    const minKeep = Math.max(3, Math.min(8, Math.ceil(contextWindow / 50000)));
-    keepCount = Math.max(
-      minKeep,
-      Math.min(keepCount, Math.max(minKeep + 2, 15), Math.floor(nonSystem.length * 0.25))
+    // Preserve cache prefix: messages in the stable prefix (system + early cached
+    // messages) are excluded from scoring/truncation to maintain API-side caching.
+    const cacheEnd = llm.getProvider().getCachePrefixEnd?.() ?? -1;
+    const prefixSet: Set<ChatMessage> = new Set(
+      cacheEnd >= 0 ? allMessages.slice(0, cacheEnd + 1) : []
     );
+    const prefixNonSystem = nonSystem.filter(m => prefixSet.has(m));
+    const compressible = nonSystem.filter(m => !prefixSet.has(m));
 
-    // Score messages by importance — keep high-value context (file writes, user intent)
-    // even if they're not in the recent tail
-    const scored = nonSystem.map((m, i) => ({
+    // Keep enough messages for the LLM to retain task awareness.
+    // Graduated tiers based on how much we need to compress.
+    const ratio = usedTokens / targetTokens;
+    let keepCount: number;
+    if (ratio > 3)        keepCount = Math.max(10, Math.floor(nonSystem.length * 0.15));
+    else if (ratio > 2)   keepCount = Math.max(15, Math.floor(nonSystem.length * 0.25));
+    else if (ratio > 1.5) keepCount = Math.max(20, Math.floor(nonSystem.length * 0.35));
+    else                  keepCount = Math.max(25, Math.floor(nonSystem.length * 0.50));
+    // Floor: 10, cap at 40% of total (never drop below 60% removal)
+    keepCount = Math.max(10, Math.min(keepCount, Math.floor(nonSystem.length * 0.40)));
+    // Allocate keep slots: prefix messages are free (always kept)
+    const slotsForCompressible = Math.max(0, keepCount - prefixNonSystem.length);
+
+    // Score compressible messages by importance — keep high-value context
+    // (file writes, user intent) even if they're not in the recent tail
+    const scored = compressible.map((m, i) => ({
       msg: m,
-      score: scoreMessage(m, i, nonSystem.length),
+      score: scoreMessage(m, i, compressible.length),
     }));
-    const lastCount = Math.max(2, Math.ceil(keepCount / 3)); // always keep recent tail
+    const lastCount = Math.max(2, Math.ceil(slotsForCompressible / 3)); // always keep recent tail
     const tail = scored.slice(-lastCount);
     const head = scored.slice(0, -lastCount);
     head.sort((a, b) => b.score - a.score);
-    const topHead = head.slice(0, Math.max(0, keepCount - lastCount));
-    const selected = [...topHead, ...tail]
+    const topHead = head.slice(0, Math.max(0, slotsForCompressible - lastCount));
+    const selectedCompressible = [...topHead, ...tail]
       .sort((a, b) => {
         // restore chronological order from original indices
-        const ai = nonSystem.indexOf(a.msg);
-        const bi = nonSystem.indexOf(b.msg);
+        const ai = compressible.indexOf(a.msg);
+        const bi = compressible.indexOf(b.msg);
         return ai - bi;
       })
       .map(s => s.msg);
 
+    // Selected = prefix messages (always kept, untruncated) + scored compressible
+    const selected = [...prefixNonSystem, ...selectedCompressible];
     const oldMessages = nonSystem.filter(m => !selected.includes(m));
 
-    const maxContentLength = Math.max(500, Math.floor(contextWindow * 0.01));
+    const maxContentLength = Math.max(2000, Math.floor(contextWindow * 0.05));
 
     const truncatedRecent = selected.map(m => {
+      // Don't truncate cache-prefix messages — they're needed for cache hits
+      if (prefixSet.has(m)) return m;
+
       const truncatedContent =
         (m.content || '').length > maxContentLength
           ? (m.content || '').slice(0, maxContentLength) + '...[truncated]'
@@ -119,7 +138,7 @@ export async function startNonBlockingCompression(
     // Clean tool messages
     const cleaned = cleanToolMessages(truncatedRecent);
 
-    // Apply immediately — context shrinks NOW
+    // Apply immediately — context shrinks NOW.
     llm.setMessages([...systemMessages, ...cleaned]);
     const newTokens = tokenCounter.estimateMessages(cleaned);
 
@@ -130,8 +149,31 @@ export async function startNonBlockingCompression(
       tokensAfter: newTokens,
     });
 
-    // --- Phase 2: Background LLM summary (non-blocking) ---
+    // --- Phase 2: LLM summary ---
     if (oldMessages.length === 0) return;
+
+    // When more than half of compressible messages are dropped, wait for the
+    // summary synchronously. The LLM needs this context on the CURRENT request,
+    // not the next one — otherwise it works with severely truncated context.
+    if (oldMessages.length > selectedCompressible.length) {
+      agent['_compacting'] = false;
+      try {
+        const summaryMsg = await generateSummary(llm, oldMessages, signal);
+        if (summaryMsg.content && summaryMsg.content.trim()) {
+          const msgs = llm.getMessages();
+          const sysCount = msgs.filter(m => m.role === 'system').length;
+          msgs.splice(sysCount, 0, summaryMsg);
+          llm.setMessages(msgs);
+        }
+      } catch {
+        // Fall through — summary is best-effort
+      } finally {
+        agent['_compacting'] = true;
+      }
+      return;
+    }
+
+    // Light drop: summary runs in background for next request
 
     agent['_pendingCompression'] = (async () => {
       try {
@@ -226,20 +268,24 @@ export function cleanToolMessages(messages: ChatMessage[]): ChatMessage[] {
  * Higher score = more likely to be kept.
  *
  * Scoring rules:
- * - user messages: 8 base (user intent is critical)
- * - assistant with write/git/bash: 7 (actual code changes)
- * - assistant with edit: 6 (edits)
+ * - compression summary: 10 (must preserve context)
+ * - user messages: 10 base (user intent is critical)
+ * - assistant with write/git/bash: 9 (actual code changes)
+ * - assistant with edit: 7 (edits)
  * - assistant with other toolCalls: 3 (generic action)
  * - assistant no toolCalls: 2 (commentary)
  * - tool for write/git: 4 (result of write)
  * - tool for read/grep/glob: 1 (transient read)
  * - tool for other: 2
- * - recency bonus: +0.5 for messages in the last 25%
+ * - recency bonus: +1.0 for messages in the last 25%
  */
 export function scoreMessage(msg: ChatMessage, index: number, total: number): number {
-  const recencyWeight = index > total * 0.75 ? 0.5 : 0;
+  const recencyWeight = index > total * 0.75 ? 1.0 : 0;
 
-  if (msg.role === 'user') return 8 + recencyWeight;
+  // Protect compression summaries — they carry context that must not be lost
+  if (msg.content && msg.content.startsWith('[COMPACTED CONTEXT')) return 10;
+
+  if (msg.role === 'user') return 10 + recencyWeight;
 
   if (msg.role === 'tool') {
     // Check if this tool result is for a write operation
@@ -262,8 +308,8 @@ export function scoreMessage(msg: ChatMessage, index: number, total: number): nu
   if (msg.role === 'assistant') {
     if (msg.toolCalls && msg.toolCalls.length > 0) {
       const toolNames = msg.toolCalls.map(tc => tc.name);
-      if (toolNames.some(n => /\b(write|bash|git)\b/.test(n))) return 7 + recencyWeight;
-      if (toolNames.some(n => /\bedit\b/.test(n))) return 6 + recencyWeight;
+      if (toolNames.some(n => /\b(write|bash|git)\b/.test(n))) return 9 + recencyWeight;
+      if (toolNames.some(n => /\bedit\b/.test(n))) return 7 + recencyWeight;
       return 3 + recencyWeight;
     }
     return 2 + recencyWeight;
