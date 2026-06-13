@@ -2,7 +2,7 @@ import { SpicaAgent } from '../agent';
 import { LLMClient } from '../llm/LLMClient';
 import { initMCP } from '../mcp/client';
 import { initSkills, listSkills } from '../skills/index';
-import { getProviderConfig } from '../utils/settings';
+import { getProviderConfig, resolveModel } from '../utils/settings';
 import { getSystemPromptStable, getSystemPromptVariable } from '../prompts/system';
 import {
   loadProjectConfig as loadAgentsConfig,
@@ -39,12 +39,14 @@ export async function initAgentAsSubAgent(
   const config = await getProviderConfig(parentProviderName);
 
   // Fresh LLM client — same API, isolated message history
-  // If modelOverride specified, use it instead of parent's model
+  // If modelOverride specified, resolve it against provider's models map
+  // (e.g., "haiku" → "claude-haiku-4-5", or direct model ID passed through)
+  const resolvedModel = resolveModel(config, modelOverride);
   self.llm = new LLMClient({
     provider: parentProviderName || 'openai',
     apiKey: config.apiKey,
     baseUrl: config.baseUrl,
-    model: modelOverride || config.model,
+    model: resolvedModel,
     name: config.name,
   });
 

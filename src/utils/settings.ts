@@ -15,8 +15,41 @@ export interface ProviderConfig {
   name: string;
   apiKey: string;
   baseUrl: string;
-  model: string;
+  model: string;                    // 默认模型
+  models?: Record<string, string>;  // 模型别名 → model ID, e.g. { "haiku": "claude-haiku-4-5", "mini": "gpt-4o-mini" }
   description?: string;
+}
+
+/**
+ * Resolve a model alias to its actual model ID.
+ * 1. If alias matches a key in provider's models map → return the mapped model ID
+ * 2. If alias looks like a real model ID (contains '/', '-', digits) → return as-is
+ * 3. Otherwise fall back to provider's default model
+ */
+export function resolveModel(provider: ProviderConfig, modelAlias?: string): string {
+  if (!modelAlias) return provider.model;
+
+  // Check models alias map first
+  if (provider.models && provider.models[modelAlias]) {
+    return provider.models[modelAlias];
+  }
+
+  // If it looks like a real model ID (contains version-like patterns), use as-is
+  if (/[-\d]/.test(modelAlias) || modelAlias.includes('/')) {
+    return modelAlias;
+  }
+
+  // Fall back to default model
+  return provider.model;
+}
+
+/**
+ * List available model aliases for a provider.
+ * Returns null if no models map is configured.
+ */
+export function listProviderModels(provider: ProviderConfig): string[] | null {
+  if (!provider.models || Object.keys(provider.models).length === 0) return null;
+  return Object.entries(provider.models).map(([alias, id]) => `${alias} → ${id}`);
 }
 
 // MCP 配置
@@ -338,23 +371,40 @@ export async function setProviderConfig(
   name: string,
   apiKey: string,
   baseUrl?: string,
-  model?: string
+  model?: string,
+  models?: Record<string, string>
 ): Promise<void> {
   const settings = await loadGlobalSettings();
 
   if (!settings.providers) settings.providers = {};
 
+  const existing = settings.providers[name];
   settings.providers[name] = {
     name,
     apiKey,
-    baseUrl: baseUrl || DEFAULT_BASE_URLS[name] || '',
-    model: model || DEFAULT_MODELS[name] || 'gpt-4o',
+    baseUrl: baseUrl || existing?.baseUrl || DEFAULT_BASE_URLS[name] || '',
+    model: model || existing?.model || DEFAULT_MODELS[name] || 'gpt-4o',
+    models: models || existing?.models,
+    description: existing?.description,
   };
 
   if (!settings.defaultProvider) {
     settings.defaultProvider = name;
   }
 
+  await saveGlobalSettings(settings);
+}
+
+/** Set model aliases for a provider */
+export async function setProviderModels(
+  providerName: string,
+  models: Record<string, string>
+): Promise<void> {
+  const settings = await loadGlobalSettings();
+  if (!settings.providers?.[providerName]) {
+    throw new Error(`Provider '${providerName}' not configured. Run: spica providers set ${providerName} <api-key>`);
+  }
+  settings.providers[providerName].models = models;
   await saveGlobalSettings(settings);
 }
 
