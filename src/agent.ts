@@ -300,11 +300,12 @@ export class SpicaAgent extends EventEmitter {
   private _stagnationCounter: number = 0;
   private static readonly STAGNATION_WARNING = 8;
   private static readonly STAGNATION_LIMIT = 16;
-  // Auto-continue: if LLM returns text-only after doing actual work (tools executed
-  // or compression happened), auto-inject "continue" and loop again.
-  // Prevents the agent from stopping mid-task with "[OK] Done".
-  private _compressedThisRunLoop: boolean = false;
-  private _toolsExecutedThisRunLoop: boolean = false;
+  // Text-only responses are LLM observations, NOT completion signals.
+  // The LLM drives the loop — it will either call tools (continue work)
+  // or produce text. We never break on text-only; stagnation detection
+  // (16 rounds no progress) is the safety net.
+  // Other coding agents (Claude Code, Aider) don't guess completion either —
+  // the model itself decides when to stop via tool calls or explicit markers.
   // Periodic session save: persist every N tool rounds for crash resilience
   private _roundCount: number = 0;
   private static readonly SAVE_EVERY_N_ROUNDS = 5;
@@ -893,10 +894,6 @@ export class SpicaAgent extends EventEmitter {
       this._idleCompressTimer = null;
     }
 
-    // Reset auto-continue flags — new user input, new runLoop
-    this._compressedThisRunLoop = false;
-    this._toolsExecutedThisRunLoop = false;
-
     // Cancel-on-entry: if pendingCancel, refuse to enter
     if (this.checkCanceledOnEntry()) {
       this.pendingCancel = false;
@@ -984,7 +981,6 @@ export class SpicaAgent extends EventEmitter {
           target: targetTokens,
         });
         await this.startNonBlockingCompression(targetTokens, signal);
-        this._compressedThisRunLoop = true;
       }
 
       this.emit('token_usage', {
@@ -1049,7 +1045,11 @@ export class SpicaAgent extends EventEmitter {
       let criticalErrorDetected: { tool: string; error: string; suggestion: string } | null = null;
       let queueInjectedThisIteration = false; // 防止同一迭代内重复注入队列
 
-      while (!response.finished && !signal.aborted) {
+      // 循环仅由中断和停滞检测控制退出。
+      // response.finished 是"本轮生成完成"（turn-level），不是"任务完成"（task-level）。
+      // LLM 返回纯文本 ≠ 任务结束 — 它只是在观察/交流，可能还要继续调工具。
+      // 其他 coding agent（Claude Code, Aider）也不用 stop_reason 判断任务完成。
+      while (!signal.aborted) {
         queueInjectedThisIteration = false; // 每次迭代重置
 
         if (signal.aborted) {
@@ -1065,34 +1065,37 @@ export class SpicaAgent extends EventEmitter {
           queueInjectedThisIteration = true; // 标记已注入
         }
 
-        // 检查response状态
         if (!response.toolCalls || response.toolCalls.length === 0) {
           if (response.content) {
-            // Auto-continue when LLM returns text-only after doing work.
-            // LLMs (especially DeepSeek) often respond with a short observation
-            // after a tool result instead of continuing with more tool calls.
-            // Without this, the agent stops mid-task saying "[OK] Done".
-            const shouldAutoContinue =
-              this._compressedThisRunLoop ||    // after compression
-              this._toolsExecutedThisRunLoop;   // after any tool execution
-
-            if (shouldAutoContinue) {
-              this._compressedThisRunLoop = false;
-              this._toolsExecutedThisRunLoop = false; // only auto-continue once per batch
-              this.emit('compress_auto_continue', { content: response.content });
-              this.agentAddMessage({ role: 'user', content: '[AUTO-CONTINUE] Continue with the next step. Use tools to make progress. Do not stop here.' });
+            // 纯文本 ≠ 任务结束。LLM 只是说了句话（内容已通过 chunk 事件流式展示）。
+            // 不注入任何假消息 — 直接给 LLM 下一轮，让它基于完整历史自己决定：
+            // 调工具继续工作，或再说一句话交流。
+            // 停滞检测是唯一的安全网。
+            // 行为对齐其他 coding agent（Claude Code, Aider）：
+            //   不猜完成，LLM 自己驱动循环。
+            this.emit('waiting_for_llm');
+            try {
               response = await this.callLLMWithRetry(
                 sig => this.llm!.generateFromHistory(toolDefinitions, sig),
-                'llm_generate_auto_continue',
+                'llm_generate_continue_text',
                 10,
                 signal
               );
               this.syncFullHistory();
-              this._stagnationCounter = 0;
-              continue;
+            } catch (retryErr: unknown) {
+              const errMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+              if (retryErr instanceof InterruptError) {
+                this.emit('agent_interrupted', { reason: 'Interrupted during text continuation' });
+                return `[INTERRUPTED] ${errMsg}`;
+              }
+              this.emit('error_suggestion', {
+                tool: 'llm_generate_continue_text',
+                error: errMsg,
+                suggestion: 'LLM continuation failed after text-only response. Check API status.',
+              });
+              return `LLM continuation failed after text-only response: ${errMsg}`;
             }
-            // 有内容输出，任务完成
-            break;
+            continue;
           }
           // 空响应处理：需要区分"真正空响应"和"只有 reasoning"
           if (this.reasoningReceived) {
@@ -1384,10 +1387,6 @@ export class SpicaAgent extends EventEmitter {
 
           allToolResults.push(...toolResults);
 
-          // Mark that tools were executed — enables auto-continue if LLM
-          // returns text-only afterwards (prevents premature [OK] Done).
-          this._toolsExecutedThisRunLoop = true;
-
           // Progress tracking: detect meaningful agent actions this round.
           // Broadens beyond file I/O — git commits, test runs, and package
           // installs are also progress. Only toolResults carry resolved names.
@@ -1586,9 +1585,14 @@ export class SpicaAgent extends EventEmitter {
               return `Operations completed but LLM continuation failed.\nError: ${errorMsg}\nCompleted operations:\n${resultsSummary}\nTool results preserved in history. Continue conversation to proceed.`;
             }
           }
-        } else {
-          break;
         }
+      }
+
+      // 循环退出可能原因：
+      // 1. signal.aborted → break at 1055 → 返回中断状态
+      // 2. 空响应停滞限制 → break → 返回停滞状态
+      if (signal.aborted) {
+        return '[INTERRUPTED] Agent execution stopped by user (ESC ESC). You can retry or continue with a new request.';
       }
 
       const assistantContent =
@@ -1615,7 +1619,7 @@ export class SpicaAgent extends EventEmitter {
         saveProjectState(this.workspacePath, state);
       }
 
-      return assistantContent;
+      return assistantContent || '[STAGNATION] No response from LLM. The agent may be stuck.';
     } finally {
       this.currentAbortController = null;
       this.clearPendingCancel(this.cancelSeq);

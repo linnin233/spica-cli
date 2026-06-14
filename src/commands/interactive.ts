@@ -899,11 +899,15 @@ If AGENTS.md already exists, preserve valuable content and supplement updates.`;
                 state.setProcessing(true);
                 updateStatusBar();
                 try {
-                  await agent.runLoop(prompt);
+                  const result = await agent.runLoop(prompt);
                   screen.clearThinkingAnimation();
                   screen.setStreaming(false);
-                  screen.appendScroll(COLORS.success("\n[OK] Done\n"));
-                  playBell("done"); // 工作完成提示音
+                  if (result && result.startsWith('[')) {
+                    screen.appendScroll(COLORS.muted(`\n${result}\n`));
+                  } else {
+                    screen.appendScroll(COLORS.success("\n[OK] Done\n"));
+                    playBell("done"); // 工作完成提示音
+                  }
                 } catch (error: unknown) {
                   screen.clearThinkingAnimation();
                   screen.setStreaming(false);
@@ -973,8 +977,13 @@ If AGENTS.md already exists, preserve valuable content and supplement updates.`;
             // 显示运行统计
             const stats = formatRunStats(elapsed, agent, tokenCounter);
             screen.appendScroll(COLORS.muted(`\n${stats}\n`));
-            screen.appendScroll(COLORS.success("[OK] Done\n"));
-            playBell("done");
+            // 检查 result 是否以 [STATUS] 开头（中断/停滞/错误等特殊状态）
+            if (result && result.startsWith('[')) {
+              screen.appendScroll(COLORS.muted(`${result}\n`));
+            } else {
+              screen.appendScroll(COLORS.success("[OK] Done\n"));
+              playBell("done");
+            }
           } catch (error: unknown) {
             const elapsed = Date.now() - startTime;
             const errorMsg = error instanceof Error ? error.message : String(error);
