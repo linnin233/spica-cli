@@ -272,7 +272,7 @@ CRITICAL: The conversation being summarized represents IN-PROGRESS WORK. The tas
 [The EXACT next step to take when you resume. Be specific: which file, what change.]
 
 ## Continue Working
-IMPORTANT: After reading this summary, CONTINUE working on the pending tasks. Do NOT ask the user what to do — just pick up where you left off. The user expects you to finish the work.
+IMPORTANT: After reading this summary, call tools immediately to continue working. Do NOT produce a text response — just pick up where you left off.
 
 History messages:
 ${messagesText}`;

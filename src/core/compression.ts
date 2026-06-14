@@ -337,7 +337,7 @@ export function applyPendingSummary(agent: SpicaAgent): void {
   const sysCount = messages.filter(m => m.role === 'system').length;
   const continueMsg: ChatMessage = {
     role: 'system' as const,
-    content: '[CONTEXT RESTORED] The summary above describes your previous work. Continue from where you left off — the tasks are NOT complete. Do NOT ask "what would you like me to do?" — just resume working.',
+    content: '[CONTEXT RESTORED] The summary above describes your previous work. Continue from where you left off — the tasks are NOT complete. Do NOT produce text. Call tools immediately to resume working.',
   };
   const newMessages = [
     ...messages.slice(0, sysCount),
