@@ -1053,6 +1053,16 @@ export class SpicaAgent extends EventEmitter {
           break;
         }
 
+        // Mid-loop context check: compress if context fills up during long work sessions.
+        if (this._roundCount > 0 && this._roundCount % 4 === 0 && this.llm) {
+          const ctxWindow = this.llm.getProvider().getContextWindow();
+          const t = this.llm.getTokenCounter();
+          t.setContextWindow(ctxWindow);
+          if (t.estimateMessages(this.llm.getMessages()) > ctxWindow * 0.70) {
+            await this.startNonBlockingCompression(Math.floor(ctxWindow * 0.40), signal);
+          }
+        }
+
         // 检查队列输入：在每次迭代开始时（LLM响应后）检查是否有新输入
         const queuedInputAtStart = this.checkQueueInput();
         if (queuedInputAtStart) {
