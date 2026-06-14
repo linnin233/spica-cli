@@ -223,9 +223,10 @@ export function setupAgentEvents(
     listeners.push({ event, handler });
   };
 
-  // 追踪 reasoning 状态
+  // 追踪 reasoning 状态和 sub-agent streaming
   let reasoningStarted = false;
   let justSwitchedFromReasoning = false;
+  const subAgentStreamedChars = new Map<string, number>();
 
   // 每次新对话开始时重置状态
   on('waiting_for_llm', () => {
@@ -234,6 +235,7 @@ export function setupAgentEvents(
     resetToolTracking();
     subAgentState.clear();
     subAgentStreamBuffer.clear();
+    subAgentStreamedChars.clear();
     subAgentSeq = 0;
     // 清除thinking动画
     screen.clearThinkingAnimation();
@@ -431,6 +433,14 @@ export function setupAgentEvents(
     const record = subAgentState.get(data.id);
     if (record) record.toolCount++;
 
+    // Flush any pending stream buffer before showing tool call
+    const pending = subAgentStreamBuffer.get(data.id);
+    if (pending?.trim()) {
+      const prefix = record?.label || '[sub]';
+      screen.appendScroll(COLORS.subAgent(`  ${prefix} │ ${pending.slice(0, 300)}\n`));
+      subAgentStreamBuffer.set(data.id, '');
+    }
+
     // Show tool call with subagent label and key args
     const prefix = record?.label || '[sub]';
     const args = formatToolArgs(data.name, data.arguments);
@@ -454,6 +464,7 @@ export function setupAgentEvents(
       screen.appendScroll(COLORS.subAgent(`  ${prefix} │ ${remaining.slice(0, 300)}\n`));
     }
     subAgentStreamBuffer.delete(data.id);
+    subAgentStreamedChars.delete(data.id);
 
     const record = subAgentState.get(data.id);
     if (record) {
@@ -474,6 +485,7 @@ export function setupAgentEvents(
       screen.appendScroll(COLORS.subAgent(`  ${prefix} │ ${remaining.slice(0, 300)}\n`));
     }
     subAgentStreamBuffer.delete(data.id);
+    subAgentStreamedChars.delete(data.id);
 
     const record = subAgentState.get(data.id);
     if (record) {
@@ -486,16 +498,23 @@ export function setupAgentEvents(
   });
 
   // Subagent text output — show what subagent is saying
+  // Uses subAgentStreamedChars to avoid duplicate display (streaming already showed content)
   on('sub_agent_message', (data: SubAgentMessageData) => {
     if (data.role === 'assistant' && data.content) {
-      const record = subAgentState.get(data.id);
-      const prefix = record?.label || '[sub]';
-      const lines = data.content.split('\n');
-      for (const line of lines) {
-        if (line.trim()) {
-          screen.appendScroll(COLORS.subAgent(`  ${prefix} │ ${line.slice(0, 200)}\n`));
+      const streamed = subAgentStreamedChars.get(data.id) || 0;
+      // Only display message content if nothing was streamed (non-streaming fallback)
+      if (streamed === 0) {
+        const record = subAgentState.get(data.id);
+        const prefix = record?.label || '[sub]';
+        const lines = data.content.split('\n');
+        for (const line of lines) {
+          if (line.trim()) {
+            screen.appendScroll(COLORS.subAgent(`  ${prefix} │ ${line.slice(0, 200)}\n`));
+          }
         }
       }
+      // Reset streamed counter for next turn
+      subAgentStreamedChars.set(data.id, 0);
     }
   });
 
@@ -520,21 +539,31 @@ export function setupAgentEvents(
     const record = subAgentState.get(data.id);
     const prefix = record?.label || '[sub]';
 
+    // Track streamed chars to prevent duplicate display in message event
+    subAgentStreamedChars.set(data.id, (subAgentStreamedChars.get(data.id) || 0) + data.chunk.length);
+
     let buffer = subAgentStreamBuffer.get(data.id) || '';
     buffer += data.chunk;
 
-    // Flush on newline or when buffer gets large
-    const newlineIdx = buffer.indexOf('\n');
-    if (newlineIdx >= 0 || buffer.length > 120) {
+    // Flush complete lines on newline, or flush when buffer gets large
+    if (buffer.includes('\n')) {
       const lines = buffer.split('\n');
       // Keep the last incomplete line in the buffer
       const incomplete = buffer.endsWith('\n') ? '' : (lines.pop() || '');
-      for (const line of lines) {
-        if (line.trim()) {
-          screen.appendScroll(COLORS.subAgent(`  ${prefix} │ ${line.slice(0, 300)}\n`));
+      const completeLines = lines.filter(l => l.trim());
+      if (completeLines.length > 0) {
+        // First line gets prefix, rest flush without — so text flows naturally
+        const output = [`  ${prefix} │ ${completeLines[0]}`];
+        for (let i = 1; i < completeLines.length; i++) {
+          output.push(`  ${completeLines[i]}`);
         }
+        screen.appendScroll(COLORS.subAgent(output.join('\n') + '\n'));
       }
       subAgentStreamBuffer.set(data.id, incomplete);
+    } else if (buffer.length > 200) {
+      // No newline but buffer is large — flush as a single line
+      screen.appendScroll(COLORS.subAgent(`  ${prefix} │ ${buffer.slice(0, 300)}\n`));
+      subAgentStreamBuffer.set(data.id, '');
     } else {
       subAgentStreamBuffer.set(data.id, buffer);
     }
@@ -675,6 +704,13 @@ export function setupAgentEvents(
     screen.refreshInput();
   }
 
+  on('context_compressing', (data: { before: number; tokensBefore: number; target: number }) => {
+    const fmt = (t: number) => (t >= 1000 ? `${(t / 1000).toFixed(1)}k` : `${t}`);
+    screen.appendScroll(
+      COLORS.secondary(`\n[compress] ${data.before} msgs (${fmt(data.tokensBefore)} tok) → target ${fmt(data.target)} tok …\n`)
+    );
+  });
+
   on('context_compressed', (data: ContextCompressedData) => {
     const formatTokens = (t: number) => (t >= 1000 ? `${Math.floor(t / 1000)}k` : `${t}`);
     const tokensInfo =
@@ -682,9 +718,9 @@ export function setupAgentEvents(
         ? ` (${formatTokens(data.tokensBefore)}→${formatTokens(data.tokensAfter)})`
         : '';
     const phaseLabel = data.phase === 'phase1+sync-summary'
-      ? 'compress+summary'
+      ? 'compress'
       : data.phase === 'phase1+deferred-summary'
-        ? 'compress+deferred'
+        ? 'compress'
         : 'compress';
     const roleInfo = data.kept
       ? ` [u${data.kept.user}/a${data.kept.assistant}/t${data.kept.tool}]`
@@ -694,10 +730,15 @@ export function setupAgentEvents(
       : '';
     screen.appendScroll(
       COLORS.secondary(
-        `\n[${phaseLabel}] ${data.before}→${data.after}${tokensInfo}${roleInfo}${dropInfo}\n`
+        `[compress] ${data.before}→${data.after}${tokensInfo}${roleInfo}${dropInfo}\n`
       )
     );
     screen.restoreCursor();
+  });
+
+  on('compress_auto_continue', (_data: { content: string }) => {
+    // Subtle indicator that the agent is continuing after compression
+    screen.appendScroll(COLORS.secondary(`[compress] auto-continuing…\n`));
   });
 
   // Monitor 工具输出事件

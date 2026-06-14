@@ -24,6 +24,8 @@ spica-cli/
 │   │   └── providers/        # OpenAI-compatible adapters
 │   ├── core/                 # Core modules
 │   │   ├── init.ts           # Agent initialization
+│   │   ├── AgentState.ts     # Unified state machine
+│   │   ├── progressTracker.ts # Structured progress tracking
 │   │   ├── compression.ts    # Context compression (2-phase)
 │   │   ├── learnings.ts      # Auto-learning extraction
 │   │   ├── RuntimeState.ts   # Singleton session state
@@ -33,12 +35,12 @@ spica-cli/
 │   │   ├── registry.ts       # 33 tool definitions
 │   │   ├── execute.ts        # Tool dispatch + cache
 │   │   ├── subAgent.ts       # Sub-agent configs
+│   │   ├── analytics.ts      # Tool usage tracking
 │   │   ├── cache.ts          # Tool result cache (30s TTL)
 │   │   ├── sandbox.ts        # bwrap sandbox wrapper
 │   │   └── impl/             # Tool implementations
 │   ├── cli/                  # TUI + event handlers
 │   │   ├── events.ts         # Agent event → TUI display
-│   │   ├── skillGate.ts      # Intent classification
 │   │   ├── formatting.ts     # Output formatting
 │   │   ├── results.ts        # Tool result tracking
 │   │   ├── subagentPanel.ts  # Sub-agent progress display

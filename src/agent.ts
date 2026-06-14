@@ -300,6 +300,9 @@ export class SpicaAgent extends EventEmitter {
   private _stagnationCounter: number = 0;
   private static readonly STAGNATION_WARNING = 8;
   private static readonly STAGNATION_LIMIT = 16;
+  // Auto-continue after compression: if LLM returns text-only right after compress,
+  // auto-inject "continue" and loop again (prevents zombie "OK Done" state)
+  private _compressedThisRunLoop: boolean = false;
   // Periodic session save: persist every N tool rounds for crash resilience
   private _roundCount: number = 0;
   private static readonly SAVE_EVERY_N_ROUNDS = 5;
@@ -763,8 +766,10 @@ export class SpicaAgent extends EventEmitter {
     return _loadProjectConfig(this);
   }
 
-  setTodos(todos: string[]) {
-    this._todos = todos.map(t => ({ content: t, status: 'pending' }));
+  setTodos(todos: string[] | Todo[]) {
+    this._todos = todos.map(t =>
+      typeof t === 'string' ? { content: t, status: 'pending' as const } : t
+    );
     this.emit('todos_set', this._todos);
     updateProjectTodos(this.workspacePath, this._todos);
   }
@@ -886,6 +891,9 @@ export class SpicaAgent extends EventEmitter {
       this._idleCompressTimer = null;
     }
 
+    // Reset auto-continue flag — new user input, new runLoop
+    this._compressedThisRunLoop = false;
+
     // Cancel-on-entry: if pendingCancel, refuse to enter
     if (this.checkCanceledOnEntry()) {
       this.pendingCancel = false;
@@ -964,10 +972,16 @@ export class SpicaAgent extends EventEmitter {
       const triggerThreshold = Math.floor(contextWindow * triggerRatio);
 
       // 当使用超过触发阈值时自动压缩
-      // 非阻塞：规则截断立即生效，LLM 摘要在后台异步生成，下次请求前注入
+      // 非阻塞：规则截断立即生效，LLM 摘要在后台异步生成
       if (usedTokens > triggerThreshold) {
         const targetTokens = Math.floor(contextWindow * targetRatio);
+        this.emit('context_compressing', {
+          before: existingMessages.length,
+          tokensBefore: usedTokens,
+          target: targetTokens,
+        });
         await this.startNonBlockingCompression(targetTokens, signal);
+        this._compressedThisRunLoop = true;
       }
 
       this.emit('token_usage', {
@@ -1051,6 +1065,25 @@ export class SpicaAgent extends EventEmitter {
         // 检查response状态
         if (!response.toolCalls || response.toolCalls.length === 0) {
           if (response.content) {
+            // After compression, LLM may respond with a short "done" message
+            // because the truncated context + summary makes it think work is complete.
+            // Auto-continue once to keep the agent working seamlessly.
+            if (this._compressedThisRunLoop) {
+              this._compressedThisRunLoop = false; // only auto-continue once
+              // Emit so UI can show a subtle indicator
+              this.emit('compress_auto_continue', { content: response.content });
+              // Inject "Continue working" as a user message and loop again
+              this.agentAddMessage({ role: 'user', content: '[AUTO-CONTINUE] Resume working on the pending tasks. Do not stop — continue from where you left off.' });
+              response = await this.callLLMWithRetry(
+                sig => this.llm!.generateFromHistory(toolDefinitions, sig),
+                'llm_generate_auto_continue',
+                10,
+                signal
+              );
+              this.syncFullHistory();
+              this._stagnationCounter = 0;
+              continue;
+            }
             // 有内容输出，任务完成
             break;
           }

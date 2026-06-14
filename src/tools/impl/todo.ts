@@ -2,6 +2,7 @@ import { WORKSPACE } from '../helpers';
 import type { ToolResult } from '../helpers';
 import type { PersistedTask } from '../../storage/taskPersistence';
 import type { Todo } from '../../agent';
+import { getRuntimeState } from '../../core/RuntimeState';
 
 export async function executeTodoRead(_args: Record<string, unknown>): Promise<ToolResult> {
   const { loadPersistedTasks, getTaskStats } = await import('../../storage/taskPersistence');
@@ -48,6 +49,12 @@ export async function executeTodoWrite(args: Record<string, unknown>): Promise<T
     updatedAt: new Date().toISOString(),
   }));
   savePersistedTasks(WORKSPACE, persistedTasks);
+
+  // Emit todos_set event so the TUI displays the task list
+  const agent = getRuntimeState().getAgent();
+  if (agent) {
+    agent.setTodos(todos);
+  }
 
   const statusLabels: Record<string, string> = {
     completed: '[DONE]',

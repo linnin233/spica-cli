@@ -174,6 +174,11 @@ export async function startNonBlockingCompression(
     // Apply immediately — context shrinks NOW.
     llm.setMessages([...systemMessages, ...cleaned]);
 
+    // Reset sync index so syncFullHistory doesn't miss new messages.
+    // Without this, _lastSyncedProviderIndex stays at old (high) value
+    // and future syncFullHistory calls find startIdx > provider.length → no-op.
+    agent.setLastSyncedProviderIndex(llm.getMessages().length - 1);
+
     // Restore cache prefix boundary to include preserved prefix messages.
     // setMessages() resets cachePrefixEnd to system-only — we must restore it
     // so the API-side prompt cache continues to hit on the full stable prefix.
@@ -327,14 +332,23 @@ export function applyPendingSummary(agent: SpicaAgent): void {
 
   const messages = llm.getMessages();
 
-  // Insert after system messages, before conversation
+  // Insert after system messages, before conversation.
+  // Also insert a continuation directive so the LLM knows to keep working.
   const sysCount = messages.filter(m => m.role === 'system').length;
+  const continueMsg: ChatMessage = {
+    role: 'system' as const,
+    content: '[CONTEXT RESTORED] The summary above describes your previous work. Continue from where you left off — the tasks are NOT complete. Do NOT ask "what would you like me to do?" — just resume working.',
+  };
   const newMessages = [
     ...messages.slice(0, sysCount),
     deferredSummary,
+    continueMsg,
     ...messages.slice(sysCount),
   ];
   llm.setMessages(newMessages);
+
+  // Reset sync index after message injection so syncFullHistory works correctly.
+  agent.setLastSyncedProviderIndex(llm.getMessages().length - 1);
 
   // Note: no 'context_compressed' emit here — Phase 1 truncation already reported
   // the actual compression. Summary insertion is an internal detail (+1 message).
@@ -621,6 +635,6 @@ export function buildFallbackSummary(messages: ChatMessage[]): ChatMessage {
   const summary = items.join(' | ') || 'Early conversation compressed';
   return {
     role: 'assistant',
-    content: `[COMPACTED CONTEXT — Rule-based summary. Do NOT quote as user words.]\n${summary}`,
+    content: `[COMPACTED CONTEXT — Rule-based summary. Work is IN PROGRESS, continue from where you left off.]\n${summary}`,
   };
 }

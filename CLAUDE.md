@@ -56,10 +56,10 @@ Note: Project is ESM (`"type": "module"` in package.json). Use `import`/`export`
 
 ```
 ~/.spica/                      # Global
-├── config.json                # Provider configs (API keys, URLs)
-├── skills.json                # Custom skill definitions
-├── mcp.json                   # MCP server configs
-├── hooks.json                 # Hook rules
+├── settings.json              # Provider configs (API keys, URLs), MCP, Hooks, Skills
+├── skills/                    # Custom skill packages
+├── sessions/                  # Archived sessions
+├── learnings/                 # Global learnings
 
 <project>/.spica/              # Project-specific
 ├── session.json               # Current session messages (active)
@@ -67,6 +67,7 @@ Note: Project is ESM (`"type": "module"` in package.json). Use `import`/`export`
 ├── state.json                 # Project state (todos, checkpoints)
 ├── backups/                   # File backups before edits
 ├── tasks.json                 # Persisted task list
+├── tool-usage.json            # Tool usage analytics
 ```
 
 ## Key Patterns
@@ -108,10 +109,10 @@ ESC ESC (or Ctrl+C) triggers interrupt:
 
 ### Compaction
 
-`/compact` command trims conversation history:
-- Keeps system prompt + recent messages + message summaries
-- Emits `context_compressed` event with before/after counts
-- Triggered manually or automatically when context nears window limit
+`/compact` command or auto-trigger at 60% context window compresses conversation history:
+- **Phase 1 (instant):** Rule-based truncation — scores messages by importance, keeps high-value + recent tail, drops low-value. Preserves cache prefix messages for API-side caching. Adaptive content limits: base 4000 chars, tool results 1.5×, assistant-with-toolcalls 1.2×, already-truncated content 2×.
+- **Phase 2 (background):** Fire LLM summary for old messages, store as `_deferredSummary`, inject after system messages on next request
+- Emits `context_compressed` event with before/after counts and structured observability (kept/dropped by role, phase, dropped ratio)
 
 ### Hooks System
 
@@ -155,7 +156,30 @@ During agent processing, new user input goes to a queue (max 50):
 - `subagent-driven-development`, `finishing-a-development-branch`
 - `receiving-code-review`, `requesting-code-review`
 
-Skills are loaded at startup via `initSkills()` and available as `/skill-name` commands.
+Skills are loaded at startup via `initSkills()` and available as `/<skill-name>` commands.
+
+### Agent State Machine
+
+`src/core/AgentState.ts` — unified state machine replacing scattered booleans:
+- States: `uninitialized` → `initializing` → `idle` ↔ `processing` / `compacting` / `interrupted`
+- Validated transitions — invalid transitions throw in dev, warn in production
+- AgentStateMachine tracks all transitions and exposes `canAcceptInput`, `isBusy`, `isReady`
+- `forceTransition()` available for recovery scenarios
+
+### Progress Tracker
+
+`src/core/progressTracker.ts` — structured progress that survives compression:
+- Records file changes, decisions, errors, milestones separately from message history
+- Compressed context block (~200-500 tokens) injected after system messages
+- Persisted to session so it survives restarts
+- Max 20 entries, oldest removed when exceeded
+
+### Tool Usage Analytics
+
+`src/tools/analytics.ts` — tracks which tools are actually used across sessions:
+- `recordToolUsage()` per invocation, `recordSessionStart()` per session
+- Data persisted to `.spica/tool-usage.json`
+- Feeds into lazy tool loading: frequently-used tools stay core, unused remain lazy
 
 ### LLM Provider Architecture
 
@@ -163,7 +187,7 @@ Skills are loaded at startup via `initSkills()` and available as `/skill-name` c
 `src/llm/providers/OpenAICompatible.ts` — concrete implementation for OpenAI-compatible APIs
 `src/llm/LLMClient.ts` — facade wrapping provider + rate limiter + token counter + function caller
 
-Providers are configured in `~/.spica/config.json`. Any OpenAI-compatible API works (OpenAI, Anthropic via proxy, DeepSeek, Gemini, Together AI, Groq, local models).
+Providers are configured in `~/.spica/settings.json`. Any OpenAI-compatible API works (OpenAI, Anthropic via proxy, DeepSeek, Gemini, Together AI, Groq, local models).
 
 ### Token Counting
 
@@ -232,11 +256,17 @@ Technical documentation:
 ## Important Files
 
 - `src/index.ts` - Entry point, TUI setup, CLI command definitions (commander)
-- `src/agent.ts` - Core agent orchestrator (~1450 lines), tool execution, interrupt management
+- `src/agent.ts` - Core agent orchestrator (1845 lines), tool execution, interrupt management, state machine, progress tracker
 - `src/prompts/system.ts` - System prompt for LLM, builtin skills loading
 - `src/core/RuntimeState.ts` - Singleton session state (agent, processing, UI, interrupt)
 - `src/core/EventBus.ts` - Pub/sub event bus
-- `src/tools/index.ts` - 33 built-in tool definitions + executeTool dispatcher
+- `src/core/AgentState.ts` - Unified state machine (6 states, validated transitions)
+- `src/core/progressTracker.ts` - Structured progress record (survives compression)
+- `src/core/compression.ts` - 2-phase compression: instant rule-based + background LLM summary
+- `src/tools/index.ts` - Tool barrel (re-exports registry + execute)
+- `src/tools/registry.ts` - 33 built-in tool definitions
+- `src/tools/execute.ts` - Tool execution dispatch + cache
+- `src/tools/analytics.ts` - Tool usage tracking (feeds lazy loading)
 - `src/tools/subAgent.ts` - Sub-agent type configs (explore/review/fix/build)
 - `src/tools/codeHealth.ts` - Code health analysis tool
 - `src/tools/testQuality.ts` - Test quality analysis tool

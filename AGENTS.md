@@ -193,12 +193,12 @@ src/commands/
 - **Specialized tools:** `codeHealth.ts`, `testQuality.ts`, `subAgent.ts`
 
 ### Subagent Types
-| Type | Allowed Tools | Timeout | Description |
-|------|-------------|---------|-------------|
-| `explore` | glob, grep, read, directory_list, file_exists | 30s | Read-only exploration |
-| `review` | explore + lint | 60s | Code review, find issues |
-| `fix` | read, edit, bash, lint | 120s | Fix specific issues |
-| `build` | * (all tools) | 180s | Full feature implementation |
+| Type | Allowed Tools | Description |
+|------|-------------|-------------|
+| `explore` | glob, grep, read, directory_list, file_exists | Read-only exploration |
+| `review` | explore + lint | Code review, find issues |
+| `fix` | read, edit, bash, lint | Fix specific issues |
+| `build` | * (all tools) | Full feature implementation |
 
 ### Key Mechanisms
 - **Tool conflict detection:** `detectToolConflicts()` in `agent.ts` — tools operating on same resource path are sequenced

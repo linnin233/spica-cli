@@ -1,7 +1,7 @@
 import { execa } from 'execa';
 import fs from 'fs-extra';
 import { join } from 'path';
-import { SubAgentTask, getSubAgentConfig, computeTimeout, summarizeResult, type SubAgentResult } from '../subAgent';
+import { SubAgentTask, getSubAgentConfig, summarizeResult, type SubAgentResult } from '../subAgent';
 import { WORKSPACE } from '../helpers';
 import type { ToolResult, ToolEventCallback } from '../helpers';
 
@@ -168,7 +168,6 @@ export async function executeTask(
         if (lower.includes('blocked by whitelist')) return false;
         if (lower.includes('authentication') || lower.includes('unauthorized')) return false;
         return (
-          lower.includes('timeout') ||
           lower.includes('econnrefused') ||
           lower.includes('enotfound') ||
           lower.includes('etimedout') ||
@@ -251,17 +250,8 @@ export async function executeTask(
         taskAgent.on('reasoning', reasoningHandler);
         taskAgent.on('stream', streamHandler);
 
-        // 创建超时 AbortController — 使用自适应超时
-        const adaptiveTimeout = task.type
-          ? computeTimeout(task.type, task.prompt.length)
-          : config.timeout;
-        const timeoutController = new AbortController();
-        const timeoutId = setTimeout(() => {
-          timeoutController.abort();
-          taskAgent.interrupt();
-        }, adaptiveTimeout);
-
         // 监听外部中断信号（父 agent 中断）和 sibling early-exit
+        // 没有子代理超时 — 子代理可以无限运行直到自然完成或被外部中断
         let abortHandler: (() => void) | null = null;
         let siblingAbortHandler: (() => void) | null = null;
         if (externalSignal) {
@@ -273,13 +263,11 @@ export async function executeTask(
             taskAgent.off('stream', streamHandler);
             taskAgent.interrupt();
             taskAgent.dispose();
-            clearTimeout(timeoutId);
             return { status: 'BLOCKED', taskLabel, error: 'Parent agent interrupted' };
           }
           abortHandler = () => {
             externalSignal.removeEventListener('abort', abortHandler!);
             taskAgent.interrupt();
-            clearTimeout(timeoutId);
           };
           externalSignal.addEventListener('abort', abortHandler);
         }
@@ -288,7 +276,6 @@ export async function executeTask(
           siblingAbortHandler = () => {
             siblingAbortController.signal.removeEventListener('abort', siblingAbortHandler!);
             taskAgent.interrupt();
-            clearTimeout(timeoutId);
           };
           siblingAbortController.signal.addEventListener('abort', siblingAbortHandler);
         } else {
@@ -299,7 +286,6 @@ export async function executeTask(
           taskAgent.off('stream', streamHandler);
           taskAgent.interrupt();
           taskAgent.dispose();
-          clearTimeout(timeoutId);
           return { status: 'BLOCKED', taskLabel, error: 'Early exit — sibling subagent already solved the task' };
         }
 
@@ -315,19 +301,10 @@ export async function executeTask(
             attempt > 0
               ? '\n[RETRY] Previous attempt failed. Please try a different approach.'
               : '';
-          const resultPromise = taskAgent.runLoop(task.prompt + retryNote);
 
-          // 使用 AbortController 的 promise 来处理超时和中断
-          const abortPromise = new Promise<string>((_, reject) => {
-            timeoutController.signal.addEventListener('abort', () => {
-              reject(new Error(timeoutController.signal.reason || 'Timeout'));
-            });
-          });
-
-          const result = await Promise.race([resultPromise, abortPromise]);
+          const result = await taskAgent.runLoop(task.prompt + retryNote);
 
           // Success — cleanup and return
-          clearTimeout(timeoutId);
           taskAgent.off('tool_call', toolCallHandler);
           taskAgent.off('tool_result', toolResultHandler);
           taskAgent.off('message', messageHandler);
@@ -399,7 +376,6 @@ export async function executeTask(
           return { status, taskLabel, summary };
         } catch (err: any) {
           // Cleanup
-          clearTimeout(timeoutId);
           taskAgent.off('tool_call', toolCallHandler);
           taskAgent.off('tool_result', toolResultHandler);
           taskAgent.off('message', messageHandler);

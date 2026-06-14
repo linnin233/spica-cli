@@ -235,7 +235,9 @@ export function getSystemPrompt(
   );
 }
 export function getCompactPrompt(messagesText: string): string {
-  return `You are summarizing conversation history for YOUR OWN future reference. You will read this summary later to continue working. Be precise — vague summaries waste your future context window.
+  return `You are summarizing conversation history for YOUR OWN future reference. You will read this summary later to continue working.
+
+CRITICAL: The conversation being summarized represents IN-PROGRESS WORK. The tasks described are NOT complete. You must accurately record what remains to be done so your future self can continue immediately without re-investigating.
 
 ## Must Preserve
 1. User's explicit requirements and constraints (verbatim if short)
@@ -251,20 +253,26 @@ export function getCompactPrompt(messagesText: string): string {
 
 ## Format — Use this exact structure:
 
-## Requirements
-- ...
+## Active Task
+[One sentence: what the user asked you to do. This is the OVERARCHING GOAL — it is NOT yet complete.]
 
 ## Completed
 - ...
 
 ## In Progress
-- ...
+- [What you were doing when context ran out]
+
+## Pending (NOT YET DONE)
+- [List every task/todo that is NOT yet completed]
 
 ## Decisions
 - ...
 
-## Next Steps
-- ...
+## Next Action
+[The EXACT next step to take when you resume. Be specific: which file, what change.]
+
+## Continue Working
+IMPORTANT: After reading this summary, CONTINUE working on the pending tasks. Do NOT ask the user what to do — just pick up where you left off. The user expects you to finish the work.
 
 History messages:
 ${messagesText}`;

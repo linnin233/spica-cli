@@ -55,7 +55,7 @@ graph TB
 
         SESSION["<b>会话 & 归档</b> (src/utils/session.ts)<br/>两态解耦模型<br/>活跃 → .spica/session.json<br/>  saveSession(ws, messages, name, progress)<br/>  → 写入 _fullHistory（完整，永不截断）<br/>  → 合并 ProgressTracker 快照<br/>  每 5 轮自动保存（防崩溃丢失）<br/>历史 → .spica/sessions/&lt;id&gt;.json<br/>  archiveSession() 生成 LLM 摘要<br/>  清理: 保留最近 50 个<br/>切换: loadSessionById → session.json<br/>恢复: ProgressTracker.fromJSON() 启动时"]
 
-        SUB["<b>子代理</b> (src/tools/subAgent.ts)<br/>4 种类型，自适应超时<br/>explore: 90s→180s（只读）<br/>review: 120s→240s（+lint）<br/>fix: 180s→360s（+edit）<br/>build: 300s→600s（全部工具）<br/>超时 = 基础 + 每 100 字符 +10%<br/>最多 3 并行 · 提前退出信号<br/>worktree 隔离选项<br/>每任务模型覆盖（别名→ID）"]
+        SUB["<b>子代理</b> (src/tools/subAgent.ts)<br/>4 种类型，无超时限制<br/>explore: 只读（glob, grep, read）<br/>review: +lint<br/>fix: +edit, bash<br/>build: 全部工具<br/>最多 3 并行 · 提前退出信号<br/>worktree 隔离选项<br/>每任务模型覆盖（别名→ID）"]
 
         PMON["<b>ProcessMonitor</b> (src/core/ProcessMonitor.ts)<br/>PID 追踪 · 进程组强杀<br/>卡死检测（SIGKILL 升级）<br/>超时管理"]
 
