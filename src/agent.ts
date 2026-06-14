@@ -300,9 +300,11 @@ export class SpicaAgent extends EventEmitter {
   private _stagnationCounter: number = 0;
   private static readonly STAGNATION_WARNING = 8;
   private static readonly STAGNATION_LIMIT = 16;
-  // Auto-continue after compression: if LLM returns text-only right after compress,
-  // auto-inject "continue" and loop again (prevents zombie "OK Done" state)
+  // Auto-continue: if LLM returns text-only after doing actual work (tools executed
+  // or compression happened), auto-inject "continue" and loop again.
+  // Prevents the agent from stopping mid-task with "[OK] Done".
   private _compressedThisRunLoop: boolean = false;
+  private _toolsExecutedThisRunLoop: boolean = false;
   // Periodic session save: persist every N tool rounds for crash resilience
   private _roundCount: number = 0;
   private static readonly SAVE_EVERY_N_ROUNDS = 5;
@@ -891,8 +893,9 @@ export class SpicaAgent extends EventEmitter {
       this._idleCompressTimer = null;
     }
 
-    // Reset auto-continue flag — new user input, new runLoop
+    // Reset auto-continue flags — new user input, new runLoop
     this._compressedThisRunLoop = false;
+    this._toolsExecutedThisRunLoop = false;
 
     // Cancel-on-entry: if pendingCancel, refuse to enter
     if (this.checkCanceledOnEntry()) {
@@ -1065,15 +1068,19 @@ export class SpicaAgent extends EventEmitter {
         // 检查response状态
         if (!response.toolCalls || response.toolCalls.length === 0) {
           if (response.content) {
-            // After compression, LLM may respond with a short "done" message
-            // because the truncated context + summary makes it think work is complete.
-            // Auto-continue once to keep the agent working seamlessly.
-            if (this._compressedThisRunLoop) {
-              this._compressedThisRunLoop = false; // only auto-continue once
-              // Emit so UI can show a subtle indicator
+            // Auto-continue when LLM returns text-only after doing work.
+            // LLMs (especially DeepSeek) often respond with a short observation
+            // after a tool result instead of continuing with more tool calls.
+            // Without this, the agent stops mid-task saying "[OK] Done".
+            const shouldAutoContinue =
+              this._compressedThisRunLoop ||    // after compression
+              this._toolsExecutedThisRunLoop;   // after any tool execution
+
+            if (shouldAutoContinue) {
+              this._compressedThisRunLoop = false;
+              this._toolsExecutedThisRunLoop = false; // only auto-continue once per batch
               this.emit('compress_auto_continue', { content: response.content });
-              // Inject "Continue working" as a user message and loop again
-              this.agentAddMessage({ role: 'user', content: '[AUTO-CONTINUE] Resume working on the pending tasks. Do not stop — continue from where you left off.' });
+              this.agentAddMessage({ role: 'user', content: '[AUTO-CONTINUE] Continue with the next step. Use tools to make progress. Do not stop here.' });
               response = await this.callLLMWithRetry(
                 sig => this.llm!.generateFromHistory(toolDefinitions, sig),
                 'llm_generate_auto_continue',
@@ -1376,6 +1383,10 @@ export class SpicaAgent extends EventEmitter {
           }
 
           allToolResults.push(...toolResults);
+
+          // Mark that tools were executed — enables auto-continue if LLM
+          // returns text-only afterwards (prevents premature [OK] Done).
+          this._toolsExecutedThisRunLoop = true;
 
           // Progress tracking: detect meaningful agent actions this round.
           // Broadens beyond file I/O — git commits, test runs, and package
