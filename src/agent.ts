@@ -6,6 +6,7 @@ import {
   setWorkspace,
   getToolBatchHint,
 } from './tools/index';
+import { type SkillDefinition } from './utils/settings';
 import { type ProjectConfig } from './utils/projectConfig';
 import {
   loadProjectState,
@@ -837,14 +838,13 @@ export class SpicaAgent extends EventEmitter {
    * 3. Compress context if needed
    * 4. Generate LLM response
    * 5. Execute tools (parallel or sequential based on conflicts)
-   * 6. Continue until finished or max iterations
+   * 6. Continue until finished or stagnation detected
    *
    * @param prompt - User input/prompt
-   * @param maxIterations - Maximum loop iterations (default: 50)
    * @returns Final response string
    * @throws InterruptError if interrupted by user
    */
-  async runLoop(prompt: string, maxIterations = 50): Promise<string> {
+  async runLoop(prompt: string): Promise<string> {
     // State transition: idle → processing (or interrupted → processing)
     this._stateMachine.transition('processing');
 
@@ -952,6 +952,12 @@ export class SpicaAgent extends EventEmitter {
         this.emit('learning_detected', { source: 'correction', text: prompt.slice(0, 100) });
       }
 
+      // Inject progress context from ProgressTracker (survives compression)
+      const progressBlock = this._progress.toContextBlock();
+      if (progressBlock) {
+        this.agentAddMessage({ role: "system" as const, content: progressBlock });
+      }
+
       const toolDefinitions = getActiveToolDefinitions(this._usedTools);
       // 重置 reasoning 状态（每次新请求前）
       this.reasoningReceived = false;
@@ -988,14 +994,13 @@ export class SpicaAgent extends EventEmitter {
         return 'LLM returned exception, please retry';
       }
 
-      let iterations = 0;
+      this._stagnationCounter = 0;
 
       const allToolResults: Array<{ name: string; id: string; result: string }> = [];
       let criticalErrorDetected: { tool: string; error: string; suggestion: string } | null = null;
       let queueInjectedThisIteration = false; // 防止同一迭代内重复注入队列
 
-      while (!response.finished && iterations < maxIterations && !signal.aborted) {
-        iterations++;
+      while (!response.finished && !signal.aborted) {
         queueInjectedThisIteration = false; // 每次迭代重置
 
         if (signal.aborted) {
@@ -1047,12 +1052,11 @@ export class SpicaAgent extends EventEmitter {
 
           // 真正的空响应：既没有 content，也没有 reasoning，也没有 tool calls
           this.emit('empty_response_warning', {
-            iteration: iterations,
             message: 'LLM returned empty response, retrying...',
           });
 
           // 如果连续多次空响应，停止并报告问题
-          if (iterations >= maxIterations - 1) {
+          if (this._stagnationCounter >= SpicaAgent.STAGNATION_LIMIT) {
             this.emit('error_suggestion', {
               tool: 'llm_generate',
               error: 'Multiple empty responses from LLM',
@@ -1290,6 +1294,30 @@ export class SpicaAgent extends EventEmitter {
           }
 
           allToolResults.push(...toolResults);
+
+          // Progress tracking: detect file changes this round
+          const hadProgress = toolResults.some(t => {
+            const name = t.name;
+            return (name === "write" || name === "file_write" ||
+                    name === "edit" || name === "file_edit" || name === "file_multi_edit" ||
+                    name === "file_delete") &&
+                   !t.result.includes("interrupted") && !t.result.includes("blocked");
+          });
+
+          // Stagnation check: replace 50-round hard cap
+          const stagnationResult = this.checkStagnation(hadProgress);
+          if (stagnationResult === "warn") {
+            this.emit("stagnation_warning", { rounds: SpicaAgent.STAGNATION_WARNING });
+            this.agentAddMessage({
+              role: "system" as const,
+              content: "[STAGNATION WARNING] No file changes in " + SpicaAgent.STAGNATION_WARNING +
+                " rounds. If stuck, ask clarifying questions or report what's blocking you.",
+            });
+          } else if (stagnationResult === "stop") {
+            this.emit("stagnation_limit", { rounds: SpicaAgent.STAGNATION_LIMIT });
+            return "[STAGNATION] No progress after " + SpicaAgent.STAGNATION_LIMIT +
+              " rounds. The agent may be stuck in a loop. Please provide new instructions.";
+          }
 
           // 中断检查：如果被中断，先保存tool results到历史，再停止
           if (signal.aborted) {
