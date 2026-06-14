@@ -2,6 +2,7 @@ graph TB
     %% ═══════════════════════════════════════════════════════
     %% spica-cli Architecture — Simplified Version
     %% Focus: core data flows, key invariants, compression lifecycle
+    %% Updated 2026-06-14 after audit (23 issues resolved)
     %% ═══════════════════════════════════════════════════════
 
     subgraph UI["🖥️ Interface"]
@@ -12,14 +13,14 @@ graph TB
 
     subgraph AGENT["⚙️ SpicaAgent — Core Loop"]
         direction TB
-        LOOP["<b>runLoop()</b><br/>1. applyPendingSummary<br/>2. token check → compress if >threshold<br/>3. callLLMWithRetry (10×)<br/>4. syncFullHistory<br/>5. executeTools (parallel/batch)<br/>6. continueWithAllToolResults<br/>7. loop until text response<br/><br/>+ AgentState (6 states, validated)<br/>+ ProgressTracker (survives compression)<br/>+ idle compression (30s inactivity)"]
+        LOOP["<b>runLoop()</b><br/>1. applyPendingSummary<br/>2. token check → compress if >threshold<br/>3. callLLMWithRetry (10×)<br/>4. syncFullHistory<br/>5. executeTools (reads→writes→neutral)<br/>6. continueWithAllToolResults<br/>7. loop until text or stagnation<br/><br/>+ Stagnation Detection (8/16 rounds)<br/>+ ProgressTracker (errors + milestones, persisted)<br/>+ periodic save (every 5 tool rounds)<br/>+ idle compression (30s inactivity)"]
         MSG["<b>Three-Way Message Split</b><br/>_fullHistory → session persistence (untouched)<br/>provider.msgs → LLM context (compressed)<br/>toolDefs → lazy-loaded API tools param<br/>INVARIANT: system prompts only in provider"]
         SYNC["<b>syncFullHistory()</b><br/>index-based: provider→_fullHistory<br/>prevents desync from cleanMessages()"]
     end
 
     subgraph COMPRESS["🗜️ Compression v3 — Two-Phase"]
         direction LR
-        P1["<b>Phase 1</b> (instant, never blocks)<br/>score msgs → keep top N<br/>info-density scoring (+err/+content/-noise)<br/>cache-prefix preserved + validated<br/>per-role content limits<br/>adaptive thresholds by window size"]
+        P1["<b>Phase 1</b> (instant, never blocks)<br/>toolIdToName map → score msgs → keep top N<br/>info-density scoring (+err/+content/-noise)<br/>cache-prefix preserved + validated<br/>per-role content limits<br/>adaptive thresholds by window size"]
         P2["<b>Phase 2</b> (background, non-blocking)<br/>LLM summary + quality validation<br/>heavy drop → fallback summary now<br/>  + LLM summary deferred<br/>light drop → deferred summary"]
         P1 -->|"dropped msgs"| P2
         P2 -.->|"summary injected<br/>next runLoop"| LOOP
@@ -39,7 +40,7 @@ graph TB
     end
 
     subgraph STORAGE["💾 Persistence"]
-        ACTIVE["session.json<br/>← _fullHistory<br/>(never truncated)"]
+        ACTIVE["session.json<br/>← _fullHistory + progress<br/>(never truncated, auto-saved<br/>every 5 tool rounds)"]
         HIST["sessions/&lt;id&gt;.json<br/>LLM summary on archive"]
         OTHER["state.json · tasks.json · tool-usage.json<br/>checkpoints.json · snapshots/<br/>backups/ · learnings/"]
     end

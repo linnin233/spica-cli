@@ -1,6 +1,6 @@
 graph TB
     %% ═══════════════════════════════════════════════════════════════
-    %% spica-cli Architecture — Detailed Version (code-audited 2026-06-13)
+    %% spica-cli Architecture — Detailed Version (code-audited 2026-06-14)
     %% Events: 42. Tools: 33. Skills: 14. .spica/: 11 paths.
     %%
     %% Key architectural insight: Three-way message split
@@ -10,6 +10,13 @@ graph TB
     %%
     %% System prompt is ONLY in provider.msgs (via setSystemPromptSplit),
     %% never synced to _fullHistory. This saves ~5,500 tokens in session files.
+    %%
+    %% 2026-06-14 audit fixes (23 issues resolved):
+    %%   • ProgressTracker fully wired (errors, milestones) + persisted in session
+    %%   • Stagnation detection (8/16 rounds) replaces 50-round hard cap
+    %%   • Periodic session save every 5 tool rounds for crash resilience
+    %%   • Skill Gate removed (dead code after PR #6)
+    %%   • scoreMessage uses toolIdToName map (not fragile content matching)
     %% ═══════════════════════════════════════════════════════════════
 
     %% ==================== PRESENTATION LAYER ====================
@@ -29,24 +36,24 @@ graph TB
         subgraph AGENT_SUB["SpicaAgent (src/agent.ts) — EventEmitter Orchestrator"]
             direction TB
             AGENT_STATE["<b>AgentState Machine</b> (src/core/AgentState.ts)<br/>6 explicit states with validated transitions<br/>uninitialized→initializing→idle↔processing<br/>  ↔compacting / interrupted<br/>Replaces scattered booleans (_initialized,<br/>_compacting, pendingCancel, _initPromise)"]
-            AGENT_CORE["<b>Core Loop</b><br/>runLoop(prompt, maxIter=50)<br/>  → applyPendingSummary (inject deferred)<br/>  → token check (adaptive threshold by window)<br/>  → startNonBlockingCompression (never blocks)<br/>  → callLLMWithRetry (10 retries, exp backoff)<br/>  → syncFullHistory (provider→_fullHistory)<br/>  → executeTools (parallel/batch)<br/>  → continueWithAllToolResults<br/>  → loop until LLM returns text<br/>scheduleIdleCompression: 30s inactivity timer"]
+            AGENT_CORE["<b>Core Loop</b><br/>runLoop(prompt)<br/>  → applyPendingSummary (inject deferred)<br/>  → token check (adaptive threshold by window)<br/>  → startNonBlockingCompression (never blocks)<br/>  → callLLMWithRetry (10 retries, exp backoff)<br/>  → syncFullHistory (provider→_fullHistory)<br/>  → executeTools (parallel/batch: reads→writes→neutral)<br/>  → continueWithAllToolResults<br/>  → loop until LLM text or stagnation<br/><b>Stagnation Detection</b> (8/16 rounds)<br/>  broad check: file write/edit/delete + bash<br/>  (test/build/install) + git + web_fetch<br/>  8 rounds no progress → warn · 16 → stop<br/>  replaces 50-round hard cap<br/><b>ProgressTracker</b> records: file changes,<br/>  errors, milestones (test pass, build, commit)<br/>  persisted in session.json · survives compression<br/><b>Periodic Save</b>: session.json every 5 tool rounds<br/><b>Idle Compression</b>: 30s inactivity timer"]
             AGENT_MSG["<b>Three-Way Message Split</b><br/>_fullHistory: append-only, session persistence<br/>  getMessages() → _fullHistory<br/>  INVARIANT: system prompts live ONLY in<br/>  provider.msgs, NEVER in _fullHistory<br/>provider.msgs: LLM API context, compressed<br/>  getContextMessages() → provider.getMessages()<br/>  syncFullHistory() → index-based sync<br/>toolDefs: lazy-loaded `tools` API param"]
             AGENT_CONF["<b>Tool Conflict Detection</b><br/>extractResourcePath() per tool<br/>detectToolConflicts() grouping<br/>sequential: same-file writes<br/>parallel: reads + different files<br/>git: single 'git:repo' resource"]
             AGENT_CLEAN["<b>Message Cleaner</b><br/>cleanMessages() on provider suffix<br/>preserves cache prefix boundary<br/>drops orphaned tool_calls<br/>auto-syntax-check on write/edit"]
-            AGENT_PROG["<b>ProgressTracker</b> (src/core/progressTracker.ts)<br/>records: file changes, decisions, errors, milestones<br/>toContextBlock() → compact progress summary<br/>survives compression (separate from msg history)"]
+            AGENT_PROG["<b>ProgressTracker</b> (src/core/progressTracker.ts)<br/>records: file changes, errors, milestones<br/>toContextBlock() → compact progress summary<br/>persisted in session.json · restored on init<br/>survives compression (separate from msg history)"]
         end
 
-        GATE["<b>Skill Gate</b> (src/cli/skillGate.ts)<br/>8 intent categories<br/>SKILL HINT injected as system msg<br/>path matching · tool whitelisting"]
+
 
         subgraph COMPRESS["Compression v3 (src/core/compression.ts)"]
             direction TB
-            COMP_PHASE1["<b>Phase 1 — Rule Truncation</b> (instant, never blocks)<br/>① Read cachePrefixEnd → exempt prefix msgs<br/>② Score: user=10, write/bash=9, [COMPACTED]=10<br/>   +error signals +2 · noise penalty -1<br/>   +content richness +0.5 · recency +1.0<br/>③ Graduated keep tiers (ratio-based)<br/>   >3×: 15% min 10 · >2×: 25% min 15<br/>   >1.5×: 35% min 20 · else: 50% min 25<br/>   floor=10 cap=40% of nonSystem<br/>④ Per-role content limits (adaptive)<br/>   user=∞ · tool=1.5× · asst+tc=1.2×<br/>   already-truncated → 2× lenient<br/>   base=0.10×contextWindow (~4K chars)<br/>⑤ llm.setMessages([...sys, ...cleaned])<br/>⑥ Restore cachePrefixEnd + validateCachePrefix()"]
+            COMP_PHASE1["<b>Phase 1 — Rule Truncation</b> (instant, never blocks)<br/>① Read cachePrefixEnd → exempt prefix msgs<br/>② Build toolIdToName map (accurate tool scoring)<br/>③ Score: user=10, write/bash/git=9, [COMPACTED]=10<br/>   +error signals +2 · noise penalty -1<br/>   +content richness +0.5 · recency +1.0<br/>   tool msgs scored by toolId lookup (not content)<br/>④ Graduated keep tiers (ratio-based)<br/>   >3×: 15% min 10 · >2×: 25% min 15<br/>   >1.5×: 35% min 20 · else: 50% min 25<br/>   floor=10 cap=40% of nonSystem<br/>⑤ Per-role content limits (adaptive)<br/>   user=∞ · tool=1.5× · asst+tc=1.2×<br/>   already-truncated → 2× lenient<br/>   base=0.10×contextWindow (~4K chars)<br/>⑥ llm.setMessages([...sys, ...cleaned])<br/>⑦ Restore cachePrefixEnd + validateCachePrefix()"]
             COMP_PHASE2["<b>Phase 2 — Summary</b> (background, non-blocking)<br/>buildSummaryPrompt(oldMessages)<br/>  user msgs: full · asst: tools+key args<br/>  tool_result: name + 500 chars + error tag<br/>validateSummaryQuality(): reject empty/boilerplate<br/>  ↓<br/>Heavy drop (>50%): buildFallbackSummary NOW<br/>  + background LLM summary for next request<br/>Light drop (≤50%): background promise<br/>  → _deferredSummary → applyPendingSummary()"]
         end
 
         INTR["<b>Interrupt Handler</b><br/>AbortController per runLoop<br/>cancelSeq high-water mark<br/>SIGKILL to process group (-pid)<br/>ESC×2 trigger · 200ms debounce<br/>preserves partial tool results<br/>clears pendingCancel in finally block"]
 
-        SESSION["<b>Session & Archive</b> (src/utils/session.ts)<br/>two-state model (decoupled)<br/>active → .spica/session.json<br/>  saveSession(ws, agent.getMessages())<br/>  → writes _fullHistory (full, never truncated)<br/>historical → .spica/sessions/&lt;id&gt;.json<br/>  archiveSession() generates LLM summary<br/>  cleanup: keep max 50 sessions<br/>switching: loadSessionById → session.json"]
+        SESSION["<b>Session & Archive</b> (src/utils/session.ts)<br/>two-state model (decoupled)<br/>active → .spica/session.json<br/>  saveSession(ws, messages, name, progress)<br/>  → writes _fullHistory (full, never truncated)<br/>  → merges ProgressTracker snapshot<br/>  auto-save every 5 tool rounds (crash resilience)<br/>historical → .spica/sessions/&lt;id&gt;.json<br/>  archiveSession() generates LLM summary<br/>  cleanup: keep max 50 sessions<br/>switching: loadSessionById → session.json<br/>restore: ProgressTracker.fromJSON() on init"]
 
         SUB["<b>Sub-Agents</b> (src/tools/subAgent.ts)<br/>4 types with adaptive timeouts<br/>explore: 90s→180s (read-only)<br/>review: 120s→240s (+lint)<br/>fix: 180s→360s (+edit)<br/>build: 300s→600s (all tools)<br/>timeout = base + 10%/100chars<br/>max 3 parallel · early-exit signal<br/>worktree isolation option<br/>per-task model override (alias→ID)"]
 
@@ -168,8 +175,7 @@ graph TB
     %% Learnings → system prompt
     LEARN --> AGENT_CORE
 
-    %% Skill gate
-    GATE --> AGENT_CORE
+    %% Skill gate removed (dead code after PR #6)
 
     %% Hooks + Skills (intercept)
     HOOKS --> AGENT_CORE

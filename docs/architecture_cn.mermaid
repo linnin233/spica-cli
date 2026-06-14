@@ -1,6 +1,6 @@
 graph TB
     %% ═══════════════════════════════════════════════════════════════
-    %% spica-cli 架构图 — 详细版（代码审计 2026-06-13）
+    %% spica-cli 架构图 — 详细版（代码审计 2026-06-14）
     %% 事件: 42. 工具: 33. 技能: 14. .spica/: 11 路径.
     %%
     %% 核心架构洞察：三重消息分离
@@ -10,6 +10,13 @@ graph TB
     %%
     %% 系统提示词只在 provider.msgs 中（通过 setSystemPromptSplit），
     %% 从不同步到 _fullHistory。会话文件节省 ~5,500 tokens。
+    %%
+    %% 2026-06-14 审计修复 (23 个问题已解决):
+    %%   • ProgressTracker 全面接入 (errors, milestones) + 持久化至 session
+    %%   • Stagnation Detection (8/16 轮) 替代 50 轮硬上限
+    %%   • 每 5 轮自动存档 session.json（防崩溃丢失）
+    %%   • Skill Gate 已删除（PR #6 后的死代码）
+    %%   • scoreMessage 使用 toolIdToName map（替代脆弱的字符串匹配）
     %% ═══════════════════════════════════════════════════════════════
 
     %% ==================== 展示层 ====================
@@ -29,24 +36,24 @@ graph TB
         subgraph AGENT_SUB["SpicaAgent (src/agent.ts) — EventEmitter 编排器"]
             direction TB
             AGENT_STATE["<b>AgentState 状态机</b>（src/core/AgentState.ts）<br/>6 种显式状态，验证转换<br/>uninitialized→initializing→idle↔processing<br/>  ↔compacting / interrupted<br/>替代散落的布尔标志"]
-            AGENT_CORE["<b>核心循环</b><br/>runLoop(prompt, maxIter=50)<br/>  → applyPendingSummary（注入延迟摘要）<br/>  → token 检查（自适应阈值）<br/>  → startNonBlockingCompression（永不阻塞）<br/>  → callLLMWithRetry（10 次重试，指数退避）<br/>  → syncFullHistory（provider→_fullHistory）<br/>  → executeTools（并行/批处理）<br/>  → 循环直到 LLM 返回纯文本<br/>scheduleIdleCompression: 30s 不活跃定时器"]
+            AGENT_CORE["<b>核心循环</b><br/>runLoop(prompt)<br/>  → applyPendingSummary（注入延迟摘要）<br/>  → token 检查（自适应阈值）<br/>  → startNonBlockingCompression（永不阻塞）<br/>  → callLLMWithRetry（10 次重试，指数退避）<br/>  → syncFullHistory（provider→_fullHistory）<br/>  → executeTools（并行/批处理: 读→写→中性）<br/>  → 循环直到 LLM 返回纯文本或停滞<br/><b>停滞检测</b> (8/16 轮)<br/>  广义检查: file write/edit/delete + bash<br/>  (test/build/install) + git + web_fetch<br/>  8 轮无进展 → 警告 · 16 轮 → 停止<br/>  替代 50 轮硬上限<br/><b>ProgressTracker</b> 记录: 文件变更、<br/>  错误、里程碑 (test pass, build, commit)<br/>  持久化至 session.json · 压缩后仍存在<br/><b>定期存档</b>: 每 5 轮保存 session.json<br/><b>空闲压缩</b>: 30s 不活跃定时器"]
             AGENT_MSG["<b>三重消息分离</b><br/>_fullHistory: 追加不截断，会话持久化<br/>  不变量：系统提示词仅在 provider.msgs<br/>  从不在 _fullHistory 中<br/>provider.msgs: LLM API 上下文，可压缩<br/>  syncFullHistory() → 基于索引同步<br/>toolDefs: 懒加载 `tools` API 参数"]
             AGENT_CONF["<b>工具冲突检测</b><br/>extractResourcePath() 逐工具提取<br/>detectToolConflicts() 分组<br/>顺序执行: 同文件写入<br/>并行执行: 读取 + 不同文件<br/>git: 单一 'git:repo' 资源"]
             AGENT_CLEAN["<b>消息清理器</b><br/>cleanMessages() 清理 provider 后缀<br/>保护 cache prefix 边界<br/>丢弃孤立 tool_calls<br/>write/edit 自动语法检查"]
-            AGENT_PROG["<b>ProgressTracker</b>（src/core/progressTracker.ts）<br/>记录：文件变更、决策、错误、里程碑<br/>toContextBlock() → 紧凑进度摘要<br/>压缩后仍存在（与消息历史分离）"]
+            AGENT_PROG["<b>ProgressTracker</b>（src/core/progressTracker.ts）<br/>记录：文件变更、错误、里程碑<br/>toContextBlock() → 紧凑进度摘要<br/>持久化至 session.json · 启动时恢复<br/>压缩后仍存在（与消息历史分离）"]
         end
 
-        GATE["<b>Skill Gate</b> (src/cli/skillGate.ts)<br/>8 种意图分类<br/>SKILL HINT 系统消息注入<br/>路径匹配 · 工具白名单"]
+
 
         subgraph COMPRESS["压缩 v3 (src/core/compression.ts)"]
             direction TB
-            COMP_PHASE1["<b>阶段 1 — 规则截断</b>（即时生效，永不阻塞）<br/>① 读取 cachePrefixEnd → 前缀消息免评分<br/>② 评分: user=10, write/bash=9, [COMPACTED]=10<br/>   +错误信号 +2 · 噪声惩罚 -1<br/>   +内容丰富度 +0.5 · 时间衰减 +1.0<br/>③ 分级保留（基于压缩比）<br/>   >3×: 15% 最少 10 · >2×: 25% 最少 15<br/>   >1.5×: 35% 最少 20 · 其他: 50% 最少 25<br/>   下限=10 上限=nonSystem 的 40%<br/>④ 逐角色内容限制（自适应）<br/>   user=∞ · tool=1.5× · asst+tc=1.2×<br/>   已截断 → 2× 宽松 · base=0.10×窗口<br/>⑤ llm.setMessages + restore cachePrefixEnd<br/>⑥ validateCachePrefix() 断言检查"]
+            COMP_PHASE1["<b>阶段 1 — 规则截断</b>（即时生效，永不阻塞）<br/>① 读取 cachePrefixEnd → 前缀消息免评分<br/>② 构建 toolIdToName map（精确工具评分）<br/>③ 评分: user=10, write/bash/git=9, [COMPACTED]=10<br/>   +错误信号 +2 · 噪声惩罚 -1<br/>   +内容丰富度 +0.5 · 时间衰减 +1.0<br/>   工具消息通过 toolId 查询评分（非内容匹配）<br/>④ 分级保留（基于压缩比）<br/>   >3×: 15% 最少 10 · >2×: 25% 最少 15<br/>   >1.5×: 35% 最少 20 · 其他: 50% 最少 25<br/>   下限=10 上限=nonSystem 的 40%<br/>⑤ 逐角色内容限制（自适应）<br/>   user=∞ · tool=1.5× · asst+tc=1.2×<br/>   已截断 → 2× 宽松 · base=0.10×窗口<br/>⑥ llm.setMessages + restore cachePrefixEnd<br/>⑦ validateCachePrefix() 断言检查"]
             COMP_PHASE2["<b>阶段 2 — 摘要</b>（后台异步，不阻塞用户）<br/>buildSummaryPrompt(oldMessages)<br/>  user: 完整 · asst: 工具+参数<br/>  tool_result: 工具名 + 500 字符 + 错误标记<br/>validateSummaryQuality(): 拒绝空/套话摘要<br/>  ↓<br/>重度丢弃 (>50%): buildFallbackSummary 即刻<br/>  + 后台 LLM 摘要供下次使用<br/>轻度丢弃 (≤50%): 后台 Promise<br/>  → _deferredSummary → applyPendingSummary()"]
         end
 
         INTR["<b>中断处理器</b><br/>每个 runLoop 独立 AbortController<br/>cancelSeq 高水位标记<br/>SIGKILL 杀进程组 (-pid)<br/>ESC×2 触发 · 200ms 去抖<br/>保留部分工具结果<br/>finally 块清除 pendingCancel"]
 
-        SESSION["<b>会话 & 归档</b> (src/utils/session.ts)<br/>两态解耦模型<br/>活跃 → .spica/session.json<br/>  saveSession(ws, agent.getMessages())<br/>  → 写入 _fullHistory（完整，永不截断）<br/>历史 → .spica/sessions/&lt;id&gt;.json<br/>  archiveSession() 生成 LLM 摘要<br/>  清理: 保留最近 50 个<br/>切换: loadSessionById → session.json"]
+        SESSION["<b>会话 & 归档</b> (src/utils/session.ts)<br/>两态解耦模型<br/>活跃 → .spica/session.json<br/>  saveSession(ws, messages, name, progress)<br/>  → 写入 _fullHistory（完整，永不截断）<br/>  → 合并 ProgressTracker 快照<br/>  每 5 轮自动保存（防崩溃丢失）<br/>历史 → .spica/sessions/&lt;id&gt;.json<br/>  archiveSession() 生成 LLM 摘要<br/>  清理: 保留最近 50 个<br/>切换: loadSessionById → session.json<br/>恢复: ProgressTracker.fromJSON() 启动时"]
 
         SUB["<b>子代理</b> (src/tools/subAgent.ts)<br/>4 种类型，自适应超时<br/>explore: 90s→180s（只读）<br/>review: 120s→240s（+lint）<br/>fix: 180s→360s（+edit）<br/>build: 300s→600s（全部工具）<br/>超时 = 基础 + 每 100 字符 +10%<br/>最多 3 并行 · 提前退出信号<br/>worktree 隔离选项<br/>每任务模型覆盖（别名→ID）"]
 
@@ -168,8 +175,7 @@ graph TB
     %% 教训 → 系统提示词
     LEARN --> AGENT_CORE
 
-    %% Skill Gate
-    GATE --> AGENT_CORE
+    %% Skill Gate 已删除（PR #6 后的死代码）
 
     %% Hooks + Skills（拦截工具调用）
     HOOKS --> AGENT_CORE
