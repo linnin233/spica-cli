@@ -47,8 +47,8 @@ export function loadSession(workspacePath: string): SessionState | null {
       }
       return session;
     }
-  } catch {
-    // 忽略读取错误
+  } catch (e) {
+    console.error(`[session] loadSession failed for ${workspacePath}:`, e instanceof Error ? e.message : String(e));
   }
 
   return null;
@@ -83,8 +83,8 @@ export function saveSession(
     };
 
     fs.writeJsonSync(join(spicaDir, 'session.json'), session, { spaces: 2 });
-  } catch {
-    // 忽略保存错误
+  } catch (e) {
+    console.error(`[session] saveSession failed for ${workspacePath}:`, e instanceof Error ? e.message : String(e));
   }
 }
 
@@ -224,8 +224,9 @@ ${parts.join('\n')}`;
             summary = text.slice(0, 300);
           }
         }
-      } catch {
-        // Fallback to local summary
+      } catch (e) {
+        // Expected: LLM may be unavailable; fall back to local summary
+        console.error(`[session] archiveSession LLM summary failed, using local fallback:`, e instanceof Error ? e.message : String(e));
         summary = generateSessionSummary(session.messages);
       }
 
@@ -247,7 +248,8 @@ ${parts.join('\n')}`;
     cleanupOldSessions(sessionsDir, 50);
 
     return summary;
-  } catch {
+  } catch (e) {
+    console.error(`[session] archiveSession failed for ${workspacePath}:`, e instanceof Error ? e.message : String(e));
     return '';
   }
 }
@@ -270,11 +272,13 @@ function cleanupOldSessions(sessionsDir: string, maxKeep: number): void {
       files.slice(maxKeep).forEach(f => {
         try {
           fs.removeSync(f.path);
-        } catch {}
+        } catch (e) {
+          console.error(`[session] cleanupOldSessions failed to remove ${f.path}:`, e instanceof Error ? e.message : String(e));
+        }
       });
     }
-  } catch {
-    // 忽略清理错误
+  } catch (e) {
+    console.error(`[session] cleanupOldSessions failed for ${sessionsDir}:`, e instanceof Error ? e.message : String(e));
   }
 }
 
@@ -302,7 +306,9 @@ export function listSessions(workspacePath: string): SessionMeta[] {
             session.summary = summary;
             try {
               fs.writeJsonSync(join(sessionsDir, f), session, { spaces: 2 });
-            } catch {}
+            } catch (e) {
+              console.error(`[session] listSessions failed to persist summary for ${f}:`, e instanceof Error ? e.message : String(e));
+            }
           }
         }
         return {
@@ -318,7 +324,8 @@ export function listSessions(workspacePath: string): SessionMeta[] {
       .sort((a, b) => new Date(b.lastActivity).getTime() - new Date(a.lastActivity).getTime());
 
     return files;
-  } catch {
+  } catch (e) {
+    console.error(`[session] listSessions failed for ${workspacePath}:`, e instanceof Error ? e.message : String(e));
     return [];
   }
 }
@@ -352,7 +359,12 @@ export function loadSessionById(workspacePath: string, sessionId: string): Sessi
         return session;
       }
     }
-  } catch {}
+  } catch (e) {
+    console.error(
+      `[session] loadSessionById failed: id="${sessionId}" dir="${sessionsDir}"`,
+      e instanceof Error ? e.message : String(e),
+    );
+  }
 
   return null;
 }
@@ -366,7 +378,8 @@ export function switchSession(workspacePath: string, sessionId: string): boolean
     const spicaDir = join(workspacePath, '.spica');
     fs.writeJsonSync(join(spicaDir, 'session.json'), session, { spaces: 2 });
     return true;
-  } catch {
+  } catch (e) {
+    console.error(`[session] switchSession failed for ${sessionId}:`, e instanceof Error ? e.message : String(e));
     return false;
   }
 }
@@ -379,8 +392,8 @@ export function clearSession(workspacePath: string): void {
     if (fs.existsSync(sessionPath)) {
       fs.removeSync(sessionPath);
     }
-  } catch {
-    // 忽略清除错误
+  } catch (e) {
+    console.error(`[session] clearSession failed for ${workspacePath}:`, e instanceof Error ? e.message : String(e));
   }
 }
 
@@ -393,7 +406,9 @@ export function deleteSession(workspacePath: string, sessionId: string): boolean
       fs.removeSync(sessionPath);
       return true;
     }
-  } catch {}
+  } catch (e) {
+    console.error(`[session] deleteSession failed: id="${sessionId}"`, e instanceof Error ? e.message : String(e));
+  }
 
   return false;
 }
@@ -419,7 +434,9 @@ export function renameSession(workspacePath: string, sessionId: string, newName:
       });
       return true;
     }
-  } catch {}
+  } catch (e) {
+    console.error(`[session] renameSession failed: id="${sessionId}"`, e instanceof Error ? e.message : String(e));
+  }
 
   return false;
 }

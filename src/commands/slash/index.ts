@@ -38,19 +38,19 @@ export async function dispatchSlash(trimmed: string, ctx: SlashContext): Promise
 
   // /view <id>
   if (cmd === 'view') {
-    await sessionHandler(parts.slice(1).join(' '), ctx);
+    await sessionHandler('view ' + parts.slice(1).join(' '), ctx);
     return true;
   }
 
   // /rename <id> <name>
   if (cmd === 'rename') {
-    await sessionHandler(parts.slice(1).join(' '), ctx);
+    await sessionHandler('rename ' + parts.slice(1).join(' '), ctx);
     return true;
   }
 
   // /delete <id>
   if (cmd === 'delete') {
-    await sessionHandler(parts.slice(1).join(' '), ctx);
+    await sessionHandler('delete ' + parts.slice(1).join(' '), ctx);
     return true;
   }
 

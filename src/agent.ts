@@ -298,8 +298,8 @@ export class SpicaAgent extends EventEmitter {
   private _progress: ProgressTracker = new ProgressTracker();
   // Stagnation detection: replaces 50-round hard cap
   private _stagnationCounter: number = 0;
-  private static readonly STAGNATION_WARNING = 8;
-  private static readonly STAGNATION_LIMIT = 16;
+  private static readonly STAGNATION_WARNING = 16;
+  private static readonly STAGNATION_LIMIT = 32;
   // finish_reason="stop" = LLM's turn is over. Respect it.
   // No reflection hacks, no heuristic counters, no exceptions.
   // Periodic session save: persist every N tool rounds for crash resilience
@@ -1374,34 +1374,22 @@ export class SpicaAgent extends EventEmitter {
           // Progress tracking: detect meaningful agent actions this round.
           // Broadens beyond file I/O — git commits, test runs, and package
           // installs are also progress. Only toolResults carry resolved names.
-          const fileChangeCanonical = new Set([
+          const mutationTools = new Set([
             "write", "edit", "file_multi_edit", "file_delete",
           ]);
 
-          /** Check if a bash command represents real work (not just file ops). */
-          const isWorkCommand = (cmd: string): boolean => {
-            return /\b(test|vitest|jest|mocha|pytest|cargo test|go test|npm test|npm run build|npm install|pip install|cargo build|go build|tsc|make|cmake|git commit|git push)\b/.test(cmd);
-          };
-
-          /** Check whether a single tool result signals real progress. */
+          /** Check whether a single tool result signals real progress.
+           *  "Progress" means the agent is actively working — reading code,
+           *  searching, running commands, making changes. Only failures or
+           *  interruptions count as no-progress rounds. */
           const isProgressResult = (
             t: { name: string; id: string; result: string },
-            toolCalls: Array<{ name: string; id: string; arguments: Record<string, unknown> }>
+            _toolCalls: Array<{ name: string; id: string; arguments: Record<string, unknown> }>
           ): boolean => {
             if (t.result.includes("interrupted") || t.result.includes("blocked")) return false;
-            // File mutation
-            if (fileChangeCanonical.has(t.name)) return true;
-            // Git operations (commit, branch create, etc.)
-            if (t.name === "git") return true;
-            // Bash: check the original command, not the output
-            if (t.name === "bash") {
-              const tc = toolCalls.find(c => c.id === t.id);
-              const cmd = String(tc?.arguments?.command || tc?.arguments?.cmd || '');
-              return isWorkCommand(cmd);
-            }
-            // Web: successful fetch is research progress
-            if (t.name === "web_fetch" && t.result.includes("success")) return true;
-            return false;
+            if (t.result.includes('"success":false') || t.result.includes('"success": false')) return false;
+            // Any successful tool call means the agent is working
+            return true;
           };
 
           const hadProgress = toolResults.some(t => isProgressResult(t, response.toolCalls!));
@@ -1412,7 +1400,7 @@ export class SpicaAgent extends EventEmitter {
           if (hadProgress && response.toolCalls) {
             for (const tc of response.toolCalls) {
               const resolved = resolveAlias(tc.name);
-              if (fileChangeCanonical.has(resolved)) {
+              if (mutationTools.has(resolved)) {
                 const filePath =
                   (tc.arguments as any)?.path ||
                   (tc.arguments as any)?.file_path ||
@@ -1428,19 +1416,16 @@ export class SpicaAgent extends EventEmitter {
             }
           }
 
-          // Stagnation check: replace 50-round hard cap
+          // Stagnation check: catch agent stuck in a loop of failing tools.
+          // Any successful tool call (read, grep, write, bash, etc.) counts as progress.
+          // Only consecutive rounds where ALL tools fail/interrupt are "stagnant".
           const stagnationResult = this.checkStagnation(hadProgress);
           if (stagnationResult === "warn") {
             this.emit("stagnation_warning", { rounds: SpicaAgent.STAGNATION_WARNING });
-            this.agentAddMessage({
-              role: "system" as const,
-              content: "[STAGNATION WARNING] No file changes in " + SpicaAgent.STAGNATION_WARNING +
-                " rounds. If stuck, ask clarifying questions or report what's blocking you.",
-            });
           } else if (stagnationResult === "stop") {
             this.emit("stagnation_limit", { rounds: SpicaAgent.STAGNATION_LIMIT });
-            return "[STAGNATION] No progress after " + SpicaAgent.STAGNATION_LIMIT +
-              " rounds. The agent may be stuck in a loop. Please provide new instructions.";
+            return "[STAGNATION] No successful tool calls after " + SpicaAgent.STAGNATION_LIMIT +
+              " rounds. All tools are failing or interrupted. Please check the environment and provide new instructions.";
           }
 
           // Periodic session save: persist every N tool rounds for crash resilience

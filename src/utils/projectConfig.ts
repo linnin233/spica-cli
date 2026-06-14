@@ -3,7 +3,7 @@
 // We only auto-detect project info as fallback when no AGENTS.md exists.
 
 import { existsSync, readFileSync } from 'fs';
-import { writeFile } from 'fs-extra';
+import { writeFile } from 'fs/promises';
 import { join } from 'path';
 
 export interface ProjectConfig {
@@ -166,7 +166,7 @@ export async function createAgentsMd(workspace: string): Promise<string> {
   const config = autoDetectProject(workspace);
   const content = generateAgentsMd(config);
   const filepath = join(workspace, CONFIG_FILE);
-  const { writeFile } = await import('fs-extra');
+  const { writeFile } = await import('fs/promises');
   await writeFile(filepath, content);
   return filepath;
 }

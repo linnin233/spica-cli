@@ -248,12 +248,13 @@ export function setupAgentEvents(
   });
 
   on('stream', (data: StreamData) => {
-    // Always clear thinking animation on first stream chunk.
-    // DeepSeek may send content before reasoning in the same delta,
-    // causing the spinner to start while content is already flowing.
-    // This prevents "⠏ thinking**content**" in output.
+    // Always clear thinking animation on every chunk.
+    // DeepSeek sends content before reasoning in the same delta —
+    // stream fires before reasoning, so clearing only on first chunk
+    // misses the spinner that reasoning starts milliseconds later.
+    screen.clearThinkingAnimation();
+
     if (!state.isStreamingOutput()) {
-      screen.clearThinkingAnimation();
       // If transitioning from reasoning, flush buffered reasoning lines
       if (reasoningStarted) {
         screen.flushStreamBuffer();
@@ -281,7 +282,9 @@ export function setupAgentEvents(
     if (!reasoningStarted) {
       reasoningStarted = true;
       // compact模式：启动thinking动画
-      if (!state.isVerboseMode()) {
+      // 但如果stream已开始（DeepSeek: content先于reasoning到达），
+      // 不要启动动画——内容已开始输出，spinner只会污染屏幕
+      if (!state.isVerboseMode() && !state.isStreamingOutput()) {
         screen.startThinkingAnimation();
       }
       if (!state.isStreamingOutput()) {

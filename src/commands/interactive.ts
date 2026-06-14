@@ -1,13 +1,14 @@
 import { SpicaAgent } from "../agent";
 import { execSync } from "child_process";
 import { loadGlobalSettings, getProviderConfig, saveGlobalSettings, GLOBAL_SETTINGS_FILE } from "../utils/settings";
-import { loadSession, saveSession, archiveSession, listSessions } from "../utils/session";
+import { loadSession, saveSession } from "../utils/session";
 import { listSkills, installSkill, uninstallSkill, listInstalledPackages, saveSkill, deleteSkill, getSkill, buildSkillPrompt, parseSkillInput } from "../skills";
 import { listCheckpoints, getCheckpoint, restoreCheckpoint, cleanCheckpoints } from "../storage/checkpointManager";
 import { getMCPManager, generateExampleConfig, shutdownMCP } from "../mcp/client";
 import { COLORS, BG } from "../cli/ui/colors";
 import { getInputQueue, clearInputQueue } from "../cli/ui/queue";
 import { autoDrainQueue } from "../cli/queueDrain";
+import { dispatchSlash } from "./slash";
 import { TUIInputHandler } from "../cli/ui/tuiInput";
 import { setupAgentEvents, formatRunStats } from "../cli/events";
 import { updateStatusBar, setUpdateStatusBarFn } from "../cli/status";
@@ -334,97 +335,22 @@ export async function runInteractiveMode(
               return;
             }
 
-            // History browser — archived sessions (read-only)
-            if (cmd === "sessions" || cmd === "history") {
-              const { listSessions } = await import("../utils/session");
-              const sessions = listSessions(agent.getWorkspacePath());
-
-              screen.appendScroll(COLORS.primary.bold("\nSessions\n"));
-              screen.appendScroll(COLORS.muted("─".repeat(60) + "\n"));
-
-              // Current session
-              const currentMsgs = agent.getMessages();
-              const currentId = loadSession(agent.getWorkspacePath())?.id;
-              screen.appendScroll(COLORS.primary(`* Current: ${currentMsgs.length} messages`) +
-                (currentId ? COLORS.muted(`  (id: ${currentId.slice(-12)})`) : '') + '\n');
-              screen.appendScroll(COLORS.muted("─".repeat(60) + "\n"));
-
-              if (sessions.length === 0) {
-                screen.appendScroll(COLORS.muted("  No archived sessions.\n"));
-                screen.appendScroll(COLORS.muted("  /archive to save current and start new.\n\n"));
-                return;
-              }
-
-              sessions.slice(0, 20).forEach((s, i) => {
-                const isCurrent = s.id === currentId;
-                const prefix = isCurrent ? '*' : ' ';
-                const date = new Date(s.lastActivity).toLocaleDateString();
-                const name = s.name || s.id;
-                const summary = s.summary || '';
-
-                screen.appendScroll(
-                  COLORS.primary(`${prefix} ${(i + 1).toString().padStart(2)}. `) +
-                  COLORS.primary.bold(name.slice(0, 50)) + '\n'
-                );
-                screen.appendScroll(
-                  COLORS.muted(`     ${s.messageCount} msgs  ${date}  ${s.id}`) + '\n'
-                );
-                if (summary) {
-                  screen.appendScroll(COLORS.muted(`     ${summary}\n`));
-                }
+            // Session commands → dispatchSlash
+            const sessionCmds = new Set(["history", "sessions", "view", "rename", "delete", "archive", "clear", "reset", "new"]);
+            if (sessionCmds.has(cmd.split(/\s+/)[0])) {
+              const handled = await dispatchSlash(trimmed, {
+                agent,
+                screen,
+                state,
+                tokenCounter,
+                isProcessing,
+                setProcessing: (v: boolean) => { isProcessing = v; state.setProcessing(v); },
+                providerConfig: providerConfig!,
+                updateStatusBar: updateStatusBarLocal,
+                handleInput,
               });
-
-              if (sessions.length > 20) {
-                screen.appendScroll(COLORS.muted(`  ... ${sessions.length - 20} more\n`));
-              }
-
-              screen.appendScroll(COLORS.muted("\n" + "─".repeat(60) + "\n"));
-              screen.appendScroll(COLORS.muted("/view <id>  /rename <id> <name>  /delete <id>\n\n"));
-
-              return;
-            }
-
-            // 查看历史 session 内容（只读）
-            if (cmd.startsWith("view ")) {
-              const sessionId = cmd.slice(5).trim();
-              const { loadSessionById } = await import("../utils/session");
-              const session = loadSessionById(agent.getWorkspacePath(), sessionId);
-
-              if (!session) {
-                screen.appendScroll(COLORS.error(`\n[ERR] Session ${sessionId} not found\n`));
-                return;
-              }
-
-              screen.appendScroll(COLORS.primary.bold(`\nReading: ${session.name || sessionId}\n`));
-              screen.appendScroll(COLORS.muted(`  Created: ${new Date(session.createdAt).toLocaleString()}\n`));
-              screen.appendScroll(COLORS.muted(`  Last: ${new Date(session.lastActivity).toLocaleString()}\n`));
-              screen.appendScroll(COLORS.muted(`  Messages: ${session.messages?.length || 0}\n`));
-              if (session.summary) {
-                screen.appendScroll(COLORS.muted(`  Summary: ${session.summary}\n`));
-              }
-              // Show all messages (each truncated to 500 chars)
-              const messages = session.messages || [];
-              const MAX_TO_SHOW = 50;  // protect against huge sessions
-
-              messages.slice(0, MAX_TO_SHOW).forEach((m, i) => {
-                const role = m.role === 'user' ? '[user]' : m.role === 'assistant' ? '[ai]' : m.role === 'tool' ? '[tool]' : '[sys]';
-                const content = (m.content || '').slice(0, 500);
-                const preview = content.split('\n').slice(0, 3).join(' ');
-
-                screen.appendScroll(COLORS.primary(`${role} `));
-                screen.appendScroll(COLORS.muted(`${preview}\n`));
-
-                if (m.toolCalls && m.toolCalls.length > 0) {
-                  screen.appendScroll(COLORS.muted(`  tools: ${m.toolCalls.map(tc => tc.name).join(', ')}\n`));
-                }
-              });
-
-              if (messages.length > MAX_TO_SHOW) {
-                screen.appendScroll(COLORS.muted(`\n  ... and ${messages.length - MAX_TO_SHOW} more messages\n`));
-              }
-              screen.appendScroll(COLORS.muted(`\n  -- End of session (${messages.length} messages) --\n\n`));
-
-              return;
+              screen.restoreCursor();
+              if (handled) return;
             }
 
             // 删除 /switch 功能（历史只读）
@@ -433,82 +359,6 @@ export async function runInteractiveMode(
               screen.appendScroll(COLORS.muted("  History sessions are read-only for review.\n"));
               screen.appendScroll(COLORS.muted("  To continue work, stay in current session.\n"));
               screen.appendScroll(COLORS.muted("  Use /archive to save current and start new.\n\n"));
-              return;
-            }
-
-            if (cmd.startsWith("rename ")) {
-              const args = cmd.slice(7).trim();
-              const parts = args.split(" ");
-              const sessionId = parts[0];
-              const newName = parts.slice(1).join(" ") || "Unnamed";
-              const { renameSession } = await import("../utils/session");
-
-              if (renameSession(agent.getWorkspacePath(), sessionId, newName)) {
-                screen.appendScroll(
-                  COLORS.success(`\n[OK] Session renamed to: ${newName}\n`),
-                );
-              } else {
-                screen.appendScroll(
-                  COLORS.error(
-                    `\n[ERR] Failed to rename session ${sessionId}\n`,
-                  ),
-                );
-              }
-
-              return;
-            }
-
-            // 删除 session
-            if (cmd.startsWith("delete ")) {
-              const sessionId = cmd.slice(7).trim();
-              const { deleteSession } = await import("../utils/session");
-
-              if (deleteSession(agent.getWorkspacePath(), sessionId)) {
-                screen.appendScroll(
-                  COLORS.success(`\n[OK] Session ${sessionId} deleted\n`),
-                );
-              } else {
-                screen.appendScroll(
-                  COLORS.error(`\n[ERR] Session ${sessionId} not found or cannot delete\n`),
-                );
-              }
-
-              return;
-            }
-
-            // 归档当前聊天并开始新聊天（/new, /archive, /clear, /reset 都可触发）
-            if (cmd === "new" || cmd === "archive" || cmd === "clear" || cmd === "reset") {
-              const currentMessages = agent.getMessages();
-
-              // 归档当前 session（如果有消息）
-              if (currentMessages.length > 0) {
-                const session = loadSession(agent.getWorkspacePath());
-                if (session) {
-                  session.messages = currentMessages;
-                  session.lastActivity = new Date().toISOString();
-
-                  screen.appendScroll(COLORS.muted("\n[ARCHIVING] Generating summary...\n"));
-
-                  const llm = agent.getLLM();
-                  const summary = await archiveSession(agent.getWorkspacePath(), session, llm || undefined);
-
-                  screen.appendScroll(
-                    COLORS.success(`\n[ARCHIVED] Saved ${currentMessages.length} messages\n`),
-                  );
-                  screen.appendScroll(COLORS.muted(`  ID: ${session.id}\n`));
-                  if (summary) {
-                    screen.appendScroll(COLORS.muted(`  Summary: ${summary}\n`));
-                  }
-                }
-              }
-
-              // 清空当前 session，开始新聊天
-              agent.setMessages([]);
-              clearInputQueue();
-
-              screen.appendScroll(COLORS.success("[NEW] Started fresh session\n"));
-              screen.appendScroll(COLORS.muted("Use /history to view archived chats (read-only)\n"));
-
               return;
             }
 
@@ -906,8 +756,8 @@ If AGENTS.md already exists, preserve valuable content and supplement updates.`;
                     screen.appendScroll(COLORS.muted(`\n${result}\n`));
                   } else {
                     screen.appendScroll(COLORS.success("\n[OK] Done\n"));
-                    playBell("done"); // 工作完成提示音
                   }
+                  playBell("done"); // 工作完成提示音（正常/中断/停滞都响）
                 } catch (error: unknown) {
                   screen.clearThinkingAnimation();
                   screen.setStreaming(false);

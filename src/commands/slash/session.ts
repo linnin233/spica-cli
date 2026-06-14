@@ -61,17 +61,35 @@ export const sessionHandler: SlashHandler = async (args, ctx) => {
     const session = loadSessionById(ctx.agent.getWorkspacePath(), sessionId);
     if (!session) {
       ctx.screen.appendScroll(COLORS.warning(`\nSession not found: ${sessionId}\n`));
+      ctx.screen.appendScroll(COLORS.muted(`  Workspace: ${ctx.agent.getWorkspacePath()}\n`));
       return;
     }
 
-    ctx.screen.appendScroll(COLORS.primary.bold(`\nSession: ${session.name || session.id}\n`));
-    if (session.summary) {
-      ctx.screen.appendScroll(COLORS.muted(`  ${session.summary}\n`));
-    }
+    ctx.screen.appendScroll(COLORS.primary.bold(`\nReading: ${session.name || sessionId}\n`));
+    ctx.screen.appendScroll(COLORS.muted(`  Created: ${new Date(session.createdAt).toLocaleString()}\n`));
+    ctx.screen.appendScroll(COLORS.muted(`  Last: ${new Date(session.lastActivity).toLocaleString()}\n`));
     ctx.screen.appendScroll(COLORS.muted(`  Messages: ${session.messages?.length || 0}\n`));
-    ctx.screen.appendScroll(COLORS.muted(`  Created: ${session.createdAt}\n`));
-    ctx.screen.appendScroll(COLORS.muted(`  Last activity: ${session.lastActivity}\n`));
-    ctx.screen.appendScroll('\n');
+    if (session.summary) {
+      ctx.screen.appendScroll(COLORS.muted(`  Summary: ${session.summary}\n`));
+    }
+
+    // Show all messages (500 chars each)
+    const messages = session.messages || [];
+
+    messages.forEach((m) => {
+      const role = m.role === 'user' ? '[user]' : m.role === 'assistant' ? '[ai]' : m.role === 'tool' ? '[tool]' : '[sys]';
+      const content = (m.content || '').slice(0, 500);
+      const preview = content.split('\n').slice(0, 3).join(' ');
+
+      ctx.screen.appendScroll(COLORS.primary(`${role} `));
+      ctx.screen.appendScroll(COLORS.muted(`${preview}\n`));
+
+      if (m.toolCalls && m.toolCalls.length > 0) {
+        ctx.screen.appendScroll(COLORS.muted(`  tools: ${m.toolCalls.map(tc => tc.name).join(', ')}\n`));
+      }
+    });
+
+    ctx.screen.appendScroll(COLORS.muted(`\n  -- End of session (${messages.length} messages) --\n\n`));
 
     return;
   }
@@ -122,7 +140,7 @@ export const sessionHandler: SlashHandler = async (args, ctx) => {
   const currentMsgs = ctx.agent.getMessages();
   const currentId = loadSession(ctx.agent.getWorkspacePath())?.id;
   ctx.screen.appendScroll(COLORS.primary(`* Current: ${currentMsgs.length} messages`) +
-    (currentId ? COLORS.muted(`  (id: ${currentId.slice(-12)})`) : '') + '\n');
+    (currentId ? COLORS.muted(`  (id: ${currentId})`) : '') + '\n');
   ctx.screen.appendScroll(COLORS.muted('─'.repeat(60) + '\n'));
 
   if (sessions.length === 0) {
@@ -131,7 +149,7 @@ export const sessionHandler: SlashHandler = async (args, ctx) => {
     return;
   }
 
-  sessions.slice(0, 20).forEach((s, i) => {
+  sessions.forEach((s, i) => {
     const isCurrent = s.id === currentId;
     const prefix = isCurrent ? '*' : ' ';
     const date = new Date(s.lastActivity).toLocaleDateString();
@@ -142,9 +160,10 @@ export const sessionHandler: SlashHandler = async (args, ctx) => {
       COLORS.muted(`${prefix} ${i + 1}. ${name}  (${s.messageCount} msgs, ${date})\n`),
     );
     if (summary) {
-      ctx.screen.appendScroll(COLORS.muted(`     ${summary.slice(0, 100)}\n`));
+      ctx.screen.appendScroll(COLORS.muted(`     ${summary}\n`));
     }
   });
 
-  ctx.screen.appendScroll('\n');
+  ctx.screen.appendScroll(COLORS.muted('\n' + '─'.repeat(60) + '\n'));
+  ctx.screen.appendScroll(COLORS.muted('/view <id>  /rename <id> <name>  /delete <id>\n\n'));
 };
