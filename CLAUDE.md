@@ -50,7 +50,7 @@ Note: Project is ESM (`"type": "module"` in package.json). Use `import`/`export`
 2. Agent.processInput() → LLMClient.stream()
 3. LLM returns tool_calls → Agent.executeTools()
 4. Tool results → Agent.runLoop() continues
-5. Continue until LLM returns text (no tool calls) → done
+5. LLM text → another turn (generateFromHistory); tool calls → execute → continue. Loop never exits on text-only. Stagnation detection (16 rounds) is the only safety net.
 
 ### Storage
 
