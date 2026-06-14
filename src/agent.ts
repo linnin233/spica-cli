@@ -1,38 +1,19 @@
 import { LLMClient } from './llm/LLMClient';
 import {
   executeTool,
-  getAllToolDefinitions,
   getActiveToolDefinitions,
   isLazyTool,
   setWorkspace,
   getToolBatchHint,
 } from './tools/index';
-import { initMCP } from './mcp/client';
-import { initSkills, listSkills } from './skills/index';
-import { getProviderConfig } from './utils/settings';
-import {
-  getSystemPrompt,
-  getSystemPromptStable,
-  getSystemPromptVariable,
-} from './prompts/system';
-import {
-  loadProjectConfig as loadAgentsConfig,
-  autoDetectProject,
-  createAgentsMd,
-  type ProjectConfig,
-} from './utils/projectConfig';
-import { SkillDefinition } from './utils/settings';
-import { cleanMessages } from './utils/messageCleaner';
+import { type ProjectConfig } from './utils/projectConfig';
 import {
   loadProjectState,
   saveProjectState,
   updateProjectTodos,
-  ensureProjectDir,
 } from './storage/projectState';
-import { loadSession } from './utils/session';
 import { runPreHooks, runPostHooks } from './hooks';
-import { classifyIntent } from './cli/skillGate';
-import { isCorrection, saveLearning, type FailureRecord } from './core/learnings';
+import { isCorrection, saveLearning } from './core/learnings';
 import {
   createCheckpoint,
   listCheckpoints,
@@ -51,7 +32,7 @@ import {
   generateSummary as _generateSummary,
 } from './core/compression';
 import { ProgressTracker } from './core/progressTracker';
-import { AgentStateMachine, type AgentState } from './core/AgentState';
+import { AgentStateMachine } from './core/AgentState';
 import { recordToolUsage } from './tools/analytics';
 import {
   initAgent,
@@ -964,16 +945,6 @@ export class SpicaAgent extends EventEmitter {
       });
 
       this.emit('message', { role: 'user', content: prompt });
-
-      // Skill gate: classify user intent and nudge LLM toward relevant skill
-      const suggestedSkill = classifyIntent(prompt);
-      if (suggestedSkill) {
-        this.emit('skill_suggested', { skill: suggestedSkill, prompt: prompt.slice(0, 100) });
-        this.agentAddMessage({
-          role: 'system',
-          content: `[SKILL HINT] The skill "${suggestedSkill}" may be relevant to this task. Use the skill tool to load full instructions: skill(name="${suggestedSkill}")`,
-        });
-      }
 
       // Auto-learning: detect user corrections and persist them
       if (isCorrection(prompt)) {
