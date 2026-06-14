@@ -1295,14 +1295,39 @@ export class SpicaAgent extends EventEmitter {
 
           allToolResults.push(...toolResults);
 
-          // Progress tracking: detect file changes this round
-          const hadProgress = toolResults.some(t => {
-            const name = t.name;
-            return (name === "write" || name === "file_write" ||
-                    name === "edit" || name === "file_edit" || name === "file_multi_edit" ||
-                    name === "file_delete") &&
-                   !t.result.includes("interrupted") && !t.result.includes("blocked");
-          });
+          // Progress tracking: detect file changes this round.
+          // Only check canonical names — executeTool resolves aliases before
+          // populating toolResults, so "file_write"/"file_edit" never appear.
+          const fileChangeCanonical = new Set([
+            "write", "edit", "file_multi_edit", "file_delete",
+          ]);
+          const hadProgress = toolResults.some(t =>
+            fileChangeCanonical.has(t.name) &&
+            !t.result.includes("interrupted") &&
+            !t.result.includes("blocked")
+          );
+
+          // Record progress in ProgressTracker (survives compression).
+          // Uses the original toolCalls (which still carry arguments) to
+          // extract file paths.
+          if (hadProgress && response.toolCalls) {
+            for (const tc of response.toolCalls) {
+              const resolved = resolveAlias(tc.name);
+              if (fileChangeCanonical.has(resolved)) {
+                const filePath =
+                  (tc.arguments as any)?.path ||
+                  (tc.arguments as any)?.file_path ||
+                  (tc.arguments as any)?.source ||
+                  '';
+                if (filePath) {
+                  this._progress.recordFileChange(
+                    resolved === 'file_delete' ? 'file_written' : 'file_edited',
+                    filePath
+                  );
+                }
+              }
+            }
+          }
 
           // Stagnation check: replace 50-round hard cap
           const stagnationResult = this.checkStagnation(hadProgress);
