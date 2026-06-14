@@ -17,10 +17,15 @@ export async function initAgent(agent: SpicaAgent): Promise<void> {
   const existingPromise = agent.getInitPromise();
   if (existingPromise) return existingPromise;
 
+  agent.stateMachine.transition('initializing');
   agent.setInitPromise(doInit(agent));
   try {
     await agent.getInitPromise();
     agent.setInitialized(true);
+    agent.stateMachine.transition('idle');
+  } catch (e) {
+    agent.stateMachine.transition('uninitialized');
+    throw e;
   } finally {
     agent.setInitPromise(null);
   }
@@ -32,6 +37,8 @@ export async function initAgentAsSubAgent(
   modelOverride?: string
 ): Promise<void> {
   if (agent.isInitialized()) return;
+
+  agent.stateMachine.transition('initializing');
 
   const parentProviderName =
     parentAgent.getProviderName() || agent.getProviderName();
@@ -115,6 +122,7 @@ export async function initAgentAsSubAgent(
   });
 
   agent.setInitialized(true);
+  agent.stateMachine.transition('idle');
 }
 
 export async function doInit(agent: SpicaAgent): Promise<void> {

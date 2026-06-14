@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SpicaAgent } from '../agent';
 import { TokenCounter } from '../llm/TokenCounter';
 import type { ChatMessage } from '../llm/providers/BaseProvider';
+import * as checkpointManager from '../storage/checkpointManager';
 
 const shouldSkip = process.env.CI === 'true' || process.env.SKIP_API_TESTS === 'true';
 
@@ -50,11 +51,19 @@ describe.skipIf(shouldSkip)('LLM Error Handling', () => {
         .mockResolvedValue({ content: 'Mock continuation', finished: true }),
     };
 
+    // Mock checkpoint creation — avoids real git I/O which conflicts
+    // with fake timers during test execution.
+    vi.spyOn(checkpointManager, 'createCheckpoint').mockResolvedValue(null);
+
     Object.defineProperty(agent, 'llm', { value: mockLLM, writable: true });
+
+    // State machine: skip init since we inject mock LLM directly
+    agent.stateMachine.forceTransition('idle');
   });
 
   afterEach(() => {
-    vi.useRealTimers(); // 恢复真实计时器
+    vi.clearAllTimers();
+    vi.useRealTimers();
   });
 
   describe('Initial generate failure', () => {

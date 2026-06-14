@@ -37,6 +37,9 @@ describe('Compression Integration', () => {
 
     // Inject mock into private field
     Object.defineProperty(agent, 'llm', { value: mockLLM, writable: true });
+
+    // State machine: skip init since we inject mock LLM directly
+    agent.stateMachine.forceTransition('idle');
   });
 
   describe('Token threshold tests', () => {

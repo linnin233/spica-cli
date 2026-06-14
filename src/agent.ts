@@ -240,6 +240,9 @@ export class SpicaAgent extends EventEmitter {
   isInitialized(): boolean { return this._initialized; }
   setInitialized(v: boolean): void { this._initialized = v; }
 
+  /** Unified state machine — for lifecycle transitions (init, interrupt, compact). */
+  get stateMachine(): AgentStateMachine { return this._stateMachine; }
+
   /** @internal — used by init.ts */
   getInitPromise(): Promise<void> | null { return this._initPromise; }
   setInitPromise(p: Promise<void> | null): void { this._initPromise = p; }
@@ -416,6 +419,11 @@ export class SpicaAgent extends EventEmitter {
       cancelSeq: this.cancelSeq,
       isDuplicate,
     });
+
+    // State transition: processing → interrupted (only valid during processing)
+    if (this._stateMachine.current === 'processing') {
+      this._stateMachine.transition('interrupted');
+    }
   }
 
   /**
@@ -656,12 +664,26 @@ export class SpicaAgent extends EventEmitter {
           error: errorMsg,
         });
 
-        const start = Date.now();
-        while (Date.now() - start < delay) {
-          if (signal?.aborted) {
-            throw new InterruptError('Interrupted by user during retry delay');
+        // Single setTimeout with AbortSignal support for interrupt checking.
+        // Avoids Date.now() polling loop which is fragile with fake timers in tests.
+        await new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(resolve, delay);
+          if (signal) {
+            signal.addEventListener(
+              'abort',
+              () => {
+                clearTimeout(timeout);
+                reject(new InterruptError('Interrupted by user during retry delay'));
+              },
+              { once: true }
+            );
           }
-          await new Promise(resolve => setTimeout(resolve, 100));
+        });
+
+        // Double-check: if signal was already aborted before the listener was registered,
+        // the above listener won't fire — check here.
+        if (signal?.aborted) {
+          throw new InterruptError('Interrupted by user during retry delay');
         }
       }
     }

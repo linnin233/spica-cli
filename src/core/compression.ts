@@ -35,6 +35,8 @@ export async function startNonBlockingCompression(
   const llm: LLMClient | null = agent.getLLM();
   if (!llm) return;
   agent.setCompacting(true);
+  const prevState = agent.stateMachine.current;
+  agent.stateMachine.transition('compacting');
 
   try {
     const allMessages = llm.getMessages();
@@ -249,6 +251,7 @@ export async function startNonBlockingCompression(
         })());
       }
 
+      agent.stateMachine.transition(prevState);
       agent.setCompacting(false);
       return;
     }
@@ -257,6 +260,7 @@ export async function startNonBlockingCompression(
     // Guard: if a previous Phase 2 is still running, skip — don't orphan
     // its promise (which would discard its result when overwritten).
     if (agent.getPendingCompression()) {
+      agent.stateMachine.transition(prevState);
       agent.setCompacting(false);
       return;
     }
@@ -283,6 +287,7 @@ export async function startNonBlockingCompression(
       agent.setPendingCompression(null);
     })());
   } finally {
+    agent.stateMachine.transition(prevState);
     agent.setCompacting(false);
   }
 }
