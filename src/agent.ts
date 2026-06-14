@@ -302,6 +302,9 @@ export class SpicaAgent extends EventEmitter {
   private static readonly STAGNATION_LIMIT = 16;
   // finish_reason="stop" = LLM's turn is over. Respect it.
   // No reflection hacks, no heuristic counters.
+  // Exception: after applyPendingSummary injects [CONTEXT RESTORED],
+  // the LLM may acknowledge before continuing — give one free pass.
+  private _contextJustRestored: boolean = false;
   // Periodic session save: persist every N tool rounds for crash resilience
   private _roundCount: number = 0;
   private static readonly SAVE_EVERY_N_ROUNDS = 5;
@@ -1060,6 +1063,8 @@ export class SpicaAgent extends EventEmitter {
           t.setContextWindow(ctxWindow);
           if (t.estimateMessages(this.llm.getMessages()) > ctxWindow * 0.70) {
             await this.startNonBlockingCompression(Math.floor(ctxWindow * 0.40), signal);
+            // Inject completed Phase 2 summary so LLM knows what was truncated.
+            this.applyPendingSummary();
           }
         }
 
@@ -1074,6 +1079,20 @@ export class SpicaAgent extends EventEmitter {
 
         if (!response.toolCalls || response.toolCalls.length === 0) {
           if (response.content) {
+            // After context restoration, LLM may produce text acknowledgment
+            // ("OK, continuing...") before calling tools. Give one free pass.
+            if (this._contextJustRestored) {
+              this._contextJustRestored = false;
+              this.emit('waiting_for_llm');
+              response = await this.callLLMWithRetry(
+                sig => this.llm!.generateFromHistory(toolDefinitions, sig),
+                'llm_generate_after_restore',
+                10,
+                signal
+              );
+              this.syncFullHistory();
+              continue;
+            }
             // finished=true with content → LLM intentionally ended its turn.
             // Equivalent to Anthropic's stop_reason="end_turn".
             // Respect the API signal: exit loop, show text to user.
@@ -1805,7 +1824,15 @@ export class SpicaAgent extends EventEmitter {
    * the previous request's background compression.
    */
   private applyPendingSummary(): void {
-    return _applyPendingSummary(this);
+    // Only set the flag if a completed summary is about to be injected.
+    // _applyPendingSummary consumes _deferredSummary — check beforehand.
+    const hasSummary = !this._pendingCompression && !!this._deferredSummary;
+    _applyPendingSummary(this);
+    if (hasSummary) {
+      // [CONTEXT RESTORED] was injected. LLM may respond with text
+      // acknowledgment before continuing. Give one free pass.
+      this._contextJustRestored = true;
+    }
   }
 
   /**
