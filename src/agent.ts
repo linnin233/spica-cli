@@ -301,6 +301,10 @@ export class SpicaAgent extends EventEmitter {
   private _usedTools: Set<string> = new Set();
   // Progress tracker: survives compression, records completed work
   private _progress: ProgressTracker = new ProgressTracker();
+  // Stagnation detection: replaces 50-round hard cap
+  private _stagnationCounter: number = 0;
+  private static readonly STAGNATION_WARNING = 8;
+  private static readonly STAGNATION_LIMIT = 16;
   // Unified state machine — replaces scattered _initialized/_compacting/pendingCancel
   private _stateMachine: AgentStateMachine = new AgentStateMachine();
   // Idle compression timer: triggers compression after inactivity when
@@ -512,6 +516,22 @@ export class SpicaAgent extends EventEmitter {
     } catch {
       return { files: [] };
     }
+  }
+
+  // 停滞检测：替代 50 轮硬上限
+  private checkStagnation(hadProgress: boolean): 'continue' | 'warn' | 'stop' {
+    if (hadProgress) {
+      this._stagnationCounter = 0;
+      return 'continue';
+    }
+    this._stagnationCounter++;
+    if (this._stagnationCounter === SpicaAgent.STAGNATION_WARNING) {
+      return 'warn';
+    }
+    if (this._stagnationCounter >= SpicaAgent.STAGNATION_LIMIT) {
+      return 'stop';
+    }
+    return 'continue';
   }
 
   // 判断错误是否可重试
