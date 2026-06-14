@@ -302,13 +302,13 @@ export class ScreenManager {
 
   // 表格行检测：以 | 开头且包含 |
   private isTableDataLine(line: string): boolean {
-    const trimmed = line.trim();
+    const trimmed = ansiStrip(line).trim();
     return /^\|.+\|/.test(trimmed);
   }
 
   // 分隔行检测：|---|---|
   private isTableSepLine(line: string): boolean {
-    const trimmed = line.trim();
+    const trimmed = ansiStrip(line).trim();
     return /^\|[\s:]*-{3,}[\s:]*\|/.test(trimmed) || /^\|[\s:]*-{3,}[\s:]*[\|:]/.test(trimmed);
   }
 

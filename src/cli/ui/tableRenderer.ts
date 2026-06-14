@@ -4,6 +4,7 @@
 
 import { getStringWidth, padRight } from './stringWidth';
 import { COLORS } from './colors';
+import { ansiStrip } from './ansiFilter';
 
 interface ParsedTable {
   header: string[];
@@ -155,12 +156,15 @@ function renderTable(table: ParsedTable): string {
  */
 export function renderMarkdownTables(text: string): string {
   const lines = text.split('\n');
+  // Strip ANSI for table detection — ANSI color codes (e.g. COLORS.primary)
+  // prefix lines with ESC sequences which break | detection regexes.
+  const strippedLines = lines.map(l => ansiStrip(l));
   const result: string[] = [];
   let i = 0;
   let tableCount = 0;
 
   while (i < lines.length) {
-    const table = detectAndParseTable(lines, i);
+    const table = detectAndParseTable(strippedLines, i);
     if (table) {
       result.push(renderTable(table));
       i += 2 + table.rows.length; // header + separator + data rows
