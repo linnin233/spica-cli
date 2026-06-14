@@ -201,6 +201,29 @@ export class ScreenManager {
     // 保存清洗后文本到历史缓冲区（strip ANSI for resize replay）
     this.state.scrollbackBuffer.append(ansiClean(text));
 
+    // 检测是否为 markdown 表格行 — 需要跨多次 appendScroll 调用积累
+    // 因为 renderMarkdownTables 要求 header+separator+data 同时存在
+    // 表格行格式: | col1 | col2 | 或带前缀的: [#N] │ | col1 | col2 |
+    const stripped = ansiStrip(text); // strip ANSI for pattern matching
+    const lines = stripped.split('\n');
+    const nonEmptyLines = lines.filter(l => l.trim() !== '');
+    const isTableRow = (l: string): boolean => {
+      const t = l.trim();
+      return /^\|.+\|$/.test(t) || /\│\s*\|/.test(t);
+    };
+    const isTableLike =
+      nonEmptyLines.length > 0 &&
+      nonEmptyLines.every(isTableRow);
+
+    if (isTableLike && this.appendScrollTableBuffer.length < 40) {
+      // Accumulate table lines for later batch rendering
+      this.appendScrollTableBuffer.push(text);
+      return;
+    }
+
+    // Flush any pending table buffer first
+    this.flushAppendScrollTableBuffer();
+
     // 渲染 markdown 表格为 ANSI 对齐列
     const displayText = renderMarkdownTables(text);
 
@@ -218,10 +241,45 @@ export class ScreenManager {
     }
   }
 
+  /** Flush accumulated table lines through renderMarkdownTables */
+  private flushAppendScrollTableBuffer(): void {
+    if (this.appendScrollTableBuffer.length === 0) return;
+    const buffered = this.appendScrollTableBuffer.join('');
+    this.appendScrollTableBuffer = [];
+
+    // Strip ANSI codes and sub-agent prefixes (e.g., "  [#3 explore] │ ") to get
+    // clean markdown table format that renderMarkdownTables can parse
+    const stripped = ansiStrip(buffered);
+    const cleaned = stripped.split('\n').map(l => {
+      const pipeIdx = l.indexOf('│');
+      if (pipeIdx >= 0) return l.slice(pipeIdx + 1);
+      return l;
+    }).join('\n');
+
+    const displayText = renderMarkdownTables(cleaned);
+    if (displayText.trim()) {
+      if (!this.state.cursorInScrollArea) {
+        writeStdout(`${ESC}[?25l`);
+        writeStdout(`${ESC}[${this.state.scrollBottom};1H`);
+        this.state.cursorInScrollArea = true;
+      }
+      writeStdout(displayText);
+    }
+  }
+
+  /** Flush pending appendScroll table buffer (call when streaming/processing ends) */
+  flushTableScrollBuffer(): void {
+    this.flushAppendScrollTableBuffer();
+  }
+
   // 行缓冲输出（用于AI流式输出）
   private streamBuffer: string = '';
   // 表格行缓冲 — 延迟输出表格行直到表格完整，以便 ANSI 对齐渲染
   private tableLineBuffer: string[] = [];
+  // appendScroll 表格缓冲 — 跨 appendScroll 调用的表格行积累
+  // renderMarkdownTables 需要 header+separator+data 三行同时存在才能检测表格，
+  // 但流式输出时这些行可能分多次 appendScroll 到达，需要积累后一次渲染。
+  private appendScrollTableBuffer: string[] = [];
 
   appendStreamChunk(text: string): void {
     // 保存清洗后文本到历史缓冲区（strip ANSI for resize replay）
@@ -303,6 +361,7 @@ export class ScreenManager {
   flushStreamBuffer(): void {
     // 先刷新待处理的表格缓冲
     this.flushTableBuffer();
+    this.flushAppendScrollTableBuffer();
 
     if (this.streamBuffer) {
       if (!this.state.cursorInScrollArea) {
@@ -318,6 +377,7 @@ export class ScreenManager {
 
   // 强制刷新（用于工具调用结束等）
   flushOutput(): void {
+    this.flushAppendScrollTableBuffer();
     this.refreshInputDuringStreaming();
   }
 
