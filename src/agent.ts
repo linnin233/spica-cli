@@ -300,12 +300,14 @@ export class SpicaAgent extends EventEmitter {
   private _stagnationCounter: number = 0;
   private static readonly STAGNATION_WARNING = 8;
   private static readonly STAGNATION_LIMIT = 16;
-  // Text-only responses are LLM observations, NOT completion signals.
-  // The LLM drives the loop — it will either call tools (continue work)
-  // or produce text. We never break on text-only; stagnation detection
-  // (16 rounds no progress) is the safety net.
-  // Other coding agents (Claude Code, Aider) don't guess completion either —
-  // the model itself decides when to stop via tool calls or explicit markers.
+  // Text-only handling — one free reflection after tool execution (Aider pattern).
+  // DeepSeek interleaves text observations ("I can see...") with tool calls.
+  // A single text-only response is an observation, not communication with user.
+  // Second consecutive text-only → LLM is talking to user → exit loop.
+  // Tool calls reset the counter. This prevents both premature stops AND
+  // infinite text-only loops (the self-talking problem).
+  private _consecutiveTextOnly: number = 0;
+  private static readonly MAX_CONSECUTIVE_TEXT_ONLY = 2;
   // Periodic session save: persist every N tool rounds for crash resilience
   private _roundCount: number = 0;
   private static readonly SAVE_EVERY_N_ROUNDS = 5;
@@ -1045,10 +1047,13 @@ export class SpicaAgent extends EventEmitter {
       let criticalErrorDetected: { tool: string; error: string; suggestion: string } | null = null;
       let queueInjectedThisIteration = false; // 防止同一迭代内重复注入队列
 
-      // 循环仅由中断和停滞检测控制退出。
-      // response.finished 是"本轮生成完成"（turn-level），不是"任务完成"（task-level）。
-      // LLM 返回纯文本 ≠ 任务结束 — 它只是在观察/交流，可能还要继续调工具。
-      // 其他 coding agent（Claude Code, Aider）也不用 stop_reason 判断任务完成。
+      // 循环退出条件（参考 Aider/Claude Code 的 stop_reason 机制）：
+      //   1. LLM 调 tool → 继续工作（tool call = 工作中）
+      //   2. LLM 纯文本 ×1 → 一次免费反射（DeepSeek 的"观察"模式）
+      //   3. LLM 纯文本 ×2 → 在跟用户交流 → 退出循环
+      //   4. 中断/停滞/错误 → 退出
+      // 关键：response.finished 是 turn-level，不是 task-level。
+      // 不注入假消息，不猜完成。LLM 通过"调不调 tool"表达意图。
       while (!signal.aborted) {
         queueInjectedThisIteration = false; // 每次迭代重置
 
@@ -1067,12 +1072,17 @@ export class SpicaAgent extends EventEmitter {
 
         if (!response.toolCalls || response.toolCalls.length === 0) {
           if (response.content) {
-            // 纯文本 ≠ 任务结束。LLM 只是说了句话（内容已通过 chunk 事件流式展示）。
-            // 不注入任何假消息 — 直接给 LLM 下一轮，让它基于完整历史自己决定：
-            // 调工具继续工作，或再说一句话交流。
-            // 停滞检测是唯一的安全网。
-            // 行为对齐其他 coding agent（Claude Code, Aider）：
-            //   不猜完成，LLM 自己驱动循环。
+            // One free reflection after tool execution (Aider/Claude Code pattern).
+            // DeepSeek interleaves text observations with tool calls: after a
+            // tool result, it often says "I can see..." before calling next tool.
+            // We give ONE free text pass — if the next response is a tool call,
+            // the LLM was still working. If it's text again, the LLM is talking
+            // to the user → exit loop and show the message.
+            this._consecutiveTextOnly++;
+            if (this._consecutiveTextOnly >= SpicaAgent.MAX_CONSECUTIVE_TEXT_ONLY) {
+              // LLM is done communicating. Exit loop, content shown via message event below.
+              break;
+            }
             this.emit('waiting_for_llm');
             try {
               response = await this.callLLMWithRetry(
@@ -1168,6 +1178,8 @@ export class SpicaAgent extends EventEmitter {
         }
 
         if (response.toolCalls && response.toolCalls.length > 0) {
+          // Tool call resets the text-only counter — LLM is still working.
+          this._consecutiveTextOnly = 0;
           // Batch by hint: reads first (fully parallel), writes second (with conflict detection), neutrals last
           const readCalls = response.toolCalls.filter(
             (tc: { name: string }) => getToolBatchHint(resolveAlias(tc.name)) === 'read'
