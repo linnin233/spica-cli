@@ -134,8 +134,13 @@ export function createInputHandler(onSubmit: (text: string) => void, onInterrupt
   const handlePaste = (text: string) => {
     // 规范化换行符
     const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-    // 直接提交，不进入 buffer
-    onSubmit(normalized);
+    // Insert into buffer instead of immediate submit — lets user review/edit
+    // before pressing Enter. Multi-line content is preserved with \n chars.
+    const before = [...state.buffer].slice(0, state.cursorPos).join('');
+    const after = [...state.buffer].slice(state.cursorPos).join('');
+    state.buffer = before + normalized + after;
+    state.cursorPos += [...normalized].length;
+    render();
   };
 
   // 处理单个按键
@@ -187,10 +192,11 @@ export function createInputHandler(onSubmit: (text: string) => void, onInterrupt
 
     // 普通字符 - 插入
     if (str.length > 0 && !str.startsWith(ESC)) {
+      const graphemes = [...str]; // grapheme clusters for correct cursor advance
       const chars = [...state.buffer];
-      chars.splice(state.cursorPos, 0, str);
+      chars.splice(state.cursorPos, 0, ...graphemes);
       state.buffer = chars.join('');
-      state.cursorPos += str.length;
+      state.cursorPos += graphemes.length;
       render();
     }
   };

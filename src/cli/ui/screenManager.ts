@@ -575,7 +575,11 @@ export class ScreenManager {
           content +
           lineGraphemes.slice(this.state.cursorCol).join('');
         this.state.cursorCol += graphemes.length;
-        // 用户输入刷新，光标留在输入框
+        // Multi-line paste may expand input box — recalculate layout.
+        // Use updateLayout() to re-measure input lines before rendering.
+        if (content.includes('\n')) {
+          this.updateLayout();
+        }
         this.refreshInputForUserTyping();
         return false;
       }

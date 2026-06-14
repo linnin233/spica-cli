@@ -29,7 +29,7 @@ spica-cli is an AI coding agent CLI with interactive and single-task modes. It s
 - `src/utils/` — Settings, project config, session, history, platform, message cleaner, logger, bell
 - `src/builtin-skills/superpowers/` — 14 built-in skills
 
-**Stats:** 81 source files, 67 test files (160 git tracked `.ts` files)
+**Stats:** 99 source files, 68 test files (168 git tracked `.ts` files)
 
 ## Existing Instruction Files
 
@@ -85,8 +85,8 @@ CI (ubuntu) typically passes all tests, but session and boundary tests may fail 
 ## Lint
 
 ```bash
-npm run lint         # Run ESLint on src/**/*.ts (0 errors, 166 warnings)
-npm run lint:fix     # Auto-fix lint issues (~3 warnings fixable)
+npm run lint         # Run ESLint on src/**/*.ts (0 errors, 102 warnings)
+npm run lint:fix     # Auto-fix lint issues (0 auto-fixable warnings)
 npm run lint:strict  # Fail on warnings (--max-warnings 0, not used in CI)
 ```
 
@@ -108,6 +108,8 @@ CI only runs lint on Node >= 20.
 npx prettier --write <file>   # Format file with prettier
 npx prettier --check <file>   # Check formatting only
 ```
+
+**Pre-commit:** Run `npx prettier --check <file>` to verify formatting before committing. There is no prettier check in CI.
 
 **Config (`.prettierrc`):**
 - `singleQuote: true`, `semi: true`
@@ -151,7 +153,7 @@ Key entries: `.spica/`, `node_modules/`, `dist/`, `*.log`, `.DS_Store`, `.env`, 
 **CI checks (in order):** `npm ci` → `npx tsc --noEmit` → `npm run lint` (Node >= 20 only) → `npm run test:run` (CI=true, SKIP_API_TESTS=true) → `npm run build`
 **CI workflow files:**
 - `.github/workflows/ci.yml` — Primary: matrix (Node 18/20/22 on ubuntu-latest, windows-latest)
-- `.github/workflows/test.yml` — Legacy: simpler ubuntu-only on Node 18/20
+- `.github/workflows/test.yml` — Legacy: ubuntu-only Node 18/20, runs `npm run build` (typecheck proxy) → `npm run test:run` → `npm run lint` (continue-on-error, non-blocking)
 
 ## Commands Architecture
 
