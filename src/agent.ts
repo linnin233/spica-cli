@@ -1169,6 +1169,8 @@ export class SpicaAgent extends EventEmitter {
         }
 
         if (response.toolCalls && response.toolCalls.length > 0) {
+          // LLM is working — clear any context-restore flag.
+          this._contextJustRestored = false;
           // Batch by hint: reads first (fully parallel), writes second (with conflict detection), neutrals last
           const readCalls = response.toolCalls.filter(
             (tc: { name: string }) => getToolBatchHint(resolveAlias(tc.name)) === 'read'
