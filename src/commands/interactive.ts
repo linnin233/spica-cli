@@ -235,7 +235,7 @@ export async function runInteractiveMode(
             tuiHandler!.end();
             screen.end();  // 先结束TUI，恢复终端
             const messages = agent.getMessages();
-            saveSession(agent.getWorkspacePath(), messages);
+            saveSession(agent.getWorkspacePath(), messages, undefined, agent.getProgressSnapshot());
             await shutdownMCP();
             state.setAgent(null);
             // 使用console.log而不是appendScroll
@@ -918,7 +918,7 @@ If AGENTS.md already exists, preserve valuable content and supplement updates.`;
                 isProcessing = false;
                 state.setProcessing(false);
                 updateStatusBar();
-                saveSession(agent.getWorkspacePath(), agent.getMessages());
+                saveSession(agent.getWorkspacePath(), agent.getMessages(), undefined, agent.getProgressSnapshot());
 
                 // Auto-drain queued inputs
                 await autoDrainQueue(getInputQueue(), async (merged) => {

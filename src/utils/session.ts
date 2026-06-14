@@ -25,6 +25,7 @@ export interface SessionState {
   name: string;
   createdAt: string;
   summary?: string; // 归档时的摘要
+  progress?: { entries: Array<{ type: string; description: string; at: string }>; maxEntries: number };
 }
 
 // Generate unique session ID
@@ -57,7 +58,8 @@ export function loadSession(workspacePath: string): SessionState | null {
 export function saveSession(
   workspacePath: string,
   messages: ChatMessage[],
-  sessionName?: string
+  sessionName?: string,
+  progress?: SessionState['progress'],
 ): void {
   const spicaDir = join(workspacePath, '.spica');
 
@@ -77,6 +79,7 @@ export function saveSession(
       id: existingSession?.id || generateSessionId(),
       name: sessionName || existingSession?.name || `Session ${new Date().toLocaleDateString()}`,
       createdAt: existingSession?.createdAt || new Date().toISOString(),
+      progress: progress || existingSession?.progress,
     };
 
     fs.writeJsonSync(join(spicaDir, 'session.json'), session, { spaces: 2 });

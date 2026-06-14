@@ -15,6 +15,7 @@ import {
 } from './storage/projectState';
 import { runPreHooks, runPostHooks } from './hooks';
 import { isCorrection, saveLearning } from './core/learnings';
+import { saveSession } from './utils/session';
 import {
   createCheckpoint,
   listCheckpoints,
@@ -248,6 +249,18 @@ export class SpicaAgent extends EventEmitter {
   getCachedSkills(): SkillDefinition[] { return this._cachedSkills; }
   setCachedSkills(skills: SkillDefinition[]): void { this._cachedSkills = skills; }
 
+  /** Progress snapshot for session persistence. */
+  getProgressSnapshot(): { entries: Array<{ type: string; description: string; at: string }>; maxEntries: number } {
+    return this._progress.toJSON();
+  }
+
+  /** Restore progress from session data. */
+  restoreProgress(snapshot: { entries: Array<{ type: string; description: string; at: string }>; maxEntries: number }): void {
+    if (snapshot.entries && snapshot.entries.length > 0) {
+      this._progress = ProgressTracker.fromJSON(snapshot as any);
+    }
+  }
+
   private workspacePath: string;
   private projectConfig: ProjectConfig = {};
   private _todos: Todo[] = [];
@@ -287,6 +300,9 @@ export class SpicaAgent extends EventEmitter {
   private _stagnationCounter: number = 0;
   private static readonly STAGNATION_WARNING = 8;
   private static readonly STAGNATION_LIMIT = 16;
+  // Periodic session save: persist every N tool rounds for crash resilience
+  private _roundCount: number = 0;
+  private static readonly SAVE_EVERY_N_ROUNDS = 5;
   // Unified state machine — replaces scattered _initialized/_compacting/pendingCancel
   private _stateMachine: AgentStateMachine = new AgentStateMachine();
   // Idle compression timer: triggers compression after inactivity when
@@ -345,15 +361,31 @@ export class SpicaAgent extends EventEmitter {
   private reasoningReceived: boolean = false;
 
   /**
-   * Dispose internal resources — removes LLM event listeners and clears references.
+   * Dispose internal resources — clears all listeners, timers, and references.
    * Call this when a sub-agent is no longer needed to prevent listener leaks.
    */
   dispose(): void {
+    // Clear idle compression timer
+    if (this._idleCompressTimer) {
+      clearTimeout(this._idleCompressTimer);
+      this._idleCompressTimer = null;
+    }
+    // Abort any active request
+    if (this.currentAbortController) {
+      this.currentAbortController.abort();
+      this.currentAbortController = null;
+    }
+    // Clear LLM and its listeners
     if (this.llm) {
       this.llm.removeAllListeners();
       this.llm = null;
     }
+    // Remove all agent event listeners
     this.removeAllListeners();
+    // Clear progress tracker
+    this._progress.clear();
+    // Reset state machine
+    this._stateMachine.reset();
   }
 
   constructor(providerName?: string, workspacePath?: string) {
@@ -1178,6 +1210,9 @@ export class SpicaAgent extends EventEmitter {
                   return { name: resolvedName, id: tc.id, result: `Tool interrupted`, isCritical: true };
                 }
 
+                // Record non-interrupt errors in ProgressTracker
+                this._progress.recordError(`${resolvedName}: ${(result.error || '').slice(0, 100)}`);
+
                 if (this.isCriticalToolError(resolvedName, result)) {
                   const suggestion = this.generateErrorSuggestion(
                     resolvedName,
@@ -1203,6 +1238,20 @@ export class SpicaAgent extends EventEmitter {
                   error: result.error || 'Unknown error',
                   suggestion: this.generateErrorSuggestion(resolvedName, result.error || '', tcArgs),
                 });
+              }
+
+              // Record milestones: test pass, build success, git commit
+              if (result.success) {
+                if (resolvedName === 'bash') {
+                  const cmd = String(tcArgs.command || tcArgs.cmd || '');
+                  if (/\b(test|vitest|jest|mocha|pytest|cargo test|go test)\b/.test(cmd)) {
+                    this._progress.recordMilestone('Tests passed');
+                  } else if (/\b(npm run build|tsc|make|cmake|cargo build|go build)\b/.test(cmd)) {
+                    this._progress.recordMilestone('Build succeeded');
+                  }
+                } else if (resolvedName === 'git' && tcArgs.action === 'commit' && tcArgs.message) {
+                  this._progress.recordMilestone(`Committed: ${String(tcArgs.message).slice(0, 80)}`);
+                }
               }
 
               if (
@@ -1295,17 +1344,40 @@ export class SpicaAgent extends EventEmitter {
 
           allToolResults.push(...toolResults);
 
-          // Progress tracking: detect file changes this round.
-          // Only check canonical names — executeTool resolves aliases before
-          // populating toolResults, so "file_write"/"file_edit" never appear.
+          // Progress tracking: detect meaningful agent actions this round.
+          // Broadens beyond file I/O — git commits, test runs, and package
+          // installs are also progress. Only toolResults carry resolved names.
           const fileChangeCanonical = new Set([
             "write", "edit", "file_multi_edit", "file_delete",
           ]);
-          const hadProgress = toolResults.some(t =>
-            fileChangeCanonical.has(t.name) &&
-            !t.result.includes("interrupted") &&
-            !t.result.includes("blocked")
-          );
+
+          /** Check if a bash command represents real work (not just file ops). */
+          const isWorkCommand = (cmd: string): boolean => {
+            return /\b(test|vitest|jest|mocha|pytest|cargo test|go test|npm test|npm run build|npm install|pip install|cargo build|go build|tsc|make|cmake|git commit|git push)\b/.test(cmd);
+          };
+
+          /** Check whether a single tool result signals real progress. */
+          const isProgressResult = (
+            t: { name: string; id: string; result: string },
+            toolCalls: Array<{ name: string; id: string; arguments: Record<string, unknown> }>
+          ): boolean => {
+            if (t.result.includes("interrupted") || t.result.includes("blocked")) return false;
+            // File mutation
+            if (fileChangeCanonical.has(t.name)) return true;
+            // Git operations (commit, branch create, etc.)
+            if (t.name === "git") return true;
+            // Bash: check the original command, not the output
+            if (t.name === "bash") {
+              const tc = toolCalls.find(c => c.id === t.id);
+              const cmd = String(tc?.arguments?.command || tc?.arguments?.cmd || '');
+              return isWorkCommand(cmd);
+            }
+            // Web: successful fetch is research progress
+            if (t.name === "web_fetch" && t.result.includes("success")) return true;
+            return false;
+          };
+
+          const hadProgress = toolResults.some(t => isProgressResult(t, response.toolCalls!));
 
           // Record progress in ProgressTracker (survives compression).
           // Uses the original toolCalls (which still carry arguments) to
@@ -1342,6 +1414,21 @@ export class SpicaAgent extends EventEmitter {
             this.emit("stagnation_limit", { rounds: SpicaAgent.STAGNATION_LIMIT });
             return "[STAGNATION] No progress after " + SpicaAgent.STAGNATION_LIMIT +
               " rounds. The agent may be stuck in a loop. Please provide new instructions.";
+          }
+
+          // Periodic session save: persist every N tool rounds for crash resilience
+          this._roundCount++;
+          if (this._roundCount % SpicaAgent.SAVE_EVERY_N_ROUNDS === 0) {
+            try {
+              saveSession(
+                this.workspacePath,
+                this._fullHistory,
+                undefined,
+                this._progress.toJSON(),
+              );
+            } catch {
+              // Best-effort — don't crash on save failure
+            }
           }
 
           // 中断检查：如果被中断，先保存tool results到历史，再停止
@@ -1542,6 +1629,7 @@ export class SpicaAgent extends EventEmitter {
     this._todos = [];
     this._initialized = false;
     this._initPromise = null;
+    this._stateMachine.reset(); // sync with _initialized=false
 
     // 清空LLM消息历史
     if (this.llm) {
@@ -1550,6 +1638,7 @@ export class SpicaAgent extends EventEmitter {
     this._fullHistory = [];
     this._lastSyncedProviderIndex = -1;
     this._usedTools = new Set();
+    this._progress.clear(); // clear progress from old project
 
     // 发送workspace变更事件
     this.emit('workspace_changed', { path: newPath });

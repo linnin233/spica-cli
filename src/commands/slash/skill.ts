@@ -128,7 +128,7 @@ export const skillInvokeHandler: SlashHandler = async (args, ctx) => {
   ctx.setProcessing(false);
   ctx.state.setProcessing(false);
   ctx.updateStatusBar();
-  saveSession(ctx.agent.getWorkspacePath(), ctx.agent.getMessages());
+  saveSession(ctx.agent.getWorkspacePath(), ctx.agent.getMessages(), undefined, ctx.agent.getProgressSnapshot());
 
   await autoDrainQueue(getInputQueue(), async merged => {
     await ctx.handleInput(merged);

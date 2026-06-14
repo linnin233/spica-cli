@@ -159,7 +159,7 @@ export async function runSimpleMode(agent: SpicaAgent, fresh?: boolean): Promise
 
     rl.on('close', () => {
       console.log(COLORS.muted('\n[EXIT] Goodbye!'));
-      saveSession(agent.getWorkspacePath(), agent.getMessages());
+      saveSession(agent.getWorkspacePath(), agent.getMessages(), undefined, agent.getProgressSnapshot());
       process.exit(0);
     });
   } catch (error: unknown) {

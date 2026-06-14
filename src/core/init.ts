@@ -175,6 +175,11 @@ export async function doInit(agent: SpicaAgent): Promise<void> {
     agent.setLastSyncedProviderIndex(newLlm.getMessages().length - 1);
   }
 
+  // Restore ProgressTracker from session (survives restarts)
+  if (session?.progress?.entries?.length) {
+    agent.restoreProgress(session.progress as any);
+  }
+
   const projectState = loadProjectState(workspacePath);
   if (projectState) {
     agent.setTodosInternal(projectState.todos);

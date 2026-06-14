@@ -92,11 +92,23 @@ export async function startNonBlockingCompression(
     // Allocate keep slots: prefix messages are free (always kept)
     const slotsForCompressible = Math.max(0, keepCount - prefixNonSystem.length);
 
+    // Build toolCallId → toolName map for accurate tool message scoring.
+    // Avoids fragile content-based string matching (e.g., file contents
+    // containing '"name":"write"' would be mis-scored).
+    const toolIdToName = new Map<string, string>();
+    for (const m of nonSystem) {
+      if (m.role === 'assistant' && m.toolCalls) {
+        for (const tc of m.toolCalls) {
+          if (tc.id) toolIdToName.set(tc.id, tc.name);
+        }
+      }
+    }
+
     // Score compressible messages by importance — keep high-value context
     // (file writes, user intent) even if they're not in the recent tail
     const scored = compressible.map((m, i) => ({
       msg: m,
-      score: scoreMessage(m, i, compressible.length),
+      score: scoreMessage(m, i, compressible.length, toolIdToName),
     }));
     const lastCount = Math.max(2, Math.ceil(slotsForCompressible / 3)); // always keep recent tail
     const tail = scored.slice(-lastCount);
@@ -251,18 +263,14 @@ export async function startNonBlockingCompression(
         })());
       }
 
-      agent.stateMachine.transition(prevState);
-      agent.setCompacting(false);
-      return;
+      return; // cleanup handled by finally block
     }
 
     // Light drop: summary runs in background for next request.
     // Guard: if a previous Phase 2 is still running, skip — don't orphan
     // its promise (which would discard its result when overwritten).
     if (agent.getPendingCompression()) {
-      agent.stateMachine.transition(prevState);
-      agent.setCompacting(false);
-      return;
+      return; // cleanup handled by finally block
     }
 
     agent.setPendingCompression((async () => {
@@ -301,21 +309,21 @@ export function applyPendingSummary(agent: SpicaAgent): void {
   const llm: LLMClient | null = agent.getLLM();
   if (!llm) return;
 
-  // Atomically read and clear both fields to prevent race with
-  // background Phase 2 completion between check and use.
-  const deferredSummary: ChatMessage | null = agent.getDeferredSummary();
   const pendingCompression = agent.getPendingCompression();
-  agent.setDeferredSummary(null);
 
+  // If Phase 2 is still running, don't touch deferredSummary — the
+  // background promise will write to it when done. We'll pick it up
+  // on the next request.
+  if (pendingCompression) return;
+
+  // Phase 2 is done — atomically swap: read then clear.
+  // No race because setPendingCompression(null) happens BEFORE
+  // setDeferredSummary(result) in the background promise (see
+  // lines 250-251, 285-286), so once pendingCompression is null,
+  // deferredSummary is stable.
+  const deferredSummary: ChatMessage | null = agent.getDeferredSummary();
   if (!deferredSummary) return;
-
-  // Wait for in-flight compression if still running
-  if (pendingCompression) {
-    // Still in progress — restore for next request.
-    // Don't block the current request.
-    agent.setDeferredSummary(deferredSummary);
-    return;
-  }
+  agent.setDeferredSummary(null);
 
   const messages = llm.getMessages();
 
@@ -394,7 +402,12 @@ export function cleanToolMessages(messages: ChatMessage[]): ChatMessage[] {
  * - content signal: +0.5 for messages >200 chars (information-rich)
  * - noise penalty:  -1.0 for tool results <20 chars (usually just "OK" or empty)
  */
-export function scoreMessage(msg: ChatMessage, index: number, total: number): number {
+export function scoreMessage(
+  msg: ChatMessage,
+  index: number,
+  total: number,
+  toolIdToName?: Map<string, string>,
+): number {
   const content = msg.content || '';
   const recencyWeight = index > total * 0.75 ? 1.0 : 0;
 
@@ -411,19 +424,21 @@ export function scoreMessage(msg: ChatMessage, index: number, total: number): nu
   if (msg.role === 'tool') {
     let score = 1; // default: low-value read result
 
-    // Write/edit/git operations — evidence of permanent changes
-    if (
-      content.includes('"name":"write"') ||
-      content.includes('"name":"edit"') ||
-      content.includes('"name":"file_multi_edit"') ||
-      content.includes('file_delete') ||
-      content.includes('file_move') ||
-      content.includes('git add') ||
-      content.includes('git commit') ||
-      content.includes('bash')
-    ) {
-      score = 4;
-    } else if (content.length < 20) {
+    // Use the tool name map (derived from matching assistant toolCalls) for
+    // accurate scoring. Content-based matching (e.g. includes('"name":"write"'))
+    // can false-match file contents, grep output, or bash stdout.
+    const toolName = toolIdToName?.get(msg.toolCallId || '') || '';
+    if (toolName) {
+      const hiValueTools = new Set([
+        'write', 'edit', 'file_multi_edit', 'file_delete',
+        'file_move', 'file_copy', 'bash', 'git',
+      ]);
+      if (hiValueTools.has(toolName)) {
+        score = 4;
+      }
+    }
+
+    if (score === 1 && content.length < 20) {
       // Near-empty read results are noise (e.g., "OK", empty string)
       score = 0;
     }
