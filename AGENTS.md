@@ -73,7 +73,7 @@ npm run test:run -- --coverage    # Run with coverage (requires @vitest/coverage
 
 **Known flaky tests:**
 - `src/cli/ui/__tests__/tuiPty.test.ts` — PTY tests (14 tests): `node-pty` Windows agent unavailable for `npx tsx` (Windows only)
-- `src/tools/__tests__/monitor.test.ts` — Monitor tests (14 tests): process management timing on Windows (Windows only)
+- `src/tools/__tests__/monitor.test.ts` — Monitor tests (15 tests): process management timing on Windows (Windows only)
 - `src/__tests__/security/resolvePath.test.ts` — Symlink tests (6 tests): Windows symlink permissions (Windows only)
 - `src/__tests__/fullFeature.test.ts` — TUI tests (4 tests): Chinese input encoding on Windows (Windows only)
 - `src/tools/__tests__/toolsCore.test.ts` — occasional syntax check timeout (cross-platform)
@@ -85,7 +85,7 @@ CI (ubuntu) typically passes all tests, but session and boundary tests may fail 
 ## Lint
 
 ```bash
-npm run lint         # Run ESLint on src/**/*.ts (0 errors, ~99 warnings)
+npm run lint         # Run ESLint on src/**/*.ts (0 errors, 166 warnings)
 npm run lint:fix     # Auto-fix lint issues (~3 warnings fixable)
 npm run lint:strict  # Fail on warnings (--max-warnings 0, not used in CI)
 ```

@@ -1,38 +1,20 @@
 import { LLMClient } from './llm/LLMClient';
 import {
   executeTool,
-  getAllToolDefinitions,
   getActiveToolDefinitions,
   isLazyTool,
   setWorkspace,
   getToolBatchHint,
 } from './tools/index';
-import { initMCP } from './mcp/client';
-import { initSkills, listSkills } from './skills/index';
-import { getProviderConfig } from './utils/settings';
-import {
-  getSystemPrompt,
-  getSystemPromptStable,
-  getSystemPromptVariable,
-} from './prompts/system';
-import {
-  loadProjectConfig as loadAgentsConfig,
-  autoDetectProject,
-  createAgentsMd,
-  type ProjectConfig,
-} from './utils/projectConfig';
-import { SkillDefinition } from './utils/settings';
-import { cleanMessages } from './utils/messageCleaner';
+import { type SkillDefinition } from './utils/settings';
+import { type ProjectConfig } from './utils/projectConfig';
 import {
   loadProjectState,
   saveProjectState,
   updateProjectTodos,
-  ensureProjectDir,
 } from './storage/projectState';
-import { loadSession } from './utils/session';
 import { runPreHooks, runPostHooks } from './hooks';
-import { classifyIntent } from './cli/skillGate';
-import { isCorrection, saveLearning, type FailureRecord } from './core/learnings';
+import { isCorrection, saveLearning } from './core/learnings';
 import {
   createCheckpoint,
   listCheckpoints,
@@ -51,7 +33,7 @@ import {
   generateSummary as _generateSummary,
 } from './core/compression';
 import { ProgressTracker } from './core/progressTracker';
-import { AgentStateMachine, type AgentState } from './core/AgentState';
+import { AgentStateMachine } from './core/AgentState';
 import { recordToolUsage } from './tools/analytics';
 import {
   initAgent,
@@ -301,6 +283,10 @@ export class SpicaAgent extends EventEmitter {
   private _usedTools: Set<string> = new Set();
   // Progress tracker: survives compression, records completed work
   private _progress: ProgressTracker = new ProgressTracker();
+  // Stagnation detection: replaces 50-round hard cap
+  private _stagnationCounter: number = 0;
+  private static readonly STAGNATION_WARNING = 8;
+  private static readonly STAGNATION_LIMIT = 16;
   // Unified state machine — replaces scattered _initialized/_compacting/pendingCancel
   private _stateMachine: AgentStateMachine = new AgentStateMachine();
   // Idle compression timer: triggers compression after inactivity when
@@ -512,6 +498,22 @@ export class SpicaAgent extends EventEmitter {
     } catch {
       return { files: [] };
     }
+  }
+
+  // 停滞检测：替代 50 轮硬上限
+  private checkStagnation(hadProgress: boolean): 'continue' | 'warn' | 'stop' {
+    if (hadProgress) {
+      this._stagnationCounter = 0;
+      return 'continue';
+    }
+    this._stagnationCounter++;
+    if (this._stagnationCounter === SpicaAgent.STAGNATION_WARNING) {
+      return 'warn';
+    }
+    if (this._stagnationCounter >= SpicaAgent.STAGNATION_LIMIT) {
+      return 'stop';
+    }
+    return 'continue';
   }
 
   // 判断错误是否可重试
@@ -836,14 +838,13 @@ export class SpicaAgent extends EventEmitter {
    * 3. Compress context if needed
    * 4. Generate LLM response
    * 5. Execute tools (parallel or sequential based on conflicts)
-   * 6. Continue until finished or max iterations
+   * 6. Continue until finished or stagnation detected
    *
    * @param prompt - User input/prompt
-   * @param maxIterations - Maximum loop iterations (default: 50)
    * @returns Final response string
    * @throws InterruptError if interrupted by user
    */
-  async runLoop(prompt: string, maxIterations = 50): Promise<string> {
+  async runLoop(prompt: string): Promise<string> {
     // State transition: idle → processing (or interrupted → processing)
     this._stateMachine.transition('processing');
 
@@ -945,20 +946,16 @@ export class SpicaAgent extends EventEmitter {
 
       this.emit('message', { role: 'user', content: prompt });
 
-      // Skill gate: classify user intent and nudge LLM toward relevant skill
-      const suggestedSkill = classifyIntent(prompt);
-      if (suggestedSkill) {
-        this.emit('skill_suggested', { skill: suggestedSkill, prompt: prompt.slice(0, 100) });
-        this.agentAddMessage({
-          role: 'system',
-          content: `[SKILL HINT] The skill "${suggestedSkill}" may be relevant to this task. Use the skill tool to load full instructions: skill(name="${suggestedSkill}")`,
-        });
-      }
-
       // Auto-learning: detect user corrections and persist them
       if (isCorrection(prompt)) {
         saveLearning(this.workspacePath, prompt).catch(() => {});
         this.emit('learning_detected', { source: 'correction', text: prompt.slice(0, 100) });
+      }
+
+      // Inject progress context from ProgressTracker (survives compression)
+      const progressBlock = this._progress.toContextBlock();
+      if (progressBlock) {
+        this.agentAddMessage({ role: "system" as const, content: progressBlock });
       }
 
       const toolDefinitions = getActiveToolDefinitions(this._usedTools);
@@ -997,14 +994,13 @@ export class SpicaAgent extends EventEmitter {
         return 'LLM returned exception, please retry';
       }
 
-      let iterations = 0;
+      this._stagnationCounter = 0;
 
       const allToolResults: Array<{ name: string; id: string; result: string }> = [];
       let criticalErrorDetected: { tool: string; error: string; suggestion: string } | null = null;
       let queueInjectedThisIteration = false; // 防止同一迭代内重复注入队列
 
-      while (!response.finished && iterations < maxIterations && !signal.aborted) {
-        iterations++;
+      while (!response.finished && !signal.aborted) {
         queueInjectedThisIteration = false; // 每次迭代重置
 
         if (signal.aborted) {
@@ -1056,12 +1052,11 @@ export class SpicaAgent extends EventEmitter {
 
           // 真正的空响应：既没有 content，也没有 reasoning，也没有 tool calls
           this.emit('empty_response_warning', {
-            iteration: iterations,
             message: 'LLM returned empty response, retrying...',
           });
 
           // 如果连续多次空响应，停止并报告问题
-          if (iterations >= maxIterations - 1) {
+          if (this._stagnationCounter >= SpicaAgent.STAGNATION_LIMIT) {
             this.emit('error_suggestion', {
               tool: 'llm_generate',
               error: 'Multiple empty responses from LLM',
@@ -1299,6 +1294,30 @@ export class SpicaAgent extends EventEmitter {
           }
 
           allToolResults.push(...toolResults);
+
+          // Progress tracking: detect file changes this round
+          const hadProgress = toolResults.some(t => {
+            const name = t.name;
+            return (name === "write" || name === "file_write" ||
+                    name === "edit" || name === "file_edit" || name === "file_multi_edit" ||
+                    name === "file_delete") &&
+                   !t.result.includes("interrupted") && !t.result.includes("blocked");
+          });
+
+          // Stagnation check: replace 50-round hard cap
+          const stagnationResult = this.checkStagnation(hadProgress);
+          if (stagnationResult === "warn") {
+            this.emit("stagnation_warning", { rounds: SpicaAgent.STAGNATION_WARNING });
+            this.agentAddMessage({
+              role: "system" as const,
+              content: "[STAGNATION WARNING] No file changes in " + SpicaAgent.STAGNATION_WARNING +
+                " rounds. If stuck, ask clarifying questions or report what's blocking you.",
+            });
+          } else if (stagnationResult === "stop") {
+            this.emit("stagnation_limit", { rounds: SpicaAgent.STAGNATION_LIMIT });
+            return "[STAGNATION] No progress after " + SpicaAgent.STAGNATION_LIMIT +
+              " rounds. The agent may be stuck in a loop. Please provide new instructions.";
+          }
 
           // 中断检查：如果被中断，先保存tool results到历史，再停止
           if (signal.aborted) {
