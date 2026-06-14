@@ -448,6 +448,9 @@ export class ScreenManager {
       writeStdout(`${ESC}[${this.state.scrollBottom};1H`);
       writeStdout(`${ESC}[2K`);
     }
+    // 重置光标状态——下次 writeStreamLine/appendScroll 会重新定位到行首
+    // 防止 thinking 帧残留混入后续输出（如 "⠏ thinking**content**"）
+    this.state.cursorInScrollArea = false;
   }
 
   refreshStatus(): void {

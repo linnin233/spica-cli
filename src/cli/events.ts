@@ -225,13 +225,11 @@ export function setupAgentEvents(
 
   // 追踪 reasoning 状态和 sub-agent streaming
   let reasoningStarted = false;
-  let justSwitchedFromReasoning = false;
   const subAgentStreamedChars = new Map<string, number>();
 
   // 每次新对话开始时重置状态
   on('waiting_for_llm', () => {
     reasoningStarted = false;
-    justSwitchedFromReasoning = false;
     resetToolTracking();
     subAgentState.clear();
     subAgentStreamBuffer.clear();
@@ -250,17 +248,17 @@ export function setupAgentEvents(
   });
 
   on('stream', (data: StreamData) => {
-    // 从 reasoning 切换到 stream 时，清除thinking动画并换行
-    if (reasoningStarted && !justSwitchedFromReasoning) {
-      justSwitchedFromReasoning = true;
-      screen.clearThinkingAnimation();
-      // 先刷新流式缓冲，再换行
-      screen.flushStreamBuffer();
-      screen.appendScroll('\n');
-    }
-
-    // 设置流式状态
+    // Always clear thinking animation on first stream chunk.
+    // DeepSeek may send content before reasoning in the same delta,
+    // causing the spinner to start while content is already flowing.
+    // This prevents "⠏ thinking**content**" in output.
     if (!state.isStreamingOutput()) {
+      screen.clearThinkingAnimation();
+      // If transitioning from reasoning, flush buffered reasoning lines
+      if (reasoningStarted) {
+        screen.flushStreamBuffer();
+        screen.appendScroll('\n');
+      }
       state.setStreamingOutput(true);
       screen.setStreaming(true);
     }
@@ -282,7 +280,6 @@ export function setupAgentEvents(
   on('reasoning', (data: ReasoningData) => {
     if (!reasoningStarted) {
       reasoningStarted = true;
-      justSwitchedFromReasoning = false;
       // compact模式：启动thinking动画
       if (!state.isVerboseMode()) {
         screen.startThinkingAnimation();
