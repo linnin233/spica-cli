@@ -300,14 +300,8 @@ export class SpicaAgent extends EventEmitter {
   private _stagnationCounter: number = 0;
   private static readonly STAGNATION_WARNING = 8;
   private static readonly STAGNATION_LIMIT = 16;
-  // Text-only handling — one free reflection after tool execution (Aider pattern).
-  // DeepSeek interleaves text observations ("I can see...") with tool calls.
-  // A single text-only response is an observation, not communication with user.
-  // Second consecutive text-only → LLM is talking to user → exit loop.
-  // Tool calls reset the counter. This prevents both premature stops AND
-  // infinite text-only loops (the self-talking problem).
-  private _consecutiveTextOnly: number = 0;
-  private static readonly MAX_CONSECUTIVE_TEXT_ONLY = 2;
+  // finish_reason="stop" = LLM's turn is over. Respect it.
+  // No reflection hacks, no heuristic counters.
   // Periodic session save: persist every N tool rounds for crash resilience
   private _roundCount: number = 0;
   private static readonly SAVE_EVERY_N_ROUNDS = 5;
@@ -1047,13 +1041,11 @@ export class SpicaAgent extends EventEmitter {
       let criticalErrorDetected: { tool: string; error: string; suggestion: string } | null = null;
       let queueInjectedThisIteration = false; // 防止同一迭代内重复注入队列
 
-      // 循环退出条件（参考 Aider/Claude Code 的 stop_reason 机制）：
-      //   1. LLM 调 tool → 继续工作（tool call = 工作中）
-      //   2. LLM 纯文本 ×1 → 一次免费反射（DeepSeek 的"观察"模式）
-      //   3. LLM 纯文本 ×2 → 在跟用户交流 → 退出循环
-      //   4. 中断/停滞/错误 → 退出
-      // 关键：response.finished 是 turn-level，不是 task-level。
-      // 不注入假消息，不猜完成。LLM 通过"调不调 tool"表达意图。
+      // 循环退出条件：
+      //   1. finish_reason="tool_calls" → 执行工具 → 继续
+      //   2. finish_reason="stop" + 内容 → LLM 说完了 → break，展示给用户
+      //   3. 中断/停滞/错误 → 退出
+      // 等价于 Anthropic stop_reason="end_turn" vs "tool_use"。
       while (!signal.aborted) {
         queueInjectedThisIteration = false; // 每次迭代重置
 
@@ -1072,40 +1064,10 @@ export class SpicaAgent extends EventEmitter {
 
         if (!response.toolCalls || response.toolCalls.length === 0) {
           if (response.content) {
-            // One free reflection after tool execution (Aider/Claude Code pattern).
-            // DeepSeek interleaves text observations with tool calls: after a
-            // tool result, it often says "I can see..." before calling next tool.
-            // We give ONE free text pass — if the next response is a tool call,
-            // the LLM was still working. If it's text again, the LLM is talking
-            // to the user → exit loop and show the message.
-            this._consecutiveTextOnly++;
-            if (this._consecutiveTextOnly >= SpicaAgent.MAX_CONSECUTIVE_TEXT_ONLY) {
-              // LLM is done communicating. Exit loop, content shown via message event below.
-              break;
-            }
-            this.emit('waiting_for_llm');
-            try {
-              response = await this.callLLMWithRetry(
-                sig => this.llm!.generateFromHistory(toolDefinitions, sig),
-                'llm_generate_continue_text',
-                10,
-                signal
-              );
-              this.syncFullHistory();
-            } catch (retryErr: unknown) {
-              const errMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-              if (retryErr instanceof InterruptError) {
-                this.emit('agent_interrupted', { reason: 'Interrupted during text continuation' });
-                return `[INTERRUPTED] ${errMsg}`;
-              }
-              this.emit('error_suggestion', {
-                tool: 'llm_generate_continue_text',
-                error: errMsg,
-                suggestion: 'LLM continuation failed after text-only response. Check API status.',
-              });
-              return `LLM continuation failed after text-only response: ${errMsg}`;
-            }
-            continue;
+            // finished=true with content → LLM intentionally ended its turn.
+            // Equivalent to Anthropic's stop_reason="end_turn".
+            // Respect the API signal: exit loop, show text to user.
+            break;
           }
           // 空响应处理：需要区分"真正空响应"和"只有 reasoning"
           if (this.reasoningReceived) {
@@ -1178,8 +1140,6 @@ export class SpicaAgent extends EventEmitter {
         }
 
         if (response.toolCalls && response.toolCalls.length > 0) {
-          // Tool call resets the text-only counter — LLM is still working.
-          this._consecutiveTextOnly = 0;
           // Batch by hint: reads first (fully parallel), writes second (with conflict detection), neutrals last
           const readCalls = response.toolCalls.filter(
             (tc: { name: string }) => getToolBatchHint(resolveAlias(tc.name)) === 'read'

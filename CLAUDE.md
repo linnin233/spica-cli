@@ -50,7 +50,7 @@ Note: Project is ESM (`"type": "module"` in package.json). Use `import`/`export`
 2. Agent.processInput() → LLMClient.stream()
 3. LLM returns tool_calls → Agent.executeTools()
 4. Tool results → Agent.runLoop() continues
-5. LLM tool calls → execute → continue. LLM text ×1 → one free reflection (DeepSeek observation pattern). LLM text ×2 → exit (talking to user). Stagnation detection (16 rounds) as safety net. No fake messages injected.
+5. finish_reason="tool_calls" → execute → continue. finish_reason="stop" → exit (show text to user). Stagnation detection (16 rounds) as safety net.
 
 ### Storage
 
