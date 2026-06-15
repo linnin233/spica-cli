@@ -254,7 +254,7 @@ export const TOOLS_DEFINITIONS: ToolDefinition[] = [
       properties: {
         command: { type: 'string', description: 'Command to execute' },
         timeout: { type: 'number', description: 'Timeout in seconds (default 120)' },
-        detached: { type: 'boolean', description: 'Run in background (tmux/screen)' },
+        detached: { type: 'boolean', description: 'Run in background via tmux/screen. REQUIRED for dev servers and long-running commands. Shell & does NOT work — stdout pipe keeps tool waiting.' },
         interactive: { type: 'boolean', description: 'Enable PTY interaction' },
         maxOutputLength: { type: 'number', description: 'Max output chars (default 50000)' },
         sandbox: {

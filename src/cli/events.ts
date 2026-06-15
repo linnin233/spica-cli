@@ -323,7 +323,7 @@ export function setupAgentEvents(
           ? String(args.command || '')
           : String(args.path || args.url || '');
       const argsDisplay = truncateToWidth(raw, maxDisplay);
-      screen.appendScroll(COLORS.muted(`  ${data.name} ${argsDisplay} → `));
+      screen.appendScroll(COLORS.muted(`  ${data.name} ${argsDisplay}`));
     }
 
     screen.flushOutput();

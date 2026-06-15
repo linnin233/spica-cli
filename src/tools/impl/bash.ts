@@ -49,8 +49,8 @@ export async function executeBash(
   // Bypass 模式：跳过 shell injection 检测（用户明确信任）
   const bypassMode = safeArgs._bypassMode === true;
 
-  // 卡住检测阈值（默认120秒，可通过 stuckWarning 参数调整）
-  const stuckWarningMs = (safeArgs.stuckWarning as number) || 120000;
+  // 卡住检测阈值（默认30秒，可通过 stuckWarning 参数调整）
+  const stuckWarningMs = (safeArgs.stuckWarning as number) || 30000;
 
   // Shell 注入检测 — 只检测真正危险的模式，允许常用操作符 (; && || ${} <<)
   // 注意：bypassPermissions 设置已跳过此检查，此代码为历史遗留，未来可移除
