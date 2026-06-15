@@ -958,13 +958,14 @@ export class SpicaAgent extends EventEmitter {
       // Adaptive thresholds based on context window size.
       // Small windows (<64K) need more aggressive compression to leave room for
       // tool results. Large windows (≥200K) can be more lenient.
-      const triggerRatio = contextWindow < 32000 ? 0.50 :  // tiny: compress at 50%
-        contextWindow < 64000 ? 0.55 :                     // small: compress at 55%
-        contextWindow < 200000 ? 0.60 :                    // normal: compress at 60%
-        0.65;                                               // huge: compress at 65%
-      const targetRatio = contextWindow < 32000 ? 0.35 :
-        contextWindow < 64000 ? 0.38 :
-        0.40;
+      const triggerRatio = contextWindow < 32000 ? 0.55 :  // tiny: compress at 55%
+        contextWindow < 64000 ? 0.70 :                     // small: compress at 70%
+        contextWindow < 200000 ? 0.80 :                    // normal: compress at 80%
+        0.85;                                               // huge: compress at 85%
+      const targetRatio = contextWindow < 32000 ? 0.48 :
+        contextWindow < 64000 ? 0.55 :
+        contextWindow < 200000 ? 0.60 :
+        0.65;
       const triggerThreshold = Math.floor(contextWindow * triggerRatio);
 
       // 当使用超过触发阈值时自动压缩

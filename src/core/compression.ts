@@ -83,12 +83,12 @@ export async function startNonBlockingCompression(
     // Graduated tiers based on how much we need to compress.
     const ratio = usedTokens / targetTokens;
     let keepCount: number;
-    if (ratio > 3)        keepCount = Math.max(10, Math.floor(nonSystem.length * 0.15));
-    else if (ratio > 2)   keepCount = Math.max(15, Math.floor(nonSystem.length * 0.25));
-    else if (ratio > 1.5) keepCount = Math.max(20, Math.floor(nonSystem.length * 0.35));
-    else                  keepCount = Math.max(25, Math.floor(nonSystem.length * 0.50));
-    // Floor: 10, cap at 40% of total (never drop below 60% removal)
-    keepCount = Math.max(10, Math.min(keepCount, Math.floor(nonSystem.length * 0.40)));
+    if (ratio > 3)        keepCount = Math.max(15, Math.floor(nonSystem.length * 0.25));
+    else if (ratio > 2)   keepCount = Math.max(25, Math.floor(nonSystem.length * 0.40));
+    else if (ratio > 1.5) keepCount = Math.max(35, Math.floor(nonSystem.length * 0.55));
+    else                  keepCount = Math.max(50, Math.floor(nonSystem.length * 0.70));
+    // Floor: 10, cap at 70% of total (max 30% removal)
+    keepCount = Math.max(10, Math.min(keepCount, Math.floor(nonSystem.length * 0.70)));
     // Allocate keep slots: prefix messages are free (always kept)
     const slotsForCompressible = Math.max(0, keepCount - prefixNonSystem.length);
 
@@ -131,7 +131,7 @@ export async function startNonBlockingCompression(
     // Per-role adaptive content limits.
     // Base limit bumped from 2000→4000 (0.05→0.10×window) so important tool output
     // and file content survive compression.
-    const baseContentLimit = Math.max(4000, Math.floor(contextWindow * 0.10));
+    const baseContentLimit = Math.max(8000, Math.floor(contextWindow * 0.12));
     const getContentLimit = (m: ChatMessage): number => {
       // User messages are kept in full (user intent is critical, typically short)
       if (m.role === 'user') return Infinity;
