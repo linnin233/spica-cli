@@ -6,6 +6,7 @@ import {
   archiveSession,
   deleteSession,
   renameSession,
+  clearSession,
 } from '../../utils/session';
 import { clearInputQueue } from '../../cli/ui/queue';
 import type { SlashHandler } from './types';
@@ -41,6 +42,10 @@ export const sessionHandler: SlashHandler = async (args, ctx) => {
       }
     }
 
+    // Delete session.json so the next save generates a fresh session ID.
+    // Without this, saveSession() reads the old ID from disk and the next
+    // archive overwrites the previous one.
+    clearSession(workspacePath);
     ctx.agent.setMessages([]);
     clearInputQueue();
 
