@@ -476,13 +476,13 @@ export const TOOLS_DEFINITIONS: ToolDefinition[] = [
     name: 'skill',
     batchHint: 'neutral' as const,
     description:
-      'Invoke a skill to load its full instructions. Use when a skill description suggests it may apply to the current task. Calling this tool loads the complete SKILL.md content so you can follow it precisely.',
+      'Load one or more skills. When ANY skill may apply to your task, invoke it immediately — before responding. Provide multiple skill names (comma-separated) to load several at once. The tool returns each skill\'s complete instructions and auto-detects cross-references. You CAN and SHOULD combine skills (e.g. "test-driven-development, frontend-design") when multiple skills apply.',
     parameters: {
       type: 'object' as const,
       properties: {
         name: {
           type: 'string',
-          description: 'Skill name (e.g., brainstorming, systematic-debugging, using-superpowers)',
+          description: 'Skill name or comma-separated names (e.g., "brainstorming" or "test-driven-development, verification-before-completion, frontend-design")',
         },
       },
       required: ['name'],

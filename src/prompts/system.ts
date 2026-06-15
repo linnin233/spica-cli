@@ -102,7 +102,14 @@ export function buildSkillsSection(skillsMetadata: string): string {
 
   return `
 ## Available Skills
+
 ${skillsMetadata}
+
+### Skill Usage Notes
+- Call the \`skill\` tool to load skill instructions. You CAN load multiple skills at once by providing comma-separated names: \`skill(name="test-driven-development, frontend-design")\`
+- When multiple skills apply to your task, load them ALL in one call — the tool auto-combines them
+- Skills may declare \`requires:\` (hard dependencies) or \`suggests:\` (recommendations) in their metadata — the tool auto-resolves these
+- If you see "💡 Related skills not yet loaded" in the output, consider loading those too
 `;
 }
 

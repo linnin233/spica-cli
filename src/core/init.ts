@@ -1,7 +1,7 @@
 import { SpicaAgent } from '../agent';
 import { LLMClient } from '../llm/LLMClient';
 import { initMCP } from '../mcp/client';
-import { initSkills, listSkills } from '../skills/index';
+import { initSkills, listSkills, buildCategorizedSkillsMetadata } from '../skills/index';
 import { getProviderConfig, resolveModel } from '../utils/settings';
 import { getSystemPromptStable, getSystemPromptVariable } from '../prompts/system';
 import {
@@ -187,9 +187,9 @@ export async function doInit(agent: SpicaAgent): Promise<void> {
 
   await loadProjectConfig(agent);
 
-  // Build skills metadata for system prompt
+  // Build categorized skills metadata for system prompt
   const skills = listSkills(workspacePath);
-  const skillsMetadata = skills.map(s => `- ${s.name}: ${s.description}`).join('\n');
+  const skillsMetadata = buildCategorizedSkillsMetadata(skills);
 
   const projectConfig = agent.getProjectConfigInternal();
   const stablePrompt = getSystemPromptStable(projectConfig);
