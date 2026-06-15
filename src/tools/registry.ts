@@ -248,13 +248,13 @@ export const TOOLS_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'bash',
     batchHint: 'write' as const,
-    description: 'Run shell command. Timeout returns error - AI should decide retry strategy. Use sandbox:true for untrusted commands (requires bubblewrap).',
+    description: 'Run shell command. For dev servers (bun run, npm run dev, python -m http.server) and ANY command expected to run >10s, you MUST set detached:true. Foreground bash blocks the agent — use ONLY for quick commands (<10s expected). Use sandbox:true for untrusted commands (requires bubblewrap).',
     parameters: {
       type: 'object' as const,
       properties: {
         command: { type: 'string', description: 'Command to execute' },
         timeout: { type: 'number', description: 'Timeout in seconds (default 120)' },
-        detached: { type: 'boolean', description: 'Run in background via tmux/screen. REQUIRED for dev servers and long-running commands. Shell & does NOT work — stdout pipe keeps tool waiting.' },
+        detached: { type: 'boolean', description: 'Run in background (tmux/screen). MANDATORY for: dev servers, bun run, npm run dev, long builds, watch modes, any command not expected to exit within 10s. Returns immediately with session ID.' },
         interactive: { type: 'boolean', description: 'Enable PTY interaction' },
         maxOutputLength: { type: 'number', description: 'Max output chars (default 50000)' },
         sandbox: {
@@ -269,7 +269,7 @@ export const TOOLS_DEFINITIONS: ToolDefinition[] = [
     name: 'monitor',
     batchHint: 'neutral' as const,
     description:
-      'Start a background monitor that streams events from a long-running script. Each stdout line becomes a notification. Use for watching logs, processes, or polling for changes. Exit ends the watch.',
+      'Start a background monitor that streams stdout lines as real-time events. Returns immediately — does NOT block. Use for: tailing server logs, watching build output, polling health checks, monitoring file changes. Each stdout line becomes a notification in chat. Persistent mode runs until task_stop. Combine with bash(detached:true) to start a server, then monitor its logs.',
     parameters: {
       type: 'object' as const,
       properties: {
