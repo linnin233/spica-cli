@@ -20,8 +20,17 @@ export const sessionHandler: SlashHandler = async (args, ctx) => {
     const currentMessages = ctx.agent.getMessages();
     if (currentMessages.length === 0) {
       ctx.screen.appendScroll(COLORS.muted('\nNo messages to archive.\n'));
+      ctx.screen.restoreCursor();
       return;
     }
+
+    // ── Immediate feedback ──
+    // Show archiving intent BEFORE the potentially slow LLM summary call.
+    // This prevents the user from staring at nothing while the summary generates.
+    ctx.screen.appendScroll(
+      COLORS.primary(`\n[ARCHIVE] Archiving ${currentMessages.length} messages…\n`),
+    );
+    ctx.screen.restoreCursor();
 
     const workspacePath = ctx.agent.getWorkspacePath();
     const session = loadSession(workspacePath);
@@ -29,6 +38,9 @@ export const sessionHandler: SlashHandler = async (args, ctx) => {
     if (session) {
       session.messages = currentMessages;
       session.lastActivity = new Date().toISOString();
+
+      ctx.screen.appendScroll(COLORS.muted('  Generating summary…\n'));
+      ctx.screen.restoreCursor();
 
       const llm = ctx.agent.getLLM();
       const summary = await archiveSession(workspacePath, session, llm || undefined);
@@ -51,6 +63,7 @@ export const sessionHandler: SlashHandler = async (args, ctx) => {
 
     ctx.screen.appendScroll(COLORS.success('[NEW] Started fresh session\n'));
     ctx.screen.appendScroll(COLORS.muted('Use /history to view archived chats (read-only)\n'));
+    ctx.screen.restoreCursor();
 
     return;
   }
