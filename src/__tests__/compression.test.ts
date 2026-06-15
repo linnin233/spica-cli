@@ -6,6 +6,8 @@ import {
   snipMessages,
   microcompactMessages,
   autoCompactContext,
+  buildSummaryPrompt,
+  collapseContext,
 } from '../core/compression';
 import type { ChatMessage } from '../llm/providers/BaseProvider';
 
@@ -315,5 +317,155 @@ describe('Layer 4: AutoCompact (full head summary)', () => {
     expect(agent.stateMachine.current).toBe('idle');
     // The first compact did call setMessages (via the waterfall)
     expect(mockLLM.setMessages).toHaveBeenCalled();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Recency preservation tests (fix for context corruption bug)
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('buildSummaryPrompt — recency markers', () => {
+  it('should tag the LAST user message as [LATEST]', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'Revert all changes' },
+      { role: 'assistant', content: 'Done reverting' },
+      { role: 'user', content: 'Add feature X' },
+      { role: 'assistant', content: 'Added feature X' },
+      { role: 'user', content: 'Remove color scheme system' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 't1', name: 'edit', arguments: { path: '/file' } }] },
+      { role: 'tool', toolCallId: 't1', content: 'File edited' },
+    ];
+
+    const prompt = buildSummaryPrompt(msgs);
+
+    // Extract the "History messages:" section only — the template itself
+    // also mentions [LATEST] and [OLD] in its instructions.
+    const historyStart = prompt.indexOf('History messages:');
+    const historySection = prompt.slice(historyStart);
+
+    // The LAST user message should be tagged as LATEST in the history section
+    expect(historySection).toContain('[LATEST — CURRENT INSTRUCTION');
+    expect(historySection).toContain('Remove color scheme system');
+
+    // Earlier user messages should be tagged as OLD in the history section
+    expect(historySection).toContain('[OLD — historical context');
+    expect(historySection).toContain('Revert all changes');
+    expect(historySection).toContain('Add feature X');
+
+    // LATEST should only appear once in the *history section*
+    const latestCount = (historySection.match(/\[LATEST/g) || []).length;
+    expect(latestCount).toBe(1);
+  });
+
+  it('should handle single user message (no OLD messages)', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'Only instruction' },
+      { role: 'assistant', content: 'Working on it' },
+    ];
+
+    const prompt = buildSummaryPrompt(msgs);
+
+    // Extract the history section — template instructions reference [OLD]
+    const historyStart = prompt.indexOf('History messages:');
+    const historySection = prompt.slice(historyStart);
+
+    // Single user message = the latest, but also the only one
+    expect(historySection).toContain('[LATEST — CURRENT INSTRUCTION');
+    // No user message should be tagged [OLD] in the history section
+    expect(historySection).not.toContain('[OLD — historical context');
+  });
+});
+
+describe('autoCompactContext — last user message preserved in tail', () => {
+  let agent: SpicaAgent;
+  let mockLLM: any;
+
+  beforeEach(() => {
+    const result = makeAgent();
+    agent = result.agent;
+    mockLLM = result.mockLLM;
+  });
+
+  it('should preserve last user message in tail even when far back', async () => {
+    // Build a conversation where the last user message is far from the tail.
+    // User instruction is at position 3, followed by many tool interactions.
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'Old revert instruction' },
+      { role: 'assistant', content: 'Done reverting' },
+      { role: 'user', content: 'Add feature X' },
+      { role: 'assistant', content: 'Added feature X' },
+      // Current instruction — 4 messages before the end
+      { role: 'user', content: 'CURRENT: Remove color scheme system' },
+      // Many tool interactions after the user instruction
+      { role: 'assistant', content: '', toolCalls: [{ id: 't1', name: 'edit', arguments: { path: '/a' } }] },
+      { role: 'tool', toolCallId: 't1', content: 'edited a' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 't2', name: 'edit', arguments: { path: '/b' } }] },
+      { role: 'tool', toolCallId: 't2', content: 'edited b' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 't3', name: 'read', arguments: { path: '/c' } }] },
+      { role: 'tool', toolCallId: 't3', content: 'content of c here with enough chars' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 't4', name: 'grep', arguments: { pattern: 'theme' } }] },
+      { role: 'tool', toolCallId: 't4', content: 'found theme reference in theme here' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 't5', name: 'read', arguments: { path: '/d' } }] },
+      { role: 'tool', toolCallId: 't5', content: 'reading file d with enough content to keep' },
+    ];
+
+    // Need to make token estimation return > target so it compresses
+    // Each message is "large enough" with the content strings above
+    mockLLM._msgs = msgs;
+    mockLLM.generateForCompression = vi.fn().mockResolvedValue({
+      content: 'Summary: user wanted to revert old changes, add feature X, and currently working on removing color scheme',
+    });
+
+    // Provide enough tokens used to trigger compression
+    const origEstimate = mockLLM.getTokenCounter().estimateMessages;
+    mockLLM.getTokenCounter().estimateMessages = vi.fn().mockReturnValue(1000);
+
+    await autoCompactContext(agent, 300, undefined);
+
+    const finalMessages = mockLLM._msgs as ChatMessage[];
+
+    // The current user instruction MUST be present verbatim
+    const userMessages = finalMessages.filter(m => m.role === 'user');
+    const hasCurrentInstruction = userMessages.some(
+      m => m.content?.includes('CURRENT: Remove color scheme system')
+    );
+    expect(hasCurrentInstruction).toBe(true);
+
+    // Restore original
+    mockLLM.getTokenCounter().estimateMessages = origEstimate;
+  });
+
+  it('should not duplicate last user if already in default tail', async () => {
+    // User message is within the last 6 messages (default tail for mock context window = 1000)
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'Old instruction' },
+      { role: 'assistant', content: 'Done' },
+      { role: 'user', content: 'Another old instruction' },
+      { role: 'assistant', content: 'Done again' },
+      { role: 'user', content: 'LATEST_INSTRUCTION' },
+      { role: 'assistant', content: 'Final response' },
+    ];
+
+    mockLLM._msgs = msgs;
+    mockLLM.generateForCompression = vi.fn().mockResolvedValue({
+      content: 'Summary with file.ts and fix applied',
+    });
+
+    // Target 300 with 1000 tokens used → compresses
+    const origEstimate = mockLLM.getTokenCounter().estimateMessages;
+    mockLLM.getTokenCounter().estimateMessages = vi.fn().mockReturnValue(1000);
+
+    await autoCompactContext(agent, 300, undefined);
+
+    const finalMessages = mockLLM._msgs as ChatMessage[];
+    const userMessages = finalMessages.filter(m => m.role === 'user');
+
+    // LATEST_INSTRUCTION should appear exactly once
+    const latestCount = userMessages.filter(
+      m => m.content?.includes('LATEST_INSTRUCTION')
+    ).length;
+    expect(latestCount).toBe(1);
+
+    mockLLM.getTokenCounter().estimateMessages = origEstimate;
   });
 });

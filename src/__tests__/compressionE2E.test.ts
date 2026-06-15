@@ -171,7 +171,7 @@ describe('Compression E2E — agent continues after compression', () => {
       expect(summaries.length).toBe(1);
     });
 
-    it('should NOT have continuation signals', async () => {
+    it('should inject [CONTEXT COMPRESSED] continuation signal after compression', async () => {
       const { agent, mockLLM } = makeAgent(SMALL_WINDOW);
       const msgs = makeRealisticConversation(12);
       mockLLM.setMessages(msgs);
@@ -179,12 +179,12 @@ describe('Compression E2E — agent continues after compression', () => {
       await manageContext(agent, Math.floor(SMALL_WINDOW * 0.4));
 
       const finalMsgs = mockLLM.getMessages();
+      // After compression, a continuation signal should be present so the
+      // LLM knows to resume working rather than re-analyze from scratch.
       const hasContinueSignal = finalMsgs.some(
-        (m: ChatMessage) =>
-          m.content?.includes('[CONTEXT COMPRESSED]') ||
-          m.content?.includes('[CONTEXT RESTORED]')
+        (m: ChatMessage) => m.content?.includes('[CONTEXT COMPRESSED]')
       );
-      expect(hasContinueSignal).toBe(false);
+      expect(hasContinueSignal).toBe(true);
     });
 
     it('should not have truncated originals before the summary', async () => {
@@ -211,7 +211,7 @@ describe('Compression E2E — agent continues after compression', () => {
   });
 
   describe('Tail preserved for continuity', () => {
-    it('should keep the final user message in tail', async () => {
+    it('should keep the final user message in tail (before continuation signal)', async () => {
       const { agent, mockLLM } = makeAgent(SMALL_WINDOW);
       const msgs = makeRealisticConversation(15);
       const lastUserMsg = 'Now run the full test suite to verify everything works.';
@@ -223,9 +223,16 @@ describe('Compression E2E — agent continues after compression', () => {
 
       const finalMsgs = mockLLM.getMessages();
       expect(finalMsgs.length).toBeGreaterThan(0);
+
+      // The user message should still be in the message list
+      const userMsg = finalMsgs.find(m => m.content === lastUserMsg);
+      expect(userMsg).toBeDefined();
+      expect(userMsg!.role).toBe('user');
+
+      // The continuation signal should be the last message
       const lastMsg = finalMsgs[finalMsgs.length - 1];
-      expect(lastMsg.role).toBe('user');
-      expect(lastMsg.content).toBe(lastUserMsg);
+      expect(lastMsg.role).toBe('system');
+      expect(lastMsg.content).toContain('[CONTEXT COMPRESSED]');
     });
   });
 
@@ -330,27 +337,37 @@ describe('Compression E2E — agent continues after compression', () => {
     });
   });
 
-  describe('collapseContext preserves early setup', () => {
-    it('should keep project requirement in early setup after collapse', async () => {
+  describe('collapseContext preserves last user message', () => {
+    it('should keep the LAST user instruction (not the first) after collapse', async () => {
       const { agent, mockLLM } = makeAgent(SMALL_WINDOW);
 
-      // System + early setup (project requirements) + lots of middle
+      // System + early setup + middle + latest instruction
       const msgs: ChatMessage[] = [
         { role: 'system', content: 'You are spica assistant' },
         { role: 'user', content: 'I need to refactor the entire compression system to use a layered approach like Claude Code.' },
         { role: 'assistant', content: 'I\'ll analyze the current codebase and design a 4-layer compression architecture.' },
         ...makeRealisticConversation(20),
+        // Add a specific last user message that should be preserved
+        { role: 'user', content: 'CURRENT TASK: Remove color scheme system from config panel' },
+        { role: 'assistant', content: '', toolCalls: [{ id: 't1', name: 'edit', arguments: { path: '/file' } }] },
+        { role: 'tool', toolCallId: 't1', content: 'File edited' },
       ];
       mockLLM.setMessages(msgs);
 
       await manageContext(agent, Math.floor(SMALL_WINDOW * 0.4));
 
       const finalMsgs = mockLLM.getMessages();
-      // Early setup should be preserved
-      const requirementMsg = finalMsgs.find(
+      // The LAST user message should be preserved (current instruction)
+      const currentMsg = finalMsgs.find(
+        (m: ChatMessage) => m.content === 'CURRENT TASK: Remove color scheme system from config panel'
+      );
+      expect(currentMsg).toBeDefined();
+
+      // The FIRST user message should NOT appear verbatim (it's in the summary)
+      const oldMsg = finalMsgs.find(
         (m: ChatMessage) => m.content === 'I need to refactor the entire compression system to use a layered approach like Claude Code.'
       );
-      expect(requirementMsg).toBeDefined();
+      expect(oldMsg).toBeUndefined();
     });
   });
 
