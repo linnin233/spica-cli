@@ -1,4 +1,5 @@
 import { COLORS } from '../../cli/ui/colors';
+import { rebuildSystemPrompt } from '../../core/init';
 import {
   parseSkillInput,
   getSkill,
@@ -40,6 +41,7 @@ export const skillManageHandler: SlashHandler = async (args, ctx) => {
     } else {
       try {
         await installSkill(url);
+        rebuildSystemPrompt(ctx.agent);
         ctx.screen.appendScroll(COLORS.success(`\n[OK] Skill installed from: ${url}\n`));
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -52,6 +54,7 @@ export const skillManageHandler: SlashHandler = async (args, ctx) => {
       ctx.screen.appendScroll(COLORS.warning('\nUsage: /skill uninstall <name>\n'));
     } else {
       await uninstallSkill(name);
+      rebuildSystemPrompt(ctx.agent);
       ctx.screen.appendScroll(COLORS.success(`\n[OK] Skill uninstalled: ${name}\n`));
     }
   } else if (action === 'add') {
@@ -61,6 +64,7 @@ export const skillManageHandler: SlashHandler = async (args, ctx) => {
       ctx.screen.appendScroll(COLORS.warning('\nUsage: /skill add <name> <promptTemplate>\n'));
     } else {
       await saveSkill(skillName, { name: skillName, description: '', promptTemplate });
+      rebuildSystemPrompt(ctx.agent);
       ctx.screen.appendScroll(COLORS.success(`\n[OK] Skill added: ${skillName}\n`));
     }
   } else if (action === 'remove') {
@@ -70,6 +74,7 @@ export const skillManageHandler: SlashHandler = async (args, ctx) => {
     } else {
       const result = await deleteSkill(skillName);
       if (result) {
+        rebuildSystemPrompt(ctx.agent);
         ctx.screen.appendScroll(COLORS.success(`\n[OK] Skill removed: ${skillName}\n`));
       } else {
         ctx.screen.appendScroll(COLORS.warning(`\n[WARN] Skill not found: ${skillName}\n`));
@@ -86,6 +91,7 @@ export const skillManageHandler: SlashHandler = async (args, ctx) => {
         ctx.screen.appendScroll(COLORS.warning(`\n[WARN] Skill not found: ${skillName}\n`));
       } else {
         await saveSkill(skillName, { ...existing, promptTemplate });
+        rebuildSystemPrompt(ctx.agent);
         ctx.screen.appendScroll(COLORS.success(`\n[OK] Skill updated: ${skillName}\n`));
       }
     }

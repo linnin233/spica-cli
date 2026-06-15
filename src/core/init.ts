@@ -229,3 +229,21 @@ export async function loadProjectConfig(agent: SpicaAgent): Promise<void> {
     agent.emit('projectCreated', autoConfig);
   }
 }
+
+/**
+ * Rebuild the system prompt after skills change (install/uninstall/add/remove/edit).
+ * Reloads skills from disk and updates the LLM's split-prefix prompt.
+ * Must be called after any skill modification so the LLM sees the updated list immediately.
+ */
+export function rebuildSystemPrompt(agent: SpicaAgent): void {
+  const llm = agent.getLLM();
+  if (!llm) return;
+
+  const workspacePath = agent.getWorkspacePathInternal();
+  const skills = listSkills(workspacePath);
+  const skillsMetadata = skills.map(s => `- ${s.name}: ${s.description}`).join('\n');
+  const projectConfig = agent.getProjectConfigInternal();
+  const stablePrompt = getSystemPromptStable(projectConfig);
+  const variablePrompt = getSystemPromptVariable(skillsMetadata, workspacePath);
+  llm.setSystemPromptSplit(stablePrompt, variablePrompt);
+}
