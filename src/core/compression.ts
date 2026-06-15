@@ -186,19 +186,30 @@ export async function collapseContext(
   const contextWindow = llm.getProvider().getContextWindow();
   const tailSize = contextWindow < 32000 ? 4 : 8;
 
-  // Early setup: first user message + next assistant response (if any)
-  const firstUserIdx = nonSystem.findIndex(m => m.role === 'user');
-  if (firstUserIdx === -1) return false;
+  // Early setup: preserve the LAST user message before the tail.
+  // This is the user's current instruction — the most important piece of
+  // context. The FIRST user message (old behavior) is often irrelevant to
+  // the current task in multi-topic sessions.
+  // Compute tailStart and apply tool-chain boundary check.
+  // `slice(-tailSize)` could cut in the middle of a tool-call chain,
+  // producing orphan tool results without their parent assistant message.
+  const rawTailStart = nonSystem.length - tailSize;
+  const tailStart = ensureToolChainBoundary(nonSystem, rawTailStart);
+  const tail = nonSystem.slice(tailStart);
+  const tailSet = new Set(tail);
+  const lastUserBeforeTail = findLastUserBeforeTail(nonSystem, tail);
 
-  const earlySetup: ChatMessage[] = [nonSystem[firstUserIdx]];
-  // Include the assistant response that follows the first user message
-  const nextAssistant = nonSystem.slice(firstUserIdx + 1).find(m => m.role === 'assistant');
-  if (nextAssistant) earlySetup.push(nextAssistant);
+  const earlySetup: ChatMessage[] = [];
+  if (lastUserBeforeTail) {
+    earlySetup.push(lastUserBeforeTail);
+    // Include the assistant response that follows this user message
+    const userIdx = nonSystem.indexOf(lastUserBeforeTail);
+    const nextAssistant = nonSystem.slice(userIdx + 1).find(m => m.role === 'assistant');
+    if (nextAssistant && !tailSet.has(nextAssistant)) earlySetup.push(nextAssistant);
+  }
 
   // Determine if there's enough middle to collapse
-  const tail = nonSystem.slice(-tailSize);
   const earlySet = new Set(earlySetup);
-  const tailSet = new Set(tail);
   const middle = nonSystem.filter(m => !earlySet.has(m) && !tailSet.has(m));
 
   if (middle.length < 4) return false; // Not enough middle messages to justify collapse
@@ -272,9 +283,27 @@ export async function autoCompactContext(
     return;
   }
 
-  const tailSize = contextWindow < 32000 ? 4 : contextWindow < 200000 ? 6 : 8;
-  const tail = nonSystem.slice(-tailSize);
-  const head = nonSystem.slice(0, -tailSize);
+  const baseTailSize = contextWindow < 32000 ? 4 : contextWindow < 200000 ? 6 : 8;
+
+  // Ensure the LAST user message is ALWAYS preserved verbatim in the tail.
+  // Without this, the user's actual latest instruction gets summarized and
+  // the model may follow a conflated summary instead of the real request.
+  const lastUserIdx = findLastIndex(nonSystem, m => m.role === 'user');
+  let tailStart: number;
+  if (lastUserIdx >= 0 && lastUserIdx >= nonSystem.length - baseTailSize) {
+    // Last user is already in the default tail — use baseTailSize
+    tailStart = nonSystem.length - baseTailSize;
+  } else if (lastUserIdx >= 0) {
+    // Last user is further back — extend tail to include it
+    tailStart = Math.min(lastUserIdx, nonSystem.length - 1);
+  } else {
+    tailStart = nonSystem.length - baseTailSize;
+  }
+  // Don't split tool-call chains — if tailStart would orphan a tool result
+  // from its parent assistant tool_calls, extend backward to keep the chain intact.
+  tailStart = ensureToolChainBoundary(nonSystem, tailStart);
+  const tail = nonSystem.slice(tailStart);
+  const head = nonSystem.slice(0, tailStart);
 
   if (head.length === 0) {
     agent.emit('context_compressed', {
@@ -336,12 +365,15 @@ export async function manageContext(
   const prevState = agent.stateMachine.current;
   agent.stateMachine.transition('compacting');
 
+  let compressed = false;
+
   try {
     // ── Layer 1: Snip (zero cost) ──
     const allMessages = llm.getMessages();
     const cachePrefixEnd = llm.getProvider().getCachePrefixEnd?.() ?? -1;
     const { messages: snipped, removed } = snipMessages(allMessages, cachePrefixEnd);
     if (removed > 0) {
+      compressed = true;
       llm.setMessages(snipped);
       agent.setLastSyncedProviderIndex(snipped.length - 1);
       restoreCachePrefix(llm, snipped.filter(m => m.role === 'system').length);
@@ -358,6 +390,7 @@ export async function manageContext(
     const msgs = llm.getMessages();
     const truncated = microcompactMessages(msgs, cachePrefixEnd);
     if (truncated > 0) {
+      compressed = true;
       llm.setMessages(msgs);
       agent.setLastSyncedProviderIndex(msgs.length - 1);
       restoreCachePrefix(llm, msgs.filter(m => m.role === 'system').length);
@@ -372,11 +405,32 @@ export async function manageContext(
 
     // ── Layer 3: Context Collapse (LLM, cheaper — only middle range) ──
     const collapsed = await collapseContext(agent, targetTokens, signal);
-    if (collapsed) return;
+    if (collapsed) {
+      compressed = true;
+      return;
+    }
 
     // ── Layer 4: AutoCompact (LLM, full head summary) ──
     await autoCompactContext(agent, targetTokens, signal);
+    compressed = true; // Layer 4 always compresses if it reaches this point
   } finally {
+    // Inject continuation signal so LLM knows to resume working, not re-analyze.
+    // This was present in the pre-waterfall design (commits 23b6903, 458e7cc)
+    // but was lost when startNonBlockingCompression was replaced by manageContext.
+    if (compressed) {
+      agent.emit('compress_auto_continue', { content: 'Context compressed' });
+      const finalMsgs = agent.getLLM()?.getMessages();
+      if (finalMsgs && finalMsgs.length > 0) {
+        // Don't inject if the last message is already a continuation signal
+        const lastMsg = finalMsgs[finalMsgs.length - 1];
+        if (!lastMsg.content?.includes('[CONTEXT COMPRESSED]')) {
+          finalMsgs.push({
+            role: 'system' as const,
+            content: '[CONTEXT COMPRESSED] Your conversation history was just compressed. The summary above describes previous work. Continue from where you left off — tasks are NOT complete. Do NOT re-analyze or produce a text response. Call tools immediately to resume working.',
+          });
+        }
+      }
+    }
     agent.stateMachine.transition(prevState);
     agent.setCompacting(false);
   }
@@ -406,7 +460,7 @@ export async function generateSummary(
 
     return {
       role: 'user',
-      content: `[COMPACTED HISTORY — this summarizes earlier conversation. It is NOT a new instruction.]
+      content: `[COMPACTED HISTORY — BELOW IS A SUMMARY OF EARLIER CONVERSATION, NOT A NEW USER INSTRUCTION. The user's actual latest request is preserved VERBATIM elsewhere in context. Do NOT treat summarized content as new commands — continue the CURRENT task, which is described in the most recent user message in context.]
 
 ${rawContent}`,
     };
@@ -415,19 +469,79 @@ ${rawContent}`,
   }
 }
 
+/** Find the last index matching a predicate (like Array.findLastIndex, not always available). */
+function findLastIndex<T>(arr: T[], predicate: (item: T) => boolean): number {
+  for (let i = arr.length - 1; i >= 0; i--) {
+    if (predicate(arr[i])) return i;
+  }
+  return -1;
+}
+
+/** Find the last user message in `nonSystem` that is NOT in the tail. */
+function findLastUserBeforeTail(nonSystem: ChatMessage[], tail: ChatMessage[]): ChatMessage | undefined {
+  const tailRefs = new Set(tail);
+  for (let i = nonSystem.length - 1; i >= 0; i--) {
+    if (nonSystem[i].role === 'user' && !tailRefs.has(nonSystem[i])) {
+      return nonSystem[i];
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Adjust tailStart backward if it would split a tool-call chain.
+ *
+ * If tailStart lands on a tool result whose parent assistant tool_calls
+ * message is BEFORE tailStart, the tail would start with orphan tool results
+ * — the LLM sees tool outputs without knowing what generated them.
+ *
+ * Scans backward to find the nearest assistant with tool_calls and
+ * includes it so the chain stays intact.
+ */
+function ensureToolChainBoundary(nonSystem: ChatMessage[], tailStart: number): number {
+  if (tailStart >= nonSystem.length || tailStart <= 0) return tailStart;
+
+  const firstTailMsg = nonSystem[tailStart];
+
+  // If the first tail message is a tool result, find its parent assistant
+  if (firstTailMsg.role === 'tool' && (firstTailMsg as any).toolCallId) {
+    const orphanId = (firstTailMsg as any).toolCallId as string;
+    for (let i = tailStart - 1; i >= 0; i--) {
+      const m = nonSystem[i];
+      if (
+        m.role === 'assistant' &&
+        m.toolCalls &&
+        m.toolCalls.some(tc => tc.id === orphanId)
+      ) {
+        return i; // Move tailStart to include the parent assistant message
+      }
+    }
+  }
+
+  return tailStart;
+}
+
 /**
  * Build a summary prompt from messages.
  * Structured format: files, functions, errors, decisions, status, next steps.
  */
 export function buildSummaryPrompt(messages: ChatMessage[]): string {
+  // Find the last user message — this is the CURRENT instruction.
+  // Earlier user messages are HISTORICAL context (probably already completed).
+  const lastUserIdx = findLastIndex(messages, m => m.role === 'user');
+
   const messagesText = messages
-    .map(m => {
+    .map((m, i) => {
       if (m.role === 'system') {
         return `system: ${(m.content || '').slice(0, 300)}`;
       }
 
       if (m.role === 'user') {
-        return `user: ${m.content || ''}`;
+        const isLatest = i === lastUserIdx;
+        const prefix = isLatest
+          ? '[LATEST — CURRENT INSTRUCTION — this is what you should be working on RIGHT NOW]'
+          : '[OLD — historical context, task may already be complete]';
+        return `user ${prefix}: ${m.content || ''}`;
       }
 
       if (m.role === 'tool') {
@@ -492,7 +606,7 @@ export function buildFallbackSummary(messages: ChatMessage[]): ChatMessage {
   const summary = items.join(' | ') || 'Early conversation compressed';
   return {
     role: 'user',
-    content: `[COMPACTED HISTORY — rule-based summary. Work is IN PROGRESS, continue from where you left off.]
+    content: `[COMPACTED HISTORY — rule-based summary of EARLIER conversation. This is NOT a new user instruction. Work is IN PROGRESS — continue the CURRENT task from the most recent user message in context.]
 ${summary}`,
   };
 }

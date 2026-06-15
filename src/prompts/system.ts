@@ -252,7 +252,10 @@ Write in first person: "I" refers to you (the assistant), the other speaker is t
 
 CRITICAL: The conversation being summarized represents IN-PROGRESS WORK. The tasks described are NOT complete. You must accurately record what remains to be done so you can continue immediately without re-investigating.
 
+CRITICAL — RECENCY: User messages are tagged [OLD] or [LATEST]. The LAST user message (marked [LATEST — CURRENT INSTRUCTION]) is THE CURRENT TASK. Earlier user messages (marked [OLD]) are HISTORICAL CONTEXT — completed or superseded tasks. When you summarize the "Active Task" below, it MUST be the [LATEST] task, not a historical one. Do NOT conflate old requests with the current work.
+
 ## Must Preserve (Be Specific)
+0. THE CURRENT TASK — the [LATEST] user message verbatim. This is what the agent is working on RIGHT NOW.
 1. User's explicit requirements and constraints — verbatim if short
 2. File paths modified/created and WHY — include full paths with extensions (e.g. \`src/core/compression.ts\`)
 3. Function names, class names, key variables changed
