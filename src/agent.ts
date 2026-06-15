@@ -1566,10 +1566,10 @@ export class SpicaAgent extends EventEmitter {
     } finally {
       this.currentAbortController = null;
       this.clearPendingCancel(this.cancelSeq);
-      // Transition back to idle (unless interrupted)
-      if (this._stateMachine.current !== 'interrupted') {
-        this._stateMachine.transition('idle');
-      }
+      // Always transition back to idle. The 'interrupted' state is transient —
+      // pendingCancel and cancelSeq handle interrupt gating, not the state machine.
+      // Staying in 'interrupted' blocks subsequent user input.
+      this._stateMachine.transition('idle');
     }
   }
 

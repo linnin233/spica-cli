@@ -103,9 +103,6 @@ function parseSkillMarkdown(name: string, content: string): SkillDefinition | nu
   let skillName = name;
   let description = `Skill: ${name}`;
   let promptTemplate = content;
-  let requires: string[] | undefined;
-  let suggests: string[] | undefined;
-  let category: string | undefined;
 
   // 解析 YAML frontmatter
   if (content.startsWith('---')) {
@@ -116,17 +113,10 @@ function parseSkillMarkdown(name: string, content: string): SkillDefinition | nu
 
       const nameMatch = frontmatter.match(/name:\s*(.+)/);
       const descMatch = frontmatter.match(/description:\s*(.+)/);
-      const catMatch = frontmatter.match(/category:\s*(.+)/);
 
       if (nameMatch) skillName = nameMatch[1].trim();
       if (descMatch) description = descMatch[1].trim();
-      if (catMatch) category = catMatch[1].trim();
       promptTemplate = body || content;
-
-      // Parse requires: list
-      requires = parseFrontmatterList(frontmatter, 'requires');
-      // Parse suggests: list
-      suggests = parseFrontmatterList(frontmatter, 'suggests');
     }
   }
 
@@ -134,22 +124,7 @@ function parseSkillMarkdown(name: string, content: string): SkillDefinition | nu
     name: skillName,
     description,
     promptTemplate,
-    requires,
-    suggests,
-    category,
   };
-}
-
-/** Parse a YAML list field like `requires:` or `suggests:` from frontmatter. */
-function parseFrontmatterList(frontmatter: string, field: string): string[] | undefined {
-  const regex = new RegExp(`${field}:\\s*\\n((?:\\s+-\\s+.+\\n?)*)`);
-  const match = frontmatter.match(regex);
-  if (!match) return undefined;
-
-  const items = match[1].match(/-\s*(\S+)/g);
-  if (!items || items.length === 0) return undefined;
-
-  return items.map(i => i.replace(/^-\s*/, '').trim());
 }
 
 // 获取skill定义
@@ -228,106 +203,6 @@ export function buildSkillPrompt(skill: SkillDefinition, args: Record<string, an
 // 列出所有skills
 export function listSkills(workspacePath?: string): SkillDefinition[] {
   return Array.from(loadSkills(workspacePath).values());
-}
-
-/**
- * Build categorized skills metadata for the system prompt.
- * Groups skills by category, shows dependencies, and suggests combinations.
- */
-export function buildCategorizedSkillsMetadata(skills: SkillDefinition[]): string {
-  if (skills.length === 0) return '';
-
-  // Group by category
-  const byCategory = new Map<string, SkillDefinition[]>();
-  const uncategorized: SkillDefinition[] = [];
-
-  for (const s of skills) {
-    if (s.category) {
-      const existing = byCategory.get(s.category) || [];
-      existing.push(s);
-      byCategory.set(s.category, existing);
-    } else {
-      uncategorized.push(s);
-    }
-  }
-
-  const lines: string[] = [];
-
-  // Categorized skills first
-  for (const [category, categorySkills] of byCategory) {
-    const label = category.charAt(0).toUpperCase() + category.slice(1);
-    lines.push(`### ${label}`);
-    for (const s of categorySkills) {
-      const name = s.name || '?';
-      const deps = s.requires && s.requires.length > 0
-        ? ` [requires: ${s.requires.join(', ')}]`
-        : '';
-      const sugs = s.suggests && s.suggests.length > 0
-        ? ` [suggests: ${s.suggests.join(', ')}]`
-        : '';
-      lines.push(`- \`/${name}\` — ${s.description}${deps}${sugs}`);
-    }
-    lines.push('');
-  }
-
-  // Uncategorized
-  if (uncategorized.length > 0) {
-    for (const s of uncategorized) {
-      const name = s.name || '?';
-      lines.push(`- \`/${name}\` — ${s.description}`);
-    }
-  }
-
-  return lines.join('\n');
-}
-
-/**
- * Resolve skill dependencies recursively.
- * Given a skill name, returns all skills that should be loaded (in order).
- * Handles `requires` (hard dependencies) and `suggests` (soft recommendations).
- * Cycle detection via `visited` set — each skill loaded at most once.
- */
-export function resolveSkillDependencies(
-  skillName: string,
-  skills: Map<string, SkillDefinition>,
-  visited: Set<string> = new Set()
-): { required: SkillDefinition[]; suggested: SkillDefinition[] } {
-  if (visited.has(skillName)) return { required: [], suggested: [] };
-  visited.add(skillName);
-
-  const skill = skills.get(skillName);
-  if (!skill) return { required: [], suggested: [] };
-
-  const required: SkillDefinition[] = [];
-  const suggested: SkillDefinition[] = [];
-
-  // Resolve requires first (recursively)
-  if (skill.requires) {
-    for (const depName of skill.requires) {
-      const dep = skills.get(depName);
-      if (dep && !visited.has(depName)) {
-        // Recursively resolve the dependency's own deps
-        const sub = resolveSkillDependencies(depName, skills, visited);
-        required.push(...sub.required);
-        required.push(dep);
-        suggested.push(...sub.suggested);
-      }
-    }
-  }
-
-  // Resolve suggests
-  if (skill.suggests) {
-    for (const sugName of skill.suggests) {
-      const sug = skills.get(sugName);
-      if (sug && !visited.has(sugName)) {
-        const sub = resolveSkillDependencies(sugName, skills, visited);
-        suggested.push(...sub.required, sug);
-        suggested.push(...sub.suggested);
-      }
-    }
-  }
-
-  return { required, suggested };
 }
 
 // List skills grouped by package name (for categorized tab completion).

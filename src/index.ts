@@ -8,6 +8,7 @@ import { COLORS } from "./cli/ui/colors";
 import { setupAgentEvents } from "./cli/events";
 import { updateStatusBar } from "./cli/status";
 import { getRuntimeState } from "./core/RuntimeState";
+import { saveSession } from "./utils/session";
 import { getScreenManager } from "./cli/ui/screenManager";
 
 import { registerProviderCommands } from "./commands/providers";
@@ -28,6 +29,18 @@ process.on("SIGINT", () => {
   // 连续Ctrl+C强制退出
   interruptCount++;
   if (interruptCount >= 3) {
+    // Save session before force exit
+    const agent = state.getAgent();
+    if (agent) {
+      try {
+        saveSession(
+          agent.getWorkspacePath(),
+          agent.getMessages(),
+          undefined,
+          agent.getProgressSnapshot(),
+        );
+      } catch {}
+    }
     if (tuiStarted) screen.end();
     console.log(COLORS.error("\n[FORCE EXIT]"));
     process.exit(0);
@@ -41,6 +54,16 @@ process.on("SIGINT", () => {
 
   if (state.getAgent()) {
     state.getAgent()!.interrupt();
+    // Save session on every interrupt for crash resilience
+    try {
+      const a = state.getAgent()!;
+      saveSession(
+        a.getWorkspacePath(),
+        a.getMessages(),
+        undefined,
+        a.getProgressSnapshot(),
+      );
+    } catch {}
     state.setProcessing(false);
     updateStatusBar();
     if (tuiStarted) {

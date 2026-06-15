@@ -73,9 +73,6 @@ export interface SkillDefinition {
   autoInvoke?: boolean; // 是否允许AI自动调用
   paths?: string[]; // 路径匹配
   argumentHint?: string; // 参数提示，如 "[name]"
-  requires?: string[]; // 依赖的其他 skill（自动加载）
-  suggests?: string[]; // 建议配合使用的 skill
-  category?: string; // 分组标签，如 "methodology", "frontend"
 }
 
 // Hooks 配置

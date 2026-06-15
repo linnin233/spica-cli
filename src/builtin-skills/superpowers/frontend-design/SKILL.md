@@ -1,12 +1,6 @@
 ---
 name: frontend-design
 description: Frontend UI iteration workflow — design system, component patterns, Playwright verification
-category: frontend
-requires:
-  - executing-plans
-  - verification-before-completion
-suggests:
-  - test-driven-development
 ---
 
 <EXTREMELY-IMPORTANT>
