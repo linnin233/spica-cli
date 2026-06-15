@@ -175,17 +175,17 @@ NEVER run dev servers, watchers, or long-running commands in foreground bash. Th
 
 | Task | Tool | Parameters |
 |------|------|-----------|
-| Start dev server | \`bash\` | \`detached: true\` — returns immediately with session ID |
+| Start dev server | \`bash\` | \`detached: true\` — returns immediately with session ID. Works on all platforms: Unix (tmux/screen), Windows (PowerShell Start-Process) |
 | Start build watcher | \`bash\` | \`detached: true\` |
-| Tail server logs | \`monitor\` | \`command: "tail -f logfile"\` — streams lines as events |
-| Poll health check | \`monitor\` | \`command: "while true; do curl -s localhost:3000/health; sleep 2; done"\` |
-| Check server status | \`bash\` | Quick foreground: \`curl -s localhost:3000/health\` |
+| Stream server logs | \`monitor\` | \`persistent: true\` — redirect server output to file first, then monitor the file |
+| Poll health check | \`monitor\` | Loop that curls health endpoint every N seconds |
+| Check server status | \`bash\` | Quick foreground: \`curl\` (Unix) or \`Invoke-WebRequest\` (Windows) |
 
-<b>Pattern for server startup:</b>
-1. \`bash(command="bun run src/index.ts", detached: true)\` → returns session ID
-2. \`monitor(command="tail -f /tmp/server.log", description="Server startup")\` → watch logs
-3. \`bash(command="sleep 3 && curl -s localhost:3000/health")\` → verify it's up
-4. Continue working — server runs in background
+<b>Pattern for server startup (all platforms):</b>
+1. \`bash(command="<start-cmd> > /tmp/server.log 2>&1", detached: true)\` → returns session ID
+2. \`bash(command="sleep 3 && curl -s localhost:PORT/health")\` → verify it's up
+3. \`monitor(command="tail -f /tmp/server.log", description="Server logs")\` → watch logs
+4. Continue working — server runs in background. Use \`task_stop\` to kill if needed.
 `;
 
   // Project Guidelines — stable per project
