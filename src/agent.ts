@@ -978,6 +978,12 @@ export class SpicaAgent extends EventEmitter {
           target: targetTokens,
         });
         await this.startNonBlockingCompression(targetTokens, signal);
+        // Ensure LLM continues working after compression — inject continuation
+        // signal so it knows the tasks are NOT complete and it should resume.
+        this.agentAddMessage({
+          role: 'system' as const,
+          content: '[CONTEXT COMPRESSED] Your conversation history was compressed to stay within the context window. The summary above describes your previous work. Continue from where you left off — the tasks are NOT complete. Do NOT produce a text response. Call tools immediately to resume working.',
+        });
       }
 
       this.emit('token_usage', {
