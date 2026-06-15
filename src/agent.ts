@@ -1055,14 +1055,25 @@ export class SpicaAgent extends EventEmitter {
         }
 
         // Mid-loop context check: compress if context fills up during long work sessions.
+        // Uses same adaptive thresholds as the pre-request check (line ~961).
         if (this._roundCount > 0 && this._roundCount % 4 === 0 && this.llm) {
           const ctxWindow = this.llm.getProvider().getContextWindow();
           const t = this.llm.getTokenCounter();
           t.setContextWindow(ctxWindow);
-          if (t.estimateMessages(this.llm.getMessages()) > ctxWindow * 0.70) {
-            await this.startNonBlockingCompression(Math.floor(ctxWindow * 0.40), signal);
-            // Inject completed Phase 2 summary so LLM knows what was truncated.
-            this.applyPendingSummary();
+          const midTriggerRatio = ctxWindow < 32000 ? 0.60 :
+            ctxWindow < 64000 ? 0.75 :
+            ctxWindow < 200000 ? 0.85 : 0.90;
+          const midTargetRatio = ctxWindow < 32000 ? 0.52 :
+            ctxWindow < 64000 ? 0.60 :
+            ctxWindow < 200000 ? 0.68 : 0.72;
+          if (t.estimateMessages(this.llm.getMessages()) > ctxWindow * midTriggerRatio) {
+            await this.startNonBlockingCompression(Math.floor(ctxWindow * midTargetRatio), signal);
+            // Inject completion signal so LLM continues working after compression.
+            // The fallback summary was already injected by startNonBlockingCompression.
+            this.agentAddMessage({
+              role: 'system' as const,
+              content: '[CONTEXT COMPRESSED] Your conversation history was compressed to stay within the context window. The summary above describes your previous work. Continue from where you left off — the tasks are NOT complete. Call tools immediately to resume working.',
+            });
           }
         }
 
