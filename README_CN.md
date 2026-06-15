@@ -302,7 +302,7 @@ spica run "fix the bug"                          # 单次任务
 ```bash
 npm run dev          # 开发模式 (tsx)
 npm run build        # 构建
-npm test             # 测试 (vitest, 666 测试)
+npm test             # 测试 (vitest, 701 测试)
 npm run lint:strict  # CI 级 lint
 npx tsc --noEmit     # 类型检查
 ```

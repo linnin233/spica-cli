@@ -1,7 +1,7 @@
 graph TB
     %% ═══════════════════════════════════════════════════════════════
-    %% spica-cli Architecture — Detailed Version (code-audited 2026-06-14)
-    %% Events: 42. Tools: 33. Skills: 14. .spica/: 11 paths.
+    %% spica-cli Architecture — Detailed Version (code-audited 2026-06-16)
+    %% Events: 42. Tools: 33. Skills: 15. Tests: 701.
     %%
     %% Key architectural insight: Three-way message split
     %%   _fullHistory  → append-only, never truncated, session persistence
@@ -45,15 +45,18 @@ graph TB
 
 
 
-        subgraph COMPRESS["Compression v3 (src/core/compression.ts)"]
+        subgraph COMPRESS["Compression — 4-Layer Waterfall (src/core/compression.ts)"]
             direction TB
-            COMP_PHASE1["<b>Phase 1 — Rule Truncation</b> (instant, never blocks)<br/>① Read cachePrefixEnd → exempt prefix msgs<br/>② Build toolIdToName map (accurate tool scoring)<br/>③ Score: user=10, write/bash/git=9, [COMPACTED]=10<br/>   +error signals +2 · noise penalty -1<br/>   +content richness +0.5 · recency +1.0<br/>   tool msgs scored by toolId lookup (not content)<br/>④ Graduated keep tiers (ratio-based)<br/>   >3×: 15% min 10 · >2×: 25% min 15<br/>   >1.5×: 35% min 20 · else: 50% min 25<br/>   floor=10 cap=40% of nonSystem<br/>⑤ Per-role content limits (adaptive)<br/>   user=∞ · tool=1.5× · asst+tc=1.2×<br/>   already-truncated → 2× lenient<br/>   base=0.10×contextWindow (~4K chars)<br/>⑥ llm.setMessages([...sys, ...cleaned])<br/>⑦ Restore cachePrefixEnd + validateCachePrefix()"]
-            COMP_PHASE2["<b>Phase 2 — Summary</b> (background, non-blocking)<br/>buildSummaryPrompt(oldMessages)<br/>  user msgs: full · asst: tools+key args<br/>  tool_result: name + 500 chars + error tag<br/>validateSummaryQuality(): reject empty/boilerplate<br/>  ↓<br/>Heavy drop (>50%): buildFallbackSummary NOW<br/>  + background LLM summary for next request<br/>Light drop (≤50%): background promise<br/>  → _deferredSummary → applyPendingSummary()"]
+            COMP_L1["<b>Layer 1: Snip</b> (zero cost)<br/>Remove empty/tool results (<20 chars, no error)<br/>Strip orphaned assistant tool_calls<br/>Suppress duplicate consecutive user msgs<br/>Cache prefix protected (never touched)"]
+            COMP_L2["<b>Layer 2: Microcompact</b> (zero cost)<br/>Truncate tool results >20K chars<br/>Cache prefix protected<br/>In-place mutation, no allocations"]
+            COMP_L3["<b>Layer 3: Context Collapse</b> (1 API call)<br/>Preserve: last user msg + tail (4–8 msgs)<br/>Summarize middle range via LLM<br/>tool-chain boundary check prevents orphans<br/>Returns early if under threshold"]
+            COMP_L4["<b>Layer 4: AutoCompact</b> (1 API call, last resort)<br/>Full head LLM summarization<br/>Last user msg always preserved verbatim<br/>ensureToolChainBoundary() for chain integrity<br/>[CONTEXT COMPRESSED] continuation signal injected"]
+            COMP_RECENCY["<b>Recency Preservation</b><br/>buildSummaryPrompt tags msgs [OLD]/[LATEST]<br/>Summary LLM prioritizes current task<br/>validateSummaryQuality rejects boilerplate<br/>buildFallbackSummary on LLM failure"]
         end
 
-        INTR["<b>Interrupt Handler</b><br/>AbortController per runLoop<br/>cancelSeq high-water mark<br/>SIGKILL to process group (-pid)<br/>ESC×2 trigger · 200ms debounce<br/>preserves partial tool results<br/>clears pendingCancel in finally block"]
+        INTR["<b>Interrupt Handler</b><br/>AbortController per runLoop<br/>cancelSeq high-water mark<br/>SIGKILL to process group (-pid)<br/>ESC×2 trigger · 200ms debounce<br/>preserves partial tool results<br/>always restores idle state after interrupt<br/>saves session on every SIGINT (crash resilience)"]
 
-        SESSION["<b>Session & Archive</b> (src/utils/session.ts)<br/>two-state model (decoupled)<br/>active → .spica/session.json<br/>  saveSession(ws, messages, name, progress)<br/>  → writes _fullHistory (full, never truncated)<br/>  → merges ProgressTracker snapshot<br/>  auto-save every 5 tool rounds (crash resilience)<br/>historical → .spica/sessions/&lt;id&gt;.json<br/>  archiveSession() generates LLM summary<br/>  cleanup: keep max 50 sessions<br/>switching: loadSessionById → session.json<br/>restore: ProgressTracker.fromJSON() on init"]
+        SESSION["<b>Session & Archive</b> (src/utils/session.ts)<br/>two-state model (decoupled)<br/>active → .spica/session.json<br/>  saveSession(ws, messages, name, progress)<br/>  → writes _fullHistory (full, never truncated)<br/>  → merges ProgressTracker snapshot<br/>  auto-save every 5 tool rounds<br/>  saved on SIGINT/ESC ESC interrupt<br/>historical → .spica/sessions/&lt;id&gt;.json<br/>  archiveSession() generates LLM summary<br/>  progressive UX: immediate feedback + summary<br/>  cleanup: keep max 50 sessions<br/>switching: loadSessionById → session.json<br/>restore: ProgressTracker.fromJSON() on init<br/>  session.json auto-loaded on restart"]
 
         SUB["<b>Sub-Agents</b> (src/tools/subAgent.ts)<br/>4 types (no timeouts — run to completion)<br/>explore: read-only (glob, grep, read, directory)<br/>review: explore tools + lint<br/>fix: read, edit, bash, lint<br/>build: all tools<br/>max 3 parallel · early-exit signal<br/>worktree isolation option<br/>per-task model override (alias→ID)"]
 
@@ -77,7 +80,7 @@ graph TB
         subgraph TOKEN_SUB["TokenCounter + Context Management"]
             direction TB
             TOK_COUNT["<b>TokenCounter</b> (src/llm/TokenCounter.ts)<br/>tiktoken real tokenizer (o200k_base)<br/>estimateMessages() · estimateText()<br/>per-model context window resolution<br/>exact match → prefix match → 128K default"]
-            TOK_COMP["<b>Compression Triggers</b><br/>Adaptive thresholds by context window:<br/>  <32K: 50% · 32-64K: 55%<br/>  64-200K: 60% · >200K: 65%<br/>  target = 35-40% of contextWindow<br/>Triggers: auto (>threshold) + idle (30s)<br/>  + manual (/compact)<br/>Non-blocking: Phase 1 instant, Phase 2 background"]
+            TOK_COMP["<b>Compression Triggers</b><br/>Adaptive thresholds (pre-request):<br/>  <32K: 55%→48% · 32-64K: 70%→55%<br/>  64-200K: 80%→60% · ≥200K: 85%→65%<br/>Mid-loop (every 4 rounds, higher thresholds):<br/>  <32K: 65%→55% · 32-64K: 80%→65%<br/>  64-200K: 88%→72% · ≥200K: 92%→78%<br/>Triggers: auto (>threshold) + manual (/compact)<br/>4-layer waterfall: Snip→Microcompact→Collapse→AutoCompact<br/>[CONTEXT COMPRESSED] signal after compression"]
         end
 
         TOOLS["<b>33 Tools</b> (registry.ts + impl/)<br/><br/>📁 <b>File (11)</b>: read write edit file_multi_edit<br/>  file_replace file_insert file_delete file_copy<br/>  file_move file_exists file_patch<br/>🔍 <b>Search (4)</b>: glob grep directory_list directory_create<br/>💻 <b>Shell (5)</b>: bash(sandbox) monitor task_stop git workspace<br/>✅ <b>Quality (5)</b>: lint test format code_health test_quality_check<br/>🌐 <b>Web (3)</b>: web_search web_fetch gh<br/>📋 <b>Task (5)</b>: todo_write todo_read task skill question<br/><br/><b>Auto Features</b><br/>syntax check on write/edit (tsc/py_compile/bash -n)<br/>lazy tool loading: 16 tools withheld until first use<br/>  saves ~1,500 tok/call · promote on first execute<br/>tool cache: 30s TTL · sandbox: bwrap<br/>tool analytics: .spica/tool-usage.json<br/>replace_all detection · 8K output cap"]
@@ -86,7 +89,7 @@ graph TB
 
         HOOKS["<b>Hooks System</b> (src/hooks/index.ts)<br/>PreToolUse / PostToolUse<br/>actions: block · confirm · warn · log<br/>global (~/.spica/hooks.json)<br/>project (.spica/hooks.json)<br/>project strictness ≤ global"]
 
-        SKILLS["<b>14 Built-in Skills</b><br/>brainstorming · systematic-debugging<br/>test-driven-development · verification<br/>executing-plans · writing-plans<br/>dispatching-parallel-agents<br/>subagent-driven-development<br/>requesting-code-review · receiving<br/>finishing-a-development-branch<br/>using-git-worktrees · writing-skills<br/>using-superpowers"]
+        SKILLS["<b>15 Built-in Skills</b><br/>6 methodology: tdd · verification · debugging<br/>  brainstorming · executing-plans · writing-plans<br/>4 workflow: git-worktrees · finishing-branch<br/>  code-review(requesting+receiving)<br/>2 meta: using-superpowers · writing-skills<br/>2 parallel: dispatching-agents · subagent-dev<br/>1 frontend: frontend-design<br/><br/><b>Multi-Skill Loading</b><br/>skill(name=\"tdd, frontend-design\") — comma-separated<br/>content-based ref detection (superpowers:name)<br/>rebuildSystemPrompt() on install/uninstall<br/>SKILL.md YAML frontmatter parsing"]
     end
 
     %% ==================== INFRASTRUCTURE LAYER ====================
@@ -153,11 +156,15 @@ graph TB
     INTR --> AGENT_CORE
     INTR --> LLM_ABORT
 
-    %% Compression subsystem
-    AGENT_CORE --> COMP_PHASE1
-    COMP_PHASE1 --> COMP_PHASE2
-    TOK_COMP --> COMP_PHASE1
-    COMP_PHASE2 -.-> AGENT_CORE
+    %% Compression subsystem (4-layer waterfall)
+    AGENT_CORE --> COMP_L1
+    COMP_L1 --> COMP_L2
+    COMP_L2 --> COMP_L3
+    COMP_L3 --> COMP_L4
+    TOK_COMP --> COMP_L1
+    COMP_L4 -.-> AGENT_CORE
+    COMP_RECENCY --> COMP_L3
+    COMP_RECENCY --> COMP_L4
 
     %% Session flow
     AGENT_CORE --> SESSION

@@ -545,7 +545,7 @@ Supports any OpenAI-compatible API (OpenAI, Anthropic via proxy, DeepSeek, Gemin
 ```bash
 npm run dev          # dev mode (tsx)
 npm run build        # build executable
-npm test             # tests (vitest, 666 tests)
+npm test             # tests (vitest, 701 tests)
 npm run test:run     # run once
 npm run lint:strict  # CI-ready lint
 npx tsc --noEmit     # type check
