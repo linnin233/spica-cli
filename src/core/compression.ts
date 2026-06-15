@@ -4,496 +4,426 @@ import type { ChatMessage } from '../llm/providers/BaseProvider';
 import { getCompactPrompt } from '../prompts/system';
 import { cleanMessages } from '../utils/messageCleaner';
 
-// Summary key args — tool arguments worth preserving in compressed summaries
-export const SUMMARY_KEY_ARGS = new Set([
-  'path',
-  'command',
-  'action',
-  'pattern',
-  'query',
-  'url',
-  'question',
-  'prompt',
-]);
-
+/**
+ * Clean messages before sending to LLM.
+ * Thin wrapper used by agent.setMessages().
+ */
 export function cleanMessagesForLLM(messages: ChatMessage[]): ChatMessage[] {
   return cleanMessages(messages);
 }
 
+// ── Token estimation helper ──
+
+function estimateTokens(llm: LLMClient, messages: ChatMessage[]): number {
+  const tc = llm.getTokenCounter();
+  tc.setContextWindow(llm.getProvider().getContextWindow());
+  return tc.estimateMessages(messages);
+}
+
+function isUnderThreshold(llm: LLMClient, targetTokens: number): boolean {
+  const msgs = llm.getMessages();
+  const nonSystem = msgs.filter(m => m.role !== 'system');
+  return estimateTokens(llm, nonSystem) < targetTokens;
+}
+
 /**
- * Non-blocking compression — two-phase approach.
- * Phase 1 (instant): Rule-based truncation of low-value messages, applied NOW.
- * Phase 2 (background): Fire LLM summary for old messages, store for next request.
+ * Restore cache prefix after setMessages() to cover system messages.
  *
- * On the next request, applyPendingSummary() injects the summary after system messages.
+ * setMessages() resets cachePrefixEnd to -1 (no cache). System messages are
+ * always at the start, never change, and are the most valuable cache target.
+ * Restoring to cover them ensures API-side prompt caching continues to hit.
  */
-export async function startNonBlockingCompression(
+function restoreCachePrefix(llm: LLMClient, systemMessageCount: number): void {
+  const provider = llm.getProvider();
+  if (typeof provider.setCachePrefixEnd === 'function') {
+    provider.setCachePrefixEnd(systemMessageCount - 1);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Layer 1: Snip — zero-cost removal of empty/useless turns
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Remove low-value messages with zero API cost.
+ *
+ * Removes:
+ * - Tool results where content is empty or trivial (<20 chars, no error)
+ * - Assistant toolCalls where all corresponding tool_results were removed
+ * - Duplicate consecutive user messages (same content)
+ *
+ * Returns the filtered messages (does not mutate the provider directly —
+ * caller applies via setMessages if changes were made).
+ */
+export function snipMessages(messages: ChatMessage[], cachePrefixEnd: number = -1): { messages: ChatMessage[]; removed: number } {
+  const ERROR_PATTERN = /error|Error|FAILED|denied|refused|exception|stack trace|fatal/i;
+
+  // Pass 1: identify which tool results to remove.
+  // NEVER remove messages within the cache prefix — that would invalidate
+  // API-side prompt caching and waste tokens on the next request.
+  const toolResultsToRemove = new Set<ChatMessage>();
+  for (let i = 0; i < messages.length; i++) {
+    if (i <= cachePrefixEnd) continue; // cache-protected
+    const m = messages[i];
+    if (m.role === 'tool') {
+      const content = (m.content || '').trim();
+      if (content.length < 20 && !ERROR_PATTERN.test(content.slice(0, 200))) {
+        toolResultsToRemove.add(m);
+      }
+    }
+  }
+
+  // Pass 2: identify toolCallIds that have ALL results removed
+  const removedToolCallIds = new Set<string>();
+  for (const m of messages) {
+    if (m.role === 'tool' && toolResultsToRemove.has(m) && m.toolCallId) {
+      removedToolCallIds.add(m.toolCallId);
+    }
+  }
+
+  // But keep toolCallIds where ANY result is NOT removed
+  for (const m of messages) {
+    if (m.role === 'tool' && !toolResultsToRemove.has(m) && m.toolCallId) {
+      removedToolCallIds.delete(m.toolCallId);
+    }
+  }
+
+  // Pass 3: build filtered list.
+  // Cache prefix messages pass through untouched (no toolCall stripping either).
+  const result: ChatMessage[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+
+    // Remove empty tool results (only non-prefix)
+    if (toolResultsToRemove.has(m)) continue;
+
+    // Assistant with toolCalls: strip orphaned calls (only non-prefix)
+    if (i > cachePrefixEnd && m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
+      const survivingCalls = m.toolCalls.filter(tc => !removedToolCallIds.has(tc.id));
+      if (survivingCalls.length === 0) {
+        result.push({ ...m, toolCalls: undefined });
+        continue;
+      }
+      if (survivingCalls.length < m.toolCalls.length) {
+        result.push({ ...m, toolCalls: survivingCalls });
+        continue;
+      }
+    }
+
+    // Suppress duplicate consecutive user messages (only non-prefix)
+    if (i > cachePrefixEnd && m.role === 'user' && result.length > 0) {
+      let isDuplicate = false;
+      for (let j = result.length - 1; j >= 0; j--) {
+        if (result[j].role === 'user') {
+          if (result[j].content === m.content) isDuplicate = true;
+          break;
+        }
+      }
+      if (isDuplicate) continue;
+    }
+
+    result.push(m);
+  }
+
+  return { messages: result, removed: messages.length - result.length };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Layer 2: Microcompact — zero-cost tool result truncation
+// ═══════════════════════════════════════════════════════════════════════════
+
+const TOOL_RESULT_TRUNCATE_LIMIT = 20000; // chars
+
+/**
+ * Truncate excessively long tool results.
+ *
+ * Cache-aware: messages before cachePrefixEnd are NOT truncated
+ * (to preserve API-side prompt caching).
+ *
+ * Returns whether any messages were modified in place.
+ */
+export function microcompactMessages(messages: ChatMessage[], cachePrefixEnd: number): number {
+  let truncated = 0;
+  for (let i = 0; i < messages.length; i++) {
+    // Cache-aware: skip messages in the prefix (they're cached by the API)
+    if (i <= cachePrefixEnd) continue;
+
+    const m = messages[i];
+    if (m.role === 'tool' && (m.content || '').length > TOOL_RESULT_TRUNCATE_LIMIT) {
+      m.content = (m.content || '').slice(0, TOOL_RESULT_TRUNCATE_LIMIT) + '...[truncated]';
+      truncated++;
+    }
+  }
+  return truncated;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Layer 3: Context Collapse — LLM summary of middle range
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Collapse the "middle" of a conversation, preserving:
+ * - Early setup: first user message + following assistant response
+ * - Recent tail: last N messages
+ *
+ * Only the middle range is summarized — cheaper and less destructive
+ * than full AutoCompact.
+ */
+export async function collapseContext(
+  agent: SpicaAgent,
+  targetTokens: number,
+  signal?: AbortSignal
+): Promise<boolean> {
+  const llm = agent.getLLM();
+  if (!llm) return false;
+
+  const allMessages = llm.getMessages();
+  const systemMessages = allMessages.filter(m => m.role === 'system');
+  const nonSystem = allMessages.filter(m => m.role !== 'system');
+
+  if (nonSystem.length < 12) return false; // Not enough to split
+
+  const contextWindow = llm.getProvider().getContextWindow();
+  const tailSize = contextWindow < 32000 ? 4 : 8;
+
+  // Early setup: first user message + next assistant response (if any)
+  const firstUserIdx = nonSystem.findIndex(m => m.role === 'user');
+  if (firstUserIdx === -1) return false;
+
+  const earlySetup: ChatMessage[] = [nonSystem[firstUserIdx]];
+  // Include the assistant response that follows the first user message
+  const nextAssistant = nonSystem.slice(firstUserIdx + 1).find(m => m.role === 'assistant');
+  if (nextAssistant) earlySetup.push(nextAssistant);
+
+  // Determine if there's enough middle to collapse
+  const tail = nonSystem.slice(-tailSize);
+  const earlySet = new Set(earlySetup);
+  const tailSet = new Set(tail);
+  const middle = nonSystem.filter(m => !earlySet.has(m) && !tailSet.has(m));
+
+  if (middle.length < 4) return false; // Not enough middle messages to justify collapse
+
+  // Generate summary of middle messages
+  const summaryMsg = await generateSummary(llm, middle, signal);
+
+  // Build new messages: [system] + [early setup] + [summary] + [tail]
+  const newMessages = [...systemMessages, ...earlySetup, summaryMsg, ...tail];
+  llm.setMessages(newMessages);
+  agent.setLastSyncedProviderIndex(newMessages.length - 1);
+  restoreCachePrefix(llm, systemMessages.length);
+
+  // Check if collapse brought us under target
+  const underThreshold = isUnderThreshold(llm, targetTokens);
+
+  agent.emit('context_compressed', {
+    before: allMessages.length,
+    after: newMessages.length,
+    phase: underThreshold ? 'collapse-success' : 'collapse-insufficient',
+    middleCount: middle.length,
+    earlyCount: earlySetup.length,
+    tailCount: tail.length,
+  });
+
+  return underThreshold;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Layer 4: AutoCompact — full head LLM summary (last resort)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Full head summarization — summarize ALL non-tail messages.
+ * Highest cost, guaranteed to bring context under threshold.
+ */
+export async function autoCompactContext(
   agent: SpicaAgent,
   targetTokens: number,
   signal?: AbortSignal
 ): Promise<void> {
   const llm: LLMClient | null = agent.getLLM();
   if (!llm) return;
+
+  const allMessages = llm.getMessages();
+  const systemMessages = allMessages.filter(m => m.role === 'system');
+  const nonSystem = allMessages.filter(m => m.role !== 'system');
+
+  if (nonSystem.length === 0) {
+    agent.emit('context_compressed', {
+      before: allMessages.length,
+      after: allMessages.length,
+      tokensBefore: 0,
+      tokensAfter: 0,
+      phase: 'auto-noop-empty',
+    });
+    return;
+  }
+
+  const contextWindow = llm.getProvider().getContextWindow();
+  const usedTokens = estimateTokens(llm, nonSystem);
+
+  if (usedTokens < targetTokens) {
+    agent.emit('context_compressed', {
+      before: allMessages.length,
+      after: allMessages.length,
+      tokensBefore: usedTokens,
+      tokensAfter: usedTokens,
+      phase: 'auto-noop-under-target',
+    });
+    return;
+  }
+
+  const tailSize = contextWindow < 32000 ? 4 : contextWindow < 200000 ? 6 : 8;
+  const tail = nonSystem.slice(-tailSize);
+  const head = nonSystem.slice(0, -tailSize);
+
+  if (head.length === 0) {
+    agent.emit('context_compressed', {
+      before: allMessages.length,
+      after: allMessages.length,
+      tokensBefore: usedTokens,
+      tokensAfter: usedTokens,
+      phase: 'auto-noop-all-tail',
+    });
+    return;
+  }
+
+  const summaryMsg = await generateSummary(llm, head, signal);
+  const newMessages = [...systemMessages, summaryMsg, ...tail];
+  llm.setMessages(newMessages);
+  agent.setLastSyncedProviderIndex(newMessages.length - 1);
+  restoreCachePrefix(llm, systemMessages.length);
+
+  const newTokens = estimateTokens(llm, newMessages.filter(m => m.role !== 'system'));
+
+  agent.emit('context_compressed', {
+    before: allMessages.length,
+    after: newMessages.length,
+    tokensBefore: usedTokens,
+    tokensAfter: newTokens,
+    phase: 'auto-compact',
+    headCount: head.length,
+    tailCount: tail.length,
+  });
+}
+
+// Backward-compatible alias
+export { autoCompactContext as compressContext };
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Unified waterfall: Layer 1 → 2 → 3 → 4
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Manage context through a cost waterfall.
+ *
+ * Each layer is progressively more expensive but more powerful.
+ * Returns early as soon as context is under the target threshold.
+ *
+ * Called before every LLM request and mid-loop (every 4 rounds).
+ */
+export async function manageContext(
+  agent: SpicaAgent,
+  targetTokens: number,
+  signal?: AbortSignal
+): Promise<void> {
+  const llm = agent.getLLM();
+  if (!llm) return;
+
+  // Prevent re-entry — only one compression at a time
+  if (agent.isCompacting()) return;
+
   agent.setCompacting(true);
   const prevState = agent.stateMachine.current;
   agent.stateMachine.transition('compacting');
 
   try {
+    // ── Layer 1: Snip (zero cost) ──
     const allMessages = llm.getMessages();
-    const systemMessages = allMessages.filter(m => m.role === 'system');
-    const nonSystem = allMessages.filter(m => m.role !== 'system');
-
-    if (nonSystem.length === 0) {
+    const cachePrefixEnd = llm.getProvider().getCachePrefixEnd?.() ?? -1;
+    const { messages: snipped, removed } = snipMessages(allMessages, cachePrefixEnd);
+    if (removed > 0) {
+      llm.setMessages(snipped);
+      agent.setLastSyncedProviderIndex(snipped.length - 1);
+      restoreCachePrefix(llm, snipped.filter(m => m.role === 'system').length);
       agent.emit('context_compressed', {
         before: allMessages.length,
-        after: allMessages.length,
-        tokensBefore: 0,
-        tokensAfter: 0,
+        after: snipped.length,
+        phase: 'snip',
+        removed,
       });
-      return;
+      if (isUnderThreshold(llm, targetTokens)) return;
     }
 
-    const tokenCounter = llm.getTokenCounter();
-    const provider = llm.getProvider();
-    tokenCounter.setContextWindow(provider.getContextWindow());
-    const contextWindow = provider.getContextWindow();
-    const usedTokens = tokenCounter.estimateMessages(nonSystem);
-
-    if (usedTokens < targetTokens) {
+    // ── Layer 2: Microcompact (zero cost, cache-aware) ──
+    const msgs = llm.getMessages();
+    const truncated = microcompactMessages(msgs, cachePrefixEnd);
+    if (truncated > 0) {
+      llm.setMessages(msgs);
+      agent.setLastSyncedProviderIndex(msgs.length - 1);
+      restoreCachePrefix(llm, msgs.filter(m => m.role === 'system').length);
       agent.emit('context_compressed', {
-        before: allMessages.length,
-        after: allMessages.length,
-        tokensBefore: usedTokens,
-        tokensAfter: usedTokens,
+        before: msgs.length,
+        after: msgs.length,
+        phase: 'microcompact',
+        truncatedResults: truncated,
       });
-      return;
+      if (isUnderThreshold(llm, targetTokens)) return;
     }
 
-    // --- Phase 1: Rule-based truncation (instant) ---
-    // Preserve cache prefix: messages in the stable prefix (system + early cached
-    // messages) are excluded from scoring/truncation to maintain API-side caching.
-    const cacheEnd = llm.getProvider().getCachePrefixEnd?.() ?? -1;
-    const prefixSet: Set<ChatMessage> = new Set(
-      cacheEnd >= 0 ? allMessages.slice(0, cacheEnd + 1) : []
-    );
-    const prefixNonSystem = nonSystem.filter(m => prefixSet.has(m));
-    const compressible = nonSystem.filter(m => !prefixSet.has(m));
+    // ── Layer 3: Context Collapse (LLM, cheaper — only middle range) ──
+    const collapsed = await collapseContext(agent, targetTokens, signal);
+    if (collapsed) return;
 
-    // Keep enough messages for the LLM to retain task awareness.
-    // Graduated tiers based on how much we need to compress.
-    const ratio = usedTokens / targetTokens;
-    let keepCount: number;
-    if (ratio > 3)        keepCount = Math.max(15, Math.floor(nonSystem.length * 0.25));
-    else if (ratio > 2)   keepCount = Math.max(25, Math.floor(nonSystem.length * 0.40));
-    else if (ratio > 1.5) keepCount = Math.max(35, Math.floor(nonSystem.length * 0.55));
-    else                  keepCount = Math.max(50, Math.floor(nonSystem.length * 0.70));
-    // Floor: 10, cap at 70% of total (max 30% removal)
-    keepCount = Math.max(10, Math.min(keepCount, Math.floor(nonSystem.length * 0.70)));
-    // Allocate keep slots: prefix messages are free (always kept)
-    const slotsForCompressible = Math.max(0, keepCount - prefixNonSystem.length);
-
-    // Build toolCallId → toolName map for accurate tool message scoring.
-    // Avoids fragile content-based string matching (e.g., file contents
-    // containing '"name":"write"' would be mis-scored).
-    const toolIdToName = new Map<string, string>();
-    for (const m of nonSystem) {
-      if (m.role === 'assistant' && m.toolCalls) {
-        for (const tc of m.toolCalls) {
-          if (tc.id) toolIdToName.set(tc.id, tc.name);
-        }
-      }
-    }
-
-    // Score compressible messages by importance — keep high-value context
-    // (file writes, user intent) even if they're not in the recent tail
-    const scored = compressible.map((m, i) => ({
-      msg: m,
-      score: scoreMessage(m, i, compressible.length, toolIdToName),
-    }));
-    const lastCount = Math.max(2, Math.ceil(slotsForCompressible / 3)); // always keep recent tail
-    const tail = scored.slice(-lastCount);
-    const head = scored.slice(0, -lastCount);
-    head.sort((a, b) => b.score - a.score);
-    const topHead = head.slice(0, Math.max(0, slotsForCompressible - lastCount));
-    const selectedCompressible = [...topHead, ...tail]
-      .sort((a, b) => {
-        // restore chronological order from original indices
-        const ai = compressible.indexOf(a.msg);
-        const bi = compressible.indexOf(b.msg);
-        return ai - bi;
-      })
-      .map(s => s.msg);
-
-    // Selected = prefix messages (always kept, untruncated) + scored compressible
-    const selected = [...prefixNonSystem, ...selectedCompressible];
-    const oldMessages = nonSystem.filter(m => !selected.includes(m));
-
-    // Per-role adaptive content limits.
-    // Base limit bumped from 2000→4000 (0.05→0.10×window) so important tool output
-    // and file content survive compression.
-    const baseContentLimit = Math.max(8000, Math.floor(contextWindow * 0.12));
-    const getContentLimit = (m: ChatMessage): number => {
-      // User messages are kept in full (user intent is critical, typically short)
-      if (m.role === 'user') return Infinity;
-      // Tool results and assistant-with-toolcalls get extra space — they contain evidence
-      let limit = baseContentLimit;
-      if (m.role === 'tool') limit = baseContentLimit * 1.5;
-      else if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) limit = baseContentLimit * 1.2;
-
-      // Already truncated at provider level (8K cap with [TRUNCATED] marker) —
-      // double the limit to avoid aggressive re-truncation of already-reduced content.
-      if ((m.content || '').includes('[TRUNCATED')) {
-        limit *= 2;
-      }
-      return limit;
-    };
-
-    const truncatedRecent = selected.map(m => {
-      // Don't truncate cache-prefix messages — they're needed for cache hits
-      if (prefixSet.has(m)) return m;
-
-      const limit = getContentLimit(m);
-      const truncatedContent =
-        (m.content || '').length > limit
-          ? (m.content || '').slice(0, limit) + '...[truncated]'
-          : m.content;
-
-      const maxToolCalls = Math.max(3, Math.min(10, Math.floor(contextWindow / 25000)));
-      let truncatedToolCalls = m.toolCalls;
-      if (m.toolCalls && m.toolCalls.length > maxToolCalls) {
-        truncatedToolCalls = m.toolCalls.slice(0, maxToolCalls);
-        truncatedToolCalls.push({ id: 'truncated', name: '...[truncated]', arguments: {} });
-      }
-
-      return { ...m, content: truncatedContent, toolCalls: truncatedToolCalls };
-    });
-
-    // Clean tool messages
-    const cleaned = cleanToolMessages(truncatedRecent);
-
-    // Apply immediately — context shrinks NOW.
-    llm.setMessages([...systemMessages, ...cleaned]);
-
-    // Reset sync index so syncFullHistory doesn't miss new messages.
-    // Without this, _lastSyncedProviderIndex stays at old (high) value
-    // and future syncFullHistory calls find startIdx > provider.length → no-op.
-    agent.setLastSyncedProviderIndex(llm.getMessages().length - 1);
-
-    // Restore cache prefix boundary to include preserved prefix messages.
-    // setMessages() resets cachePrefixEnd to system-only — we must restore it
-    // so the API-side prompt cache continues to hit on the full stable prefix.
-    // prefixNonSystem messages are at the head of `cleaned` (line 114) and were
-    // not truncated (line 133), so they remain valid cache candidates.
-    const newMessages = llm.getMessages();
-    let maxPrefixIdx = systemMessages.length - 1; // fallback: system-only
-    for (let i = systemMessages.length; i < newMessages.length; i++) {
-      if (prefixSet.has(newMessages[i])) {
-        maxPrefixIdx = i;
-      }
-    }
-    llm.getProvider().setCachePrefixEnd(maxPrefixIdx);
-
-    // Validate cache prefix invariants after restoration.
-    // Catches silent cache invalidation before it hits production API calls.
-    const validation = llm.getProvider().validateCachePrefix();
-    if (!validation.valid) {
-      console.warn(
-        '[compression] cachePrefixEnd validation FAILED:',
-        validation.errors.join('; ')
-      );
-    }
-
-    const newTokens = tokenCounter.estimateMessages(cleaned);
-
-    // Per-role counts for observability
-    const countByRole = (msgs: ChatMessage[]) => ({
-      user: msgs.filter(m => m.role === 'user').length,
-      assistant: msgs.filter(m => m.role === 'assistant').length,
-      tool: msgs.filter(m => m.role === 'tool').length,
-    });
-
-    const droppedRatio = nonSystem.length > 0
-      ? oldMessages.length / nonSystem.length
-      : 0;
-
-    agent.emit('context_compressed', {
-      before: allMessages.length,
-      after: systemMessages.length + cleaned.length,
-      tokensBefore: usedTokens,
-      tokensAfter: newTokens,
-      kept: countByRole(cleaned),
-      dropped: countByRole(oldMessages),
-      phase: 'phase1-only',
-      droppedRatio,
-    });
-
-    // --- Phase 2: LLM summary ---
-    if (oldMessages.length === 0) return;
-
-    // Heavy drop (>50% of compressible messages removed): inject a rule-based
-    // fallback summary immediately so the LLM has context NOW, then fire the
-    // LLM summary in background for the next request. This keeps compression
-    // off the critical path — the user never waits for an LLM summary.
-    if (oldMessages.length > selectedCompressible.length) {
-      // Instant fallback: rule-based summary (no LLM call)
-      const fallbackSummary = buildFallbackSummary(oldMessages);
-      if (fallbackSummary.content && fallbackSummary.content.trim()) {
-        const msgs = llm.getMessages();
-        const sysCount = msgs.filter(m => m.role === 'system').length;
-        msgs.splice(sysCount, 0, fallbackSummary);
-        llm.setMessages(msgs);
-      }
-
-      // Background: fire LLM summary for next request (replaces fallback)
-      if (!agent.getPendingCompression()) {
-        agent.setPendingCompression((async () => {
-          try {
-            const summaryMsg = await generateSummary(llm, oldMessages, signal);
-            if (summaryMsg.content?.trim()) {
-              agent.setDeferredSummary(summaryMsg);
-            }
-            agent.emit('context_compressed', {
-              before: allMessages.length,
-              after: systemMessages.length + cleaned.length,
-              tokensBefore: usedTokens,
-              tokensAfter: newTokens,
-              phase: 'phase1+deferred-summary',
-              droppedRatio,
-              summaryLength: summaryMsg.content?.length || 0,
-            });
-          } catch {
-            agent.setDeferredSummary(null);
-          }
-          agent.setPendingCompression(null);
-        })());
-      }
-
-      return; // cleanup handled by finally block
-    }
-
-    // Light drop: summary runs in background for next request.
-    // Guard: if a previous Phase 2 is still running, skip — don't orphan
-    // its promise (which would discard its result when overwritten).
-    if (agent.getPendingCompression()) {
-      return; // cleanup handled by finally block
-    }
-
-    agent.setPendingCompression((async () => {
-      try {
-        const summaryMsg = await generateSummary(llm, oldMessages, signal);
-        const summaryLen = summaryMsg.content?.length || 0;
-        if (summaryMsg.content && summaryMsg.content.trim()) {
-          agent.setDeferredSummary(summaryMsg);
-        }
-        agent.emit('context_compressed', {
-          before: allMessages.length,
-          after: systemMessages.length + cleaned.length,
-          tokensBefore: usedTokens,
-          tokensAfter: newTokens,
-          phase: 'phase1+deferred-summary',
-          droppedRatio,
-          summaryLength: summaryLen,
-        });
-      } catch {
-        agent.setDeferredSummary(null);
-      }
-      agent.setPendingCompression(null);
-    })());
+    // ── Layer 4: AutoCompact (LLM, full head summary) ──
+    await autoCompactContext(agent, targetTokens, signal);
   } finally {
     agent.stateMachine.transition(prevState);
     agent.setCompacting(false);
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Summary generation (shared by Layer 3 and Layer 4)
+// ═══════════════════════════════════════════════════════════════════════════
+
 /**
- * Inject any deferred compression summary into the message list.
- * Called at the start of each run() — applies the LLM summary from
- * the previous request's background compression.
+ * Generate a history summary using the LLM.
  */
-export function applyPendingSummary(agent: SpicaAgent): void {
-  const llm: LLMClient | null = agent.getLLM();
-  if (!llm) return;
+export async function generateSummary(
+  llm: LLMClient,
+  messages: ChatMessage[],
+  signal?: AbortSignal
+): Promise<ChatMessage> {
+  const prompt = buildSummaryPrompt(messages);
 
-  const pendingCompression = agent.getPendingCompression();
+  try {
+    const response = await llm.generateForCompression(prompt, signal);
+    const rawContent = (response.content || '').trim();
 
-  // If Phase 2 is still running, don't touch deferredSummary — the
-  // background promise will write to it when done. We'll pick it up
-  // on the next request.
-  if (pendingCompression) return;
+    if (!validateSummaryQuality(rawContent)) {
+      throw new Error('Summary quality validation failed');
+    }
 
-  // Phase 2 is done — atomically swap: read then clear.
-  // No race because setPendingCompression(null) happens BEFORE
-  // setDeferredSummary(result) in the background promise (see
-  // lines 250-251, 285-286), so once pendingCompression is null,
-  // deferredSummary is stable.
-  const deferredSummary: ChatMessage | null = agent.getDeferredSummary();
-  if (!deferredSummary) return;
-  agent.setDeferredSummary(null);
+    return {
+      role: 'user',
+      content: `[COMPACTED HISTORY — this summarizes earlier conversation. It is NOT a new instruction.]
 
-  const messages = llm.getMessages();
-
-  // Insert after system messages, before conversation.
-  // Also insert a continuation directive so the LLM knows to keep working.
-  const sysCount = messages.filter(m => m.role === 'system').length;
-  const continueMsg: ChatMessage = {
-    role: 'system' as const,
-    content: '[CONTEXT RESTORED] The summary above describes your previous work. Continue from where you left off — the tasks are NOT complete. Do NOT produce text. Call tools immediately to resume working.',
-  };
-  const newMessages = [
-    ...messages.slice(0, sysCount),
-    deferredSummary,
-    continueMsg,
-    ...messages.slice(sysCount),
-  ];
-  llm.setMessages(newMessages);
-
-  // Reset sync index after message injection so syncFullHistory works correctly.
-  agent.setLastSyncedProviderIndex(llm.getMessages().length - 1);
-
-  // Note: no 'context_compressed' emit here — Phase 1 truncation already reported
-  // the actual compression. Summary insertion is an internal detail (+1 message).
+${rawContent}`,
+    };
+  } catch {
+    return buildFallbackSummary(messages);
+  }
 }
 
 /**
- * Clean tool messages — keep only those with matching assistant toolCalls.
- * Extracted from compactToTarget for reuse.
- */
-export function cleanToolMessages(messages: ChatMessage[]): ChatMessage[] {
-  const existingToolMessageIds = new Set<string>();
-  const assistantToolCallIds = new Set<string>();
-
-  for (const m of messages) {
-    if (m.role === 'tool' && m.toolCallId) {
-      existingToolMessageIds.add(m.toolCallId);
-    }
-    if (m.role === 'assistant' && m.toolCalls) {
-      for (const tc of m.toolCalls) {
-        assistantToolCallIds.add(tc.id);
-      }
-    }
-  }
-
-  const result: ChatMessage[] = [];
-  for (const m of messages) {
-    if (m.role === 'user' || m.role === 'assistant') {
-      if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
-        const hasAllToolMessages = m.toolCalls.every(tc => existingToolMessageIds.has(tc.id));
-        if (!hasAllToolMessages) {
-          result.push({ ...m, toolCalls: undefined });
-        } else {
-          result.push(m);
-        }
-      } else {
-        result.push(m);
-      }
-    } else if (m.role === 'tool' && m.toolCallId) {
-      if (assistantToolCallIds.has(m.toolCallId)) {
-        result.push(m);
-      }
-    }
-  }
-  return result;
-}
-
-/**
- * Score a message for retention priority during compression.
- * Higher score = more likely to be kept. Scores range from ~1 to ~14.
- *
- * Base scores (by role + action type):
- * - compression summary: 10 (must preserve context — never dropped)
- * - user messages: 10 (user intent is critical)
- * - assistant with write/bash/git: 9 (actual code/state changes)
- * - assistant with edit:     7 (code modifications)
- * - assistant with other TC: 3 (generic tool calls)
- * - assistant no TC:         2 (commentary)
- * - tool for write/git:      4 (write results)
- * - tool for read/grep:      1 (transient reads — low value)
- * - tool for other:          2
- *
- * Modifiers:
- * - recency bonus:  +1.0 for messages in the last 25%
- * - error signal:   +2.0 for tool results containing errors/exceptions
- * - content signal: +0.5 for messages >200 chars (information-rich)
- * - noise penalty:  -1.0 for tool results <20 chars (usually just "OK" or empty)
- */
-export function scoreMessage(
-  msg: ChatMessage,
-  index: number,
-  total: number,
-  toolIdToName?: Map<string, string>,
-): number {
-  const content = msg.content || '';
-  const recencyWeight = index > total * 0.75 ? 1.0 : 0;
-
-  // Protect compression summaries — they carry context that must not be lost
-  if (content.startsWith('[COMPACTED CONTEXT')) return 10;
-
-  if (msg.role === 'user') {
-    // User messages: base=10, plus content richness boost
-    // Very short user messages like "yes"/"no" still get 10 (intent is intent)
-    const lengthBonus = content.length > 200 ? 0.5 : 0;
-    return 10 + recencyWeight + lengthBonus;
-  }
-
-  if (msg.role === 'tool') {
-    let score = 1; // default: low-value read result
-
-    // Use the tool name map (derived from matching assistant toolCalls) for
-    // accurate scoring. Content-based matching (e.g. includes('"name":"write"'))
-    // can false-match file contents, grep output, or bash stdout.
-    const toolName = toolIdToName?.get(msg.toolCallId || '') || '';
-    if (toolName) {
-      const hiValueTools = new Set([
-        'write', 'edit', 'file_multi_edit', 'file_delete',
-        'file_move', 'file_copy', 'bash', 'git',
-      ]);
-      if (hiValueTools.has(toolName)) {
-        score = 4;
-      }
-    }
-
-    if (score === 1 && content.length < 20) {
-      // Near-empty read results are noise (e.g., "OK", empty string)
-      score = 0;
-    }
-
-    // Error/exception signals — critical diagnostic information
-    const hasError = /error|Error|FAILED|denied|refused|exception|stack trace|fatal/i.test(
-      content.slice(0, 200)
-    );
-    if (hasError) score += 2;
-
-    // Content richness: substantial tool output deserves preservation
-    if (content.length > 200) score += 0.5;
-
-    return score + recencyWeight;
-  }
-
-  if (msg.role === 'assistant') {
-    if (msg.toolCalls && msg.toolCalls.length > 0) {
-      const toolNames = msg.toolCalls.map(tc => tc.name);
-      let score = 3; // generic tool calls
-      if (toolNames.some(n => /\b(write|bash|git)\b/.test(n))) score = 9;
-      else if (toolNames.some(n => /\b(edit|file_multi_edit|file_patch)\b/.test(n))) score = 7;
-      return score + recencyWeight;
-    }
-    // Plain assistant commentary
-    return 2 + recencyWeight;
-  }
-
-  return 1 + recencyWeight;
-}
-
-/**
- * Build a summary prompt from messages (without calling LLM).
- * Produces the same prompt text as generateSummary uses internally.
- * Used by non-blocking compression to create the prompt for background summarization.
+ * Build a summary prompt from messages.
+ * Structured format: files, functions, errors, decisions, status, next steps.
  */
 export function buildSummaryPrompt(messages: ChatMessage[]): string {
   const messagesText = messages
     .map(m => {
       if (m.role === 'system') {
-        return `system: ${m.content || ''}`;
+        return `system: ${(m.content || '').slice(0, 300)}`;
       }
 
       if (m.role === 'user') {
@@ -503,7 +433,6 @@ export function buildSummaryPrompt(messages: ChatMessage[]): string {
       if (m.role === 'tool') {
         const toolName = (m as any).name || 'unknown';
         const tc = (m.content || '').slice(0, 500).replace(/\n/g, '\\n');
-        // Flag errors so the summary LLM knows something went wrong
         const err = /error|Error|FAILED|denied|refused|stack trace|fatal/i.test(
           (m.content || '').slice(0, 200)
         );
@@ -516,8 +445,9 @@ export function buildSummaryPrompt(messages: ChatMessage[]): string {
         const toolInfo = m.toolCalls
           .map(tc => {
             const args = tc.arguments || {};
+            const keyArgs = ['path', 'command', 'action', 'pattern', 'query', 'url', 'question', 'prompt'];
             const keyArgsStr = Object.entries(args)
-              .filter(([k]) => SUMMARY_KEY_ARGS.has(k))
+              .filter(([k]) => keyArgs.includes(k))
               .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
               .join(', ');
             return keyArgsStr ? `${tc.name}(${keyArgsStr})` : tc.name;
@@ -535,14 +465,44 @@ export function buildSummaryPrompt(messages: ChatMessage[]): string {
 }
 
 /**
+ * Build a rule-based fallback summary without calling the LLM.
+ */
+export function buildFallbackSummary(messages: ChatMessage[]): ChatMessage {
+  const items: string[] = [];
+  for (const m of messages) {
+    if (m.role === 'user') {
+      items.push((m.content || '').slice(0, 200));
+    } else if (m.toolCalls && m.toolCalls.length > 0) {
+      const toolNames = m.toolCalls
+        .map(tc => {
+          const args = tc.arguments || {};
+          const keyArgs = ['path', 'command', 'action', 'pattern', 'query', 'url', 'question', 'prompt'];
+          const keyArgsStr = Object.entries(args)
+            .filter(([k]) => keyArgs.includes(k))
+            .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
+            .join(', ');
+          return keyArgsStr ? `${tc.name}(${keyArgsStr})` : tc.name;
+        })
+        .join(', ');
+      items.push(`[${toolNames}]`);
+    } else if (m.role === 'tool') {
+      items.push(`[tool_result: ${(m as any).name || '?'}]`);
+    }
+  }
+  const summary = items.join(' | ') || 'Early conversation compressed';
+  return {
+    role: 'user',
+    content: `[COMPACTED HISTORY — rule-based summary. Work is IN PROGRESS, continue from where you left off.]
+${summary}`,
+  };
+}
+
+/**
  * Validate that an LLM-generated summary is actually useful.
- * Rejects: empty content, boilerplate meta-text, hallucinated non-content.
- * Returns true if the summary passes quality checks.
  */
 export function validateSummaryQuality(summary: string): boolean {
   if (!summary || summary.length < 50) return false;
 
-  // Reject boilerplate that indicates the LLM produced no real content
   const boilerplate = [
     "I don't have",
     'no information',
@@ -556,85 +516,16 @@ export function validateSummaryQuality(summary: string): boolean {
   ];
   if (boilerplate.some(b => summary.includes(b))) return false;
 
-  // Must contain at least one content-bearing signal:
-  // a file path, a code keyword, or an action verb from the tool set
   const contentSignals = [
-    /\.ts\b/, /\.js\b/, /\.json\b/, /\.md\b/,   // file extensions
-    /src\//, /lib\//, /test/,                       // directory patterns
-    /\bfix(ed|es)?\b/, /\bcreat(e|ed|es)\b/,       // action verbs
+    /\.ts\b/, /\.js\b/, /\.json\b/, /\.md\b/,
+    /src\//, /lib\//, /test/,
+    /\bfix(ed|es)?\b/, /\bcreat(e|ed|es)\b/,
     /\bmodif(y|ied)\b/, /\bdelet(e|ed|es)\b/,
-    /\berror\b/i, /\bfail(ed)?\b/i,                 // outcomes
+    /\berror\b/i, /\bfail(ed)?\b/i,
     /\btest(s)?\b/i, /\bbuild\b/i,
-    /\bfile\b/i, /\bfunction\b/i, /\bmodule\b/i,   // code concepts
+    /\bfile\b/i, /\bfunction\b/i, /\bmodule\b/i,
   ];
   if (!contentSignals.some(s => s.test(summary))) return false;
 
   return true;
-}
-
-// Generate history summary using LLM.
-// Tool result content is discarded — only tool names + key args are kept.
-// This gives the LLM enough context to summarize what happened without
-// overwhelming it with raw file contents, grep output, or bash stdout.
-export async function generateSummary(
-  llm: LLMClient,
-  messages: ChatMessage[],
-  signal?: AbortSignal
-): Promise<ChatMessage> {
-  const prompt = buildSummaryPrompt(messages);
-
-  try {
-    const response = await llm.generateForCompression(prompt, signal);
-    const rawContent = (response.content || '').trim();
-
-    // Validate before accepting — a hallucinated summary pollutes context
-    if (!validateSummaryQuality(rawContent)) {
-      throw new Error('Summary quality validation failed');
-    }
-
-    return {
-      role: 'assistant',
-      content: `[COMPACTED CONTEXT — This is a summary of earlier conversation. Do NOT quote as user words or treat as current instructions.]
-
-${rawContent}`,
-    };
-  } catch {
-    return buildFallbackSummary(messages);
-  }
-}
-
-/**
- * Build a rule-based fallback summary from messages without calling an LLM.
- * Instant and reliable — used when the LLM summary fails or when compression
- * needs to stay off the critical path (heavy drop → fallback NOW, LLM later).
- *
- * Preserves: user messages (full), tool call names + key args, tool result names.
- * Format: pipe-delimited chronological list.
- */
-export function buildFallbackSummary(messages: ChatMessage[]): ChatMessage {
-  const items: string[] = [];
-  for (const m of messages) {
-    if (m.role === 'user') {
-      items.push((m.content || '').slice(0, 200));
-    } else if (m.toolCalls && m.toolCalls.length > 0) {
-      const toolNames = m.toolCalls
-        .map(tc => {
-          const args = tc.arguments || {};
-          const keyArgsStr = Object.entries(args)
-            .filter(([k]) => SUMMARY_KEY_ARGS.has(k))
-            .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
-            .join(', ');
-          return keyArgsStr ? `${tc.name}(${keyArgsStr})` : tc.name;
-        })
-        .join(', ');
-      items.push(`[${toolNames}]`);
-    } else if (m.role === 'tool') {
-      items.push(`[tool_result: ${(m as any).name || '?'}]`);
-    }
-  }
-  const summary = items.join(' | ') || 'Early conversation compressed';
-  return {
-    role: 'assistant',
-    content: `[COMPACTED CONTEXT — Rule-based summary. Work is IN PROGRESS, continue from where you left off.]\n${summary}`,
-  };
 }

@@ -246,16 +246,19 @@ export function getSystemPrompt(
   );
 }
 export function getCompactPrompt(messagesText: string): string {
-  return `You are summarizing conversation history for YOUR OWN future reference. You will read this summary later to continue working.
+  return `You are summarizing YOUR OWN conversation history. You will read this summary in a future turn to continue working.
 
-CRITICAL: The conversation being summarized represents IN-PROGRESS WORK. The tasks described are NOT complete. You must accurately record what remains to be done so your future self can continue immediately without re-investigating.
+Write in first person: "I" refers to you (the assistant), the other speaker is the user. This is a technical summary for YOUR use — be specific and accurate.
 
-## Must Preserve
-1. User's explicit requirements and constraints (verbatim if short)
-2. What files were modified/created and why
-3. Current task status — exactly what is in progress and what's next
-4. Errors hit and their solutions (so you don't repeat mistakes)
-5. Key technical decisions (e.g., "used SQLite not Postgres because…")
+CRITICAL: The conversation being summarized represents IN-PROGRESS WORK. The tasks described are NOT complete. You must accurately record what remains to be done so you can continue immediately without re-investigating.
+
+## Must Preserve (Be Specific)
+1. User's explicit requirements and constraints — verbatim if short
+2. File paths modified/created and WHY — include full paths with extensions (e.g. \`src/core/compression.ts\`)
+3. Function names, class names, key variables changed
+4. Current task status — exactly what is in progress and what's next
+5. Errors hit and their solutions — include error messages verbatim so you don't repeat mistakes
+6. Key technical decisions and their rationale (e.g., "used synchronous LLM call instead of background because…")
 
 ## Can Omit
 - Tool outputs (full diffs, file contents, command stdout)
@@ -268,16 +271,21 @@ CRITICAL: The conversation being summarized represents IN-PROGRESS WORK. The tas
 [One sentence: what the user asked you to do. This is the OVERARCHING GOAL — it is NOT yet complete.]
 
 ## Completed
+- \`path/to/file.ts\` — what was changed and why
 - ...
 
 ## In Progress
-- [What you were doing when context ran out]
+- [What you were doing when context ran out — be specific about which file/function]
 
 ## Pending (NOT YET DONE)
 - [List every task/todo that is NOT yet completed]
+- ...
+
+## Errors & Fixes
+- [Error message] → [solution applied]
 
 ## Decisions
-- ...
+- [Decision] — because [rationale]
 
 ## Next Action
 [The EXACT next step to take when you resume. Be specific: which file, what change.]

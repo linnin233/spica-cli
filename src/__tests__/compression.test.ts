@@ -1,450 +1,319 @@
-// Compression integration tests
+// Layered compression integration tests
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SpicaAgent } from '../agent';
 import { TokenCounter } from '../llm/TokenCounter';
+import {
+  snipMessages,
+  microcompactMessages,
+  autoCompactContext,
+} from '../core/compression';
 import type { ChatMessage } from '../llm/providers/BaseProvider';
 
-describe('Compression Integration', () => {
+// ── Helpers ──
+
+function makeAgent() {
+  const agent = new SpicaAgent('test', '/tmp/spica-test-compression');
+  const mockLLM = {
+    _msgs: [] as ChatMessage[],
+    getMessages: vi.fn(function (this: any) { return this._msgs; }),
+    setMessages: vi.fn(function (this: any, msgs: ChatMessage[]) { this._msgs = msgs; }),
+    getProvider: vi.fn(() => ({
+      getContextWindow: () => 1000,
+      getCachePrefixEnd: () => -1,
+      setCachePrefixEnd: vi.fn(),
+      validateCachePrefix: () => ({ valid: true, errors: [] }),
+    })),
+    getTokenCounter: vi.fn(() => {
+      const counter = new TokenCounter();
+      counter.setContextWindow(1000);
+      return counter;
+    }),
+    generateForCompression: vi.fn().mockResolvedValue({ content: 'Mock summary with file.ts and fix for error' }),
+  };
+  Object.defineProperty(agent, 'llm', { value: mockLLM, writable: true });
+  agent.stateMachine.forceTransition('idle');
+  return { agent, mockLLM };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Layer 1: Snip
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('Layer 1: Snip (zero-cost)', () => {
+  it('should remove empty tool results', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'Read the config' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'tc1', name: 'read', arguments: { path: '/config' } }],
+      },
+      { role: 'tool', toolCallId: 'tc1', content: '' }, // Empty → remove
+      { role: 'assistant', content: 'Config loaded' },
+    ];
+
+    const { messages, removed } = snipMessages(msgs);
+    expect(removed).toBe(1);
+    expect(messages).toHaveLength(3);
+    expect(messages.find(m => m.role === 'tool')).toBeUndefined();
+  });
+
+  it('should keep tool results with errors even if short', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'Run command' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'tc1', name: 'bash', arguments: { command: 'ls' } }],
+      },
+      { role: 'tool', toolCallId: 'tc1', content: 'Error: permission denied' }, // Short but error → keep
+      { role: 'assistant', content: 'Command failed' },
+    ];
+
+    const { messages, removed } = snipMessages(msgs);
+    expect(removed).toBe(0);
+    expect(messages).toHaveLength(4);
+  });
+
+  it('should strip orphaned toolCalls when all results removed', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'Read files' },
+      {
+        role: 'assistant',
+        content: 'Let me read those',
+        toolCalls: [
+          { id: 'tc1', name: 'read', arguments: { path: '/a' } },
+          { id: 'tc2', name: 'read', arguments: { path: '/b' } },
+        ],
+      },
+      { role: 'tool', toolCallId: 'tc1', content: '' }, // Empty
+      { role: 'tool', toolCallId: 'tc2', content: '' }, // Empty
+      { role: 'assistant', content: 'Done reading' },
+    ];
+
+    const { messages, removed } = snipMessages(msgs);
+    expect(removed).toBe(2); // Both tool results removed
+    // Assistant should have toolCalls stripped (all orphans)
+    const assistantMsg = messages.find(
+      m => m.role === 'assistant' && m.content === 'Let me read those'
+    );
+    expect(assistantMsg).toBeDefined();
+    expect(assistantMsg!.toolCalls).toBeUndefined();
+  });
+
+  it('should keep toolCalls that have at least one surviving result', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'Read files' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [
+          { id: 'tc1', name: 'read', arguments: { path: '/a' } },
+          { id: 'tc2', name: 'read', arguments: { path: '/b' } },
+        ],
+      },
+      { role: 'tool', toolCallId: 'tc1', content: 'file content here with enough chars to survive' }, // >20 chars → keep
+      { role: 'tool', toolCallId: 'tc2', content: '' }, // Empty → remove
+    ];
+
+    const { messages, removed } = snipMessages(msgs);
+    expect(removed).toBe(1);
+    // tc1 survives, tc2 removed from toolCalls
+    const assistantMsg = messages.find(m => m.role === 'assistant');
+    expect(assistantMsg!.toolCalls).toHaveLength(1);
+    expect(assistantMsg!.toolCalls![0].id).toBe('tc1');
+  });
+
+  it('should suppress duplicate consecutive user messages', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'Help me refactor' },
+      { role: 'assistant', content: 'Sure, what file?' },
+      { role: 'user', content: 'Help me refactor' }, // Duplicate → remove
+      { role: 'user', content: 'Help me refactor' }, // Duplicate → remove
+      { role: 'assistant', content: 'Starting on src/agent.ts' },
+    ];
+
+    const { messages, removed } = snipMessages(msgs);
+    expect(removed).toBe(2);
+    expect(messages).toHaveLength(3);
+    expect(messages.filter(m => m.role === 'user')).toHaveLength(1);
+  });
+
+  it('should handle messages with no empty results (no-op)', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'Hello' },
+      { role: 'assistant', content: 'Hi there' },
+    ];
+
+    const { messages, removed } = snipMessages(msgs);
+    expect(removed).toBe(0);
+    expect(messages).toHaveLength(2);
+  });
+
+  it('should not remove duplicate user messages with different content', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'Read the file' },
+      { role: 'user', content: 'Now edit the file' }, // Different → keep
+    ];
+
+    const { messages, removed } = snipMessages(msgs);
+    expect(removed).toBe(0);
+    expect(messages).toHaveLength(2);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Layer 2: Microcompact
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('Layer 2: Microcompact (zero-cost)', () => {
+  it('should truncate long tool results after cache prefix', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'system', content: 'System prompt' },
+      { role: 'user', content: 'Read the file' },
+      { role: 'tool', toolCallId: 'tc1', content: 'A'.repeat(30000) }, // > 20K
+      { role: 'assistant', content: 'File is very long' },
+    ];
+
+    const truncated = microcompactMessages(msgs, 0); // cache prefix = 0 (system only)
+    expect(truncated).toBe(1);
+    // Tool result should be truncated
+    const toolMsg = msgs.find(m => m.role === 'tool')!;
+    expect(toolMsg.content).toContain('[truncated]');
+    expect(toolMsg.content!.length).toBe(20000 + '...[truncated]'.length);
+  });
+
+  it('should skip messages within cache prefix', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'system', content: 'System prompt' },
+      { role: 'user', content: 'Read the file' },
+      { role: 'tool', toolCallId: 'tc1', content: 'A'.repeat(30000) }, // Index 2
+      { role: 'assistant', content: 'Done' },
+    ];
+
+    // cachePrefixEnd = 2 means indices 0,1,2 are cached → tool result at index 2 is preserved
+    const truncated = microcompactMessages(msgs, 2);
+    expect(truncated).toBe(0);
+    const toolMsg = msgs.find(m => m.role === 'tool')!;
+    expect(toolMsg.content).not.toContain('[truncated]');
+    expect(toolMsg.content!.length).toBe(30000);
+  });
+
+  it('should not truncate tool results under the limit', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'Read the file' },
+      { role: 'tool', toolCallId: 'tc1', content: 'short result' },
+    ];
+
+    const truncated = microcompactMessages(msgs, -1);
+    expect(truncated).toBe(0);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Layer 4: AutoCompact
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('Layer 4: AutoCompact (full head summary)', () => {
   let agent: SpicaAgent;
   let mockLLM: any;
-  let testMessages: ChatMessage[];
-  const SMALL_CONTEXT_WINDOW = 1000; // Small window so tests trigger compression easily
 
   beforeEach(() => {
-    agent = new SpicaAgent('test', '/tmp/spica-test-compression');
-
-    testMessages = [];
-
-    // Create mock LLM with controllable behavior
-    mockLLM = {
-      getMessages: vi.fn(() => testMessages),
-      setMessages: vi.fn((msgs: ChatMessage[]) => {
-        testMessages = msgs;
-      }),
-      getProvider: vi.fn(() => ({
-        getContextWindow: () => SMALL_CONTEXT_WINDOW,
-        getCachePrefixEnd: () => -1,
-        setCachePrefixEnd: vi.fn(),
-        validateCachePrefix: () => ({ valid: true, errors: [] }),
-      })),
-      getTokenCounter: vi.fn(() => {
-        const counter = new TokenCounter();
-        counter.setContextWindow(SMALL_CONTEXT_WINDOW);
-        return counter;
-      }),
-      generateForCompression: vi.fn().mockResolvedValue({ content: 'Mock summary of conversation' }),
-    };
-
-    // Inject mock into private field
-    Object.defineProperty(agent, 'llm', { value: mockLLM, writable: true });
-
-    // State machine: skip init since we inject mock LLM directly
-    agent.stateMachine.forceTransition('idle');
+    const result = makeAgent();
+    agent = result.agent;
+    mockLLM = result.mockLLM;
   });
 
-  describe('Token threshold tests', () => {
-    it('should compress messages when exceeding target threshold', async () => {
-      // Target is 30% of 1000 = 300 tokens
-      // Need messages > 300 tokens to trigger compression
-      // Each "A".repeat(400) = ~100 tokens
-      // Create 10 messages = ~1000 tokens > 300 target
-      for (let i = 0; i < 10; i++) {
-        testMessages.push({ role: 'user', content: 'A'.repeat(400) });
-        testMessages.push({ role: 'assistant', content: 'B'.repeat(400) });
-      }
+  it('should replace head with summary, keep tail', async () => {
+    mockLLM._msgs = [
+      { role: 'user', content: 'X'.repeat(400) },
+      { role: 'assistant', content: 'Y'.repeat(400) },
+      { role: 'user', content: 'X'.repeat(400) },
+      { role: 'assistant', content: 'Y'.repeat(400) },
+      { role: 'user', content: 'X'.repeat(400) },
+      { role: 'assistant', content: 'Y'.repeat(400) },
+      { role: 'user', content: 'X'.repeat(400) },
+      { role: 'assistant', content: 'Y'.repeat(400) },
+      { role: 'user', content: 'X'.repeat(400) },
+      { role: 'assistant', content: 'Y'.repeat(400) },
+      { role: 'user', content: 'TAIL_USER_MSG' },
+      { role: 'assistant', content: 'TAIL_ASSISTANT_MSG' },
+    ];
 
-      const counter = new TokenCounter();
-      counter.setContextWindow(SMALL_CONTEXT_WINDOW);
-      const initialTokens = counter.estimateMessages(testMessages);
-      expect(initialTokens).toBeGreaterThan(300); // Over target (30%)
+    await autoCompactContext(agent, 300, undefined);
 
-      // Listen for compression event
-      const compressListener = vi.fn();
-      agent.on('context_compressed', compressListener);
+    const finalMessages = mockLLM._msgs as ChatMessage[];
+    // Should have summary + tail messages
+    expect(finalMessages.length).toBeLessThan(12);
 
-      await agent.compact();
+    // Summary is user message
+    expect(finalMessages[0].role).toBe('user');
+    expect(finalMessages[0].content).toContain('[COMPACTED HISTORY');
 
-      expect(compressListener).toHaveBeenCalled();
-      expect(mockLLM.setMessages).toHaveBeenCalled();
-
-      // After compression, should be close to target (may slightly exceed due to min=10 constraint)
-      const finalMessages = mockLLM.setMessages.mock.calls[0][0];
-      const finalTokens = counter.estimateMessages(finalMessages);
-      // min=10 floor ensures minimum retention; with 20 messages and small window this is ~1000 tokens
-      expect(finalTokens).toBeLessThan(1200);
-    });
-
-    it('should not compress if already below target', async () => {
-      // Small message set - well below threshold
-      testMessages = [
-        { role: 'user', content: 'Hello' },
-        { role: 'assistant', content: 'Hi there' },
-      ];
-
-      await agent.compact();
-
-      // Should emit event but not actually compress
-      expect(mockLLM.setMessages).not.toHaveBeenCalled();
-    });
+    // Tail preserved
+    expect(finalMessages[finalMessages.length - 2].content).toBe('TAIL_USER_MSG');
+    expect(finalMessages[finalMessages.length - 1].content).toBe('TAIL_ASSISTANT_MSG');
   });
 
-  describe('Message truncation tests', () => {
-    it('should truncate recent messages to content limit', async () => {
-      // Place long message at the END so it's in recentMessages
-      testMessages = [
-        { role: 'user', content: 'A'.repeat(400) },
-        { role: 'assistant', content: 'A'.repeat(400) },
-        { role: 'user', content: 'A'.repeat(400) },
-        { role: 'assistant', content: 'A'.repeat(5000) }, // Last message - will be in recentMessages and truncated
-      ];
+  it('should preserve system messages', async () => {
+    mockLLM._msgs = [
+      { role: 'system', content: 'You are spica assistant' },
+      { role: 'user', content: 'X'.repeat(400) },
+      { role: 'assistant', content: 'Y'.repeat(400) },
+      { role: 'user', content: 'X'.repeat(400) },
+      { role: 'assistant', content: 'Y'.repeat(400) },
+      { role: 'user', content: 'X'.repeat(400) },
+      { role: 'assistant', content: 'Y'.repeat(400) },
+      { role: 'user', content: 'X'.repeat(400) },
+      { role: 'assistant', content: 'Y'.repeat(400) },
+    ];
 
-      await agent.compact();
+    await autoCompactContext(agent, 300, undefined);
 
-      expect(mockLLM.setMessages).toHaveBeenCalled();
-      const finalMessages = mockLLM.setMessages.mock.calls[0][0];
-
-      // Find truncated message (should exist due to 5000 char content at end)
-      const truncatedMsg = finalMessages.find(m => m.content?.includes('[truncated]'));
-      expect(truncatedMsg).toBeDefined();
-      // Window is 1000, base limit = Math.max(4000, Math.floor(1000 * 0.10)) = 4000
-      // Assistant with no toolCalls → base limit (4000)
-      const expectedLen = 4000 + '...[truncated]'.length; // 4014
-      expect(truncatedMsg!.content!.length).toBe(expectedLen);
-    });
-
-    it('should truncate multiple long messages when they are in recentMessages', async () => {
-      // Long messages at the END to ensure they're in recentMessages.
-      // User messages are never truncated (limit = Infinity), so only the
-      // assistant message with >4000 chars will be truncated.
-      testMessages = [
-        { role: 'user', content: 'X'.repeat(400) },
-        { role: 'assistant', content: 'Y'.repeat(400) },
-        { role: 'user', content: 'Z'.repeat(3000) }, // User → not truncated (Infinity limit)
-        { role: 'assistant', content: 'W'.repeat(5000) }, // Assistant → truncated at 4000
-      ];
-
-      await agent.compact();
-
-      const finalMessages = mockLLM.setMessages.mock.calls[0][0];
-      const truncatedCount = finalMessages.filter(m => m.content?.includes('[truncated]')).length;
-      expect(truncatedCount).toBeGreaterThanOrEqual(1); // At least 1 should be truncated
-    });
-
-    it('should handle assistant+tool messages in compact', async () => {
-      // Create message with many toolCalls at the END
-      // Need enough messages to exceed 50% target (500 tokens)
-      testMessages = [
-        { role: 'user', content: 'A'.repeat(400) },
-        { role: 'assistant', content: 'A'.repeat(400) },
-        { role: 'user', content: 'A'.repeat(400) },
-        { role: 'assistant', content: 'A'.repeat(400) },
-        { role: 'user', content: 'A'.repeat(400) },
-        { role: 'assistant', content: 'A'.repeat(400) },
-        {
-          role: 'assistant',
-          content: '',
-          toolCalls: [
-            { id: 'tc1', name: 'read', arguments: { path: '/a.txt' } },
-            { id: 'tc2', name: 'read', arguments: { path: '/b.txt' } },
-            { id: 'tc3', name: 'read', arguments: { path: '/c.txt' } },
-            { id: 'tc4', name: 'read', arguments: { path: '/d.txt' } },
-            { id: 'tc5', name: 'bash', arguments: { command: 'ls' } },
-          ],
-        },
-        // 必须添加对应的tool messages，否则compact会去掉toolCalls
-        { role: 'tool', toolCallId: 'tc1', content: 'content a' },
-        { role: 'tool', toolCallId: 'tc2', content: 'content b' },
-        { role: 'tool', toolCallId: 'tc3', content: 'content c' },
-        { role: 'tool', toolCallId: 'tc4', content: 'content d' },
-        { role: 'tool', toolCallId: 'tc5', content: 'ls output' },
-      ];
-
-      await agent.compact();
-
-      // Check the last setMessages call (applyPendingSummary may add the summary
-      // after Phase 1 truncation)
-      const allCalls = mockLLM.setMessages.mock.calls;
-      const finalMessages = allCalls[allCalls.length - 1][0];
-      // Compact应该减少消息数量并生成summary
-      expect(finalMessages.length).toBeGreaterThan(0);
-      const hasContext = finalMessages.some(
-        (m: { content?: string }) => m.content?.includes('[COMPACTED CONTEXT')
-      );
-      expect(hasContext).toBe(true);
-      // 由于context window很小（1000），compact可能移除大部分消息
-      // 只验证不会崩溃和产生有效消息
-    });
+    const finalMessages = mockLLM._msgs as ChatMessage[];
+    expect(finalMessages[0].role).toBe('system');
+    expect(finalMessages[0].content).toContain('spica');
   });
 
-  describe('ToolCalls handling tests', () => {
-    it('should preserve toolCalls messages in compressed context', async () => {
-      // Need enough messages to trigger compression
-      testMessages = [
-        { role: 'user', content: 'Read the config file' },
-        {
-          role: 'assistant',
-          content: '',
-          toolCalls: [{ id: 'tc1', name: 'read', arguments: { path: '/etc/config.json' } }],
-        },
-        { role: 'tool', content: '{"key": "value"}', toolCallId: 'tc1' },
-        { role: 'assistant', content: 'Config loaded successfully' },
-        { role: 'user', content: 'Now edit it' },
-        {
-          role: 'assistant',
-          content: '',
-          toolCalls: [{ id: 'tc2', name: 'bash', arguments: { command: 'cat /etc/config.json' } }],
-        },
-        { role: 'tool', content: 'output', toolCallId: 'tc2' },
-        // Add more messages to exceed threshold
-        { role: 'user', content: 'X'.repeat(400) },
-        { role: 'assistant', content: 'Y'.repeat(400) },
-        { role: 'user', content: 'X'.repeat(400) },
-        { role: 'assistant', content: 'Y'.repeat(400) },
-      ];
+  it('should use fallback on LLM error', async () => {
+    mockLLM.generateForCompression = vi.fn().mockRejectedValue(new Error('API error'));
 
-      await agent.compact();
+    mockLLM._msgs = [];
+    for (let i = 0; i < 15; i++) {
+      mockLLM._msgs.push({ role: 'user', content: 'X'.repeat(400) });
+      mockLLM._msgs.push({ role: 'assistant', content: 'Y'.repeat(400) });
+    }
 
-      // Compression should succeed and produce a result
-      expect(mockLLM.setMessages).toHaveBeenCalled();
-      const allCalls = mockLLM.setMessages.mock.calls;
-      const finalMessages = allCalls[allCalls.length - 1][0];
-      expect(finalMessages.length).toBeGreaterThan(0);
-      // System prompt or summary should be present
-      const hasSummaryOrSystem = finalMessages.some(
-        (m: { content?: string; role: string }) =>
-          m.content?.includes('[COMPACTED CONTEXT') || m.role === 'system'
-      );
-      expect(hasSummaryOrSystem).toBe(true);
-    });
+    await autoCompactContext(agent, 300, undefined);
 
-    it('should handle messages with multiple toolCalls in compression', async () => {
-      testMessages = [
-        {
-          role: 'assistant',
-          content: '',
-          toolCalls: [
-            { id: 'tc1', name: 'read', arguments: { path: '/a.txt' } },
-            { id: 'tc2', name: 'read', arguments: { path: '/b.txt' } },
-            { id: 'tc3', name: 'bash', arguments: { command: 'ls' } },
-          ],
-        },
-        { role: 'tool', content: 'content a', toolCallId: 'tc1' },
-        { role: 'tool', content: 'content b', toolCallId: 'tc2' },
-        { role: 'tool', content: 'output', toolCallId: 'tc3' },
-        // Add more messages to exceed threshold
-        { role: 'user', content: 'X'.repeat(400) },
-        { role: 'assistant', content: 'Y'.repeat(400) },
-        { role: 'user', content: 'X'.repeat(400) },
-        { role: 'assistant', content: 'Y'.repeat(400) },
-      ];
-
-      await agent.compact();
-
-      // Compression should succeed without errors
-      expect(mockLLM.setMessages).toHaveBeenCalled();
-      const finalMessages = mockLLM.setMessages.mock.calls[0][0];
-      expect(finalMessages.length).toBeGreaterThan(0);
-    });
+    const finalMessages = mockLLM._msgs as ChatMessage[];
+    const fallback = finalMessages.find(
+      (m: ChatMessage) => m.role === 'user' && m.content?.includes('rule-based summary')
+    );
+    expect(fallback).toBeDefined();
   });
 
-  describe('Fallback summary tests', () => {
-    it('should use fallback summary when generateForCompression fails', async () => {
-      mockLLM.generateForCompression = vi.fn().mockRejectedValue(new Error('API error'));
+  it('should not re-enter while compacting', async () => {
+    mockLLM._msgs = [];
+    for (let i = 0; i < 20; i++) {
+      mockLLM._msgs.push({ role: 'user', content: 'X'.repeat(500) });
+      mockLLM._msgs.push({ role: 'assistant', content: 'Y'.repeat(500) });
+    }
 
-      // Need enough messages for compression to trigger
-      // Target is 40% = 400 tokens, need > 400 tokens
-      testMessages = [
-        { role: 'user', content: 'First task description here' },
-        { role: 'assistant', content: 'Working on it' },
-        { role: 'user', content: 'Second task request' },
-        { role: 'assistant', content: 'Completed' },
-        // More messages to exceed threshold
-        { role: 'user', content: 'X'.repeat(400) },
-        { role: 'assistant', content: 'Y'.repeat(400) },
-        { role: 'user', content: 'X'.repeat(400) },
-        { role: 'assistant', content: 'Y'.repeat(400) },
-        { role: 'user', content: 'X'.repeat(400) },
-        { role: 'assistant', content: 'Y'.repeat(400) },
-        { role: 'user', content: 'Final question' },
-      ];
+    mockLLM.generateForCompression = vi.fn().mockImplementation(
+      () => new Promise(resolve => setTimeout(() => resolve({ content: 'Slow summary with file.ts fix' }), 100))
+    );
 
-      await agent.compact();
+    const compact1 = agent.compact();
+    // Second compact while first is in-flight: should be a no-op
+    // isCompacting() returns true → manageContext returns immediately
+    await agent.compact();
+    await compact1;
 
-      expect(mockLLM.setMessages).toHaveBeenCalled();
-      const finalMessages = mockLLM.setMessages.mock.calls[0][0];
-      const summaryMsg = finalMessages.find(
-        m => m.role === 'assistant' && m.content?.includes('[COMPACTED CONTEXT')
-      );
-
-      // Summary should exist (sync path when >50% dropped) or compression
-      // may just keep messages without summary (light drop path)
-      expect(finalMessages.length).toBeGreaterThan(0);
-      if (summaryMsg) {
-        expect(summaryMsg!.content).toContain('[COMPACTED CONTEXT');
-      }
-    });
-  });
-
-  describe('Edge cases', () => {
-    it('should handle empty messages array', async () => {
-      testMessages = [];
-
-      await agent.compact();
-
-      // Should not throw, should emit event
-      expect(mockLLM.setMessages).not.toHaveBeenCalled();
-    });
-
-    it('should handle messages with empty content but enough tokens', async () => {
-      // Need enough tokens to exceed 50% target (500 tokens)
-      testMessages = [
-        { role: 'user', content: '' },
-        { role: 'assistant', content: '' },
-        { role: 'user', content: 'X'.repeat(400) },
-        { role: 'assistant', content: 'Y'.repeat(400) },
-        { role: 'user', content: 'X'.repeat(400) },
-        { role: 'assistant', content: 'Y'.repeat(400) },
-        { role: 'user', content: 'X'.repeat(400) },
-        { role: 'assistant', content: 'Y'.repeat(400) },
-      ];
-
-      await agent.compact();
-
-      expect(mockLLM.setMessages).toHaveBeenCalled();
-      const finalMessages = mockLLM.setMessages.mock.calls[0][0];
-      expect(finalMessages.length).toBeGreaterThan(0);
-    });
-
-    it('should compress large context aggressively', async () => {
-      // Create massive messages (40 total)
-      for (let i = 0; i < 20; i++) {
-        testMessages.push({ role: 'user', content: 'X'.repeat(500) });
-        testMessages.push({ role: 'assistant', content: 'Y'.repeat(500) });
-      }
-
-      const counter = new TokenCounter();
-      counter.setContextWindow(SMALL_CONTEXT_WINDOW);
-      const initialTokens = counter.estimateMessages(testMessages);
-      expect(initialTokens).toBeGreaterThan(2000); // Way over limit
-
-      await agent.compact();
-
-      // Should compress to significantly fewer messages
-      const finalMessages = mockLLM.setMessages.mock.calls[0][0];
-      const finalTokens = counter.estimateMessages(finalMessages);
-
-      // Compression reduces from 40 to a fraction of messages
-      expect(finalMessages.length).toBeLessThan(15); // keep floor = 10, plus summary
-      // Final tokens should be much lower than initial
-      expect(finalTokens).toBeLessThan(initialTokens * 0.6);
-    });
-
-    it('should not re-enter compact while already compacting', async () => {
-      // Fill messages to trigger compression
-      for (let i = 0; i < 20; i++) {
-        testMessages.push({ role: 'user', content: 'X'.repeat(500) });
-        testMessages.push({ role: 'assistant', content: 'Y'.repeat(500) });
-      }
-
-      // Make generateForCompression slow to simulate in-flight compression
-      mockLLM.generateForCompression = vi.fn().mockImplementation(() => {
-        return new Promise(resolve => {
-          setTimeout(() => resolve({ content: 'Slow summary' }), 100);
-        });
-      });
-
-      // Start first compact
-      const compact1 = agent.compact();
-
-      // Try second compact immediately — should be no-op
-      await agent.compact();
-
-      // Wait for first to finish
-      await compact1;
-
-      // setMessages may be called multiple times if secondary compression needed
-      // Just verify that the second compact was a no-op (no additional calls beyond first compact)
-      const setCalls = mockLLM.setMessages.mock.calls.length;
-      expect(setCalls).toBeGreaterThanOrEqual(1); // At least one from first compact
-    });
-  });
-
-  describe('System prompt preservation', () => {
-    it('should preserve system prompt when compressing', async () => {
-      // Setup messages with system prompt at index 0
-      testMessages = [
-        { role: 'system', content: 'You are spica, a coding agent CLI.' },
-        { role: 'user', content: 'X'.repeat(400) },
-        { role: 'assistant', content: 'Y'.repeat(400) },
-        { role: 'user', content: 'X'.repeat(400) },
-        { role: 'assistant', content: 'Y'.repeat(400) },
-        { role: 'user', content: 'X'.repeat(400) },
-        { role: 'assistant', content: 'Y'.repeat(400) },
-        { role: 'user', content: 'X'.repeat(400) },
-        { role: 'assistant', content: 'Y'.repeat(400) },
-      ];
-
-      await agent.compact();
-
-      expect(mockLLM.setMessages).toHaveBeenCalled();
-      const finalMessages = mockLLM.setMessages.mock.calls[0][0];
-
-      // System prompt must be preserved at index 0
-      expect(finalMessages[0].role).toBe('system');
-      expect(finalMessages[0].content).toContain('spica');
-    });
-
-    it('should preserve system prompt even in secondary compression', async () => {
-      // Very large message set to trigger secondary compression
-      testMessages = [
-        { role: 'system', content: 'You are spica, a coding agent CLI. AGENTS.md content here.' },
-        { role: 'user', content: 'X'.repeat(500) },
-        { role: 'assistant', content: 'Y'.repeat(500) },
-        { role: 'user', content: 'X'.repeat(500) },
-        { role: 'assistant', content: 'Y'.repeat(500) },
-        { role: 'user', content: 'X'.repeat(500) },
-        { role: 'assistant', content: 'Y'.repeat(500) },
-        { role: 'user', content: 'X'.repeat(500) },
-        { role: 'assistant', content: 'Y'.repeat(500) },
-        { role: 'user', content: 'X'.repeat(500) },
-        { role: 'assistant', content: 'Y'.repeat(500) },
-        { role: 'user', content: 'X'.repeat(500) },
-        { role: 'assistant', content: 'Y'.repeat(500) },
-        { role: 'user', content: 'X'.repeat(500) },
-        { role: 'assistant', content: 'Y'.repeat(500) },
-        { role: 'user', content: 'X'.repeat(500) },
-        { role: 'assistant', content: 'Y'.repeat(500) },
-        { role: 'user', content: 'X'.repeat(500) },
-        { role: 'assistant', content: 'Y'.repeat(500) },
-        { role: 'user', content: 'X'.repeat(500) },
-        { role: 'assistant', content: 'Y'.repeat(500) },
-      ];
-
-      await agent.compact();
-
-      const finalMessages = mockLLM.setMessages.mock.calls[0][0];
-      // System prompt must still be at index 0
-      expect(finalMessages[0].role).toBe('system');
-      expect(finalMessages[0].content).toContain('spica');
-    });
-
-    it('should handle compression without system prompt', async () => {
-      // Messages without system prompt
-      testMessages = [
-        { role: 'user', content: 'X'.repeat(400) },
-        { role: 'assistant', content: 'Y'.repeat(400) },
-        { role: 'user', content: 'X'.repeat(400) },
-        { role: 'assistant', content: 'Y'.repeat(400) },
-        { role: 'user', content: 'X'.repeat(400) },
-        { role: 'assistant', content: 'Y'.repeat(400) },
-      ];
-
-      await agent.compact();
-
-      const finalMessages = mockLLM.setMessages.mock.calls[0][0];
-      // Should work without system prompt (first message is summary or recent)
-      expect(finalMessages.length).toBeGreaterThan(0);
-      expect(finalMessages[0].role).not.toBe('system');
-    });
+    // Agent must be clean after both complete
+    expect(agent.isCompacting()).toBe(false);
+    expect(agent.stateMachine.current).toBe('idle');
+    // The first compact did call setMessages (via the waterfall)
+    expect(mockLLM.setMessages).toHaveBeenCalled();
   });
 });

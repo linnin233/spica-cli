@@ -7,7 +7,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { cleanMessages } from '../utils/messageCleaner';
-import { scoreMessage, cleanToolMessages, buildSummaryPrompt } from '../core/compression';
+import { buildSummaryPrompt } from '../core/compression';
 import { TokenCounter } from '../llm/TokenCounter';
 import type { ChatMessage } from '../llm/providers/BaseProvider';
 
@@ -58,23 +58,12 @@ describe('Performance Benchmarks', () => {
     }, 15000);
   });
 
-  describe('compression scoring', () => {
-    it('should score 10K messages in under 50ms', () => {
-      const msgs = makeMessages(10000);
-      const total = msgs.length;
-      const elapsed = timeIt(() => {
-        for (let i = 0; i < msgs.length; i++) {
-          scoreMessage(msgs[i], i, total);
-        }
-      });
-      expect(elapsed).toBeLessThan(50);
-    }, 15000);
-
-    it('should clean tool messages from 10K messages in under 50ms', () => {
-      const msgs = makeMessages(10000);
-      const elapsed = timeIt(() => cleanToolMessages(msgs));
-      expect(elapsed).toBeLessThan(50);
-    }, 15000);
+  describe('compression', () => {
+    it('should build summary prompt from 500 messages in under 20ms', () => {
+      const msgs = makeMessages(500);
+      const elapsed = timeIt(() => buildSummaryPrompt(msgs));
+      expect(elapsed).toBeLessThan(20);
+    });
   });
 
   describe('tokenCounter', () => {
@@ -95,14 +84,6 @@ describe('Performance Benchmarks', () => {
       const msg: ChatMessage = { role: 'user', content: 'Hello, this is a test message with some content.' };
       const elapsed = timeIt(() => counter.estimateMessage(msg), 10);
       expect(elapsed).toBeLessThan(10);
-    });
-  });
-
-  describe('summary prompt building', () => {
-    it('should build summary prompt from 500 messages in under 20ms', () => {
-      const msgs = makeMessages(500);
-      const elapsed = timeIt(() => buildSummaryPrompt(msgs));
-      expect(elapsed).toBeLessThan(20);
     });
   });
 });

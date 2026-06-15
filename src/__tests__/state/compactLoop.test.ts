@@ -14,11 +14,11 @@ describe('compact loop safety', () => {
     expect(source).toContain('context_warning');
   });
 
-  it('should have startNonBlockingCompression in source', async () => {
+  it('should have manageContext in source', async () => {
     const fs = await import('fs-extra');
     const source = await fs.readFile('src/agent.ts', 'utf-8');
-    // Non-blocking compression is the new mechanism
-    expect(source).toContain('startNonBlockingCompression');
+    // Layered compression waterfall (Snip → Microcompact → Collapse → AutoCompact)
+    expect(source).toContain('manageContext');
     // Guard prevents re-entry during active compression
     expect(source).toContain('if (!this.llm || this._compacting)');
   });

@@ -26,12 +26,10 @@ import simpleGit from 'simple-git';
 import type { ChatMessage } from './llm/providers/BaseProvider';
 import {
   cleanMessagesForLLM as _cleanMessagesForLLM,
-  startNonBlockingCompression as _startNonBlockingCompression,
-  applyPendingSummary as _applyPendingSummary,
-  cleanToolMessages as _cleanToolMessages,
-  scoreMessage as _scoreMessage,
-  buildSummaryPrompt as _buildSummaryPrompt,
+  manageContext as _manageContext,
+  autoCompactContext as _autoCompactContext,
   generateSummary as _generateSummary,
+  buildSummaryPrompt as _buildSummaryPrompt,
 } from './core/compression';
 import { ProgressTracker } from './core/progressTracker';
 import { AgentStateMachine } from './core/AgentState';
@@ -192,16 +190,6 @@ export class SpicaAgent extends EventEmitter {
     return this.llm;
   }
 
-  // ── Compression accessors (typed — replaces string-index access from compression.ts) ──
-
-  /** @internal — used by compression.ts Phase 2 background summary */
-  getDeferredSummary(): ChatMessage | null { return this._deferredSummary; }
-  setDeferredSummary(msg: ChatMessage | null): void { this._deferredSummary = msg; }
-
-  /** @internal — used by compression.ts Phase 2 background summary */
-  getPendingCompression(): Promise<void> | null { return this._pendingCompression; }
-  setPendingCompression(p: Promise<void> | null): void { this._pendingCompression = p; }
-
   /** @internal — used by compression.ts to prevent concurrent compaction */
   isCompacting(): boolean { return this._compacting; }
   setCompacting(v: boolean): void { this._compacting = v; }
@@ -269,9 +257,6 @@ export class SpicaAgent extends EventEmitter {
   private _providerName?: string;
   private _cachedSkills: SkillDefinition[] = [];
   private _compacting = false;
-  // Non-blocking compression: LLM summary runs in background
-  private _pendingCompression: Promise<void> | null = null;
-  private _deferredSummary: ChatMessage | null = null;
   /**
    * Full history — append-only, independent of LLM context compression.
    *
@@ -307,10 +292,6 @@ export class SpicaAgent extends EventEmitter {
   private static readonly SAVE_EVERY_N_ROUNDS = 5;
   // Unified state machine — replaces scattered _initialized/_compacting/pendingCancel
   private _stateMachine: AgentStateMachine = new AgentStateMachine();
-  // Idle compression timer: triggers compression after inactivity when
-  // context exceeds the 60% threshold. Cleared on new user input.
-  private _idleCompressTimer: ReturnType<typeof setTimeout> | null = null;
-  private static readonly IDLE_COMPRESS_DELAY_MS = 30_000; // 30s inactivity
 
   // === Interrupt 机制（参考 Crush 设计）===
   // 当前活跃的 AbortController（每个请求独立）
@@ -367,11 +348,6 @@ export class SpicaAgent extends EventEmitter {
    * Call this when a sub-agent is no longer needed to prevent listener leaks.
    */
   dispose(): void {
-    // Clear idle compression timer
-    if (this._idleCompressTimer) {
-      clearTimeout(this._idleCompressTimer);
-      this._idleCompressTimer = null;
-    }
     // Abort any active request
     if (this.currentAbortController) {
       this.currentAbortController.abort();
@@ -884,11 +860,6 @@ export class SpicaAgent extends EventEmitter {
     // State transition: idle → processing (or interrupted → processing)
     this._stateMachine.transition('processing');
 
-    // Clear idle compression timer — user is active
-    if (this._idleCompressTimer) {
-      clearTimeout(this._idleCompressTimer);
-      this._idleCompressTimer = null;
-    }
 
     // Cancel-on-entry: if pendingCancel, refuse to enter
     if (this.checkCanceledOnEntry()) {
@@ -922,9 +893,6 @@ export class SpicaAgent extends EventEmitter {
 
       // Auto-checkpoint before AI work (file snapshot, no git pollution)
       await this.createAutoCheckpoint(prompt);
-
-      // Apply any deferred summary from previous compression
-      this.applyPendingSummary();
 
       // Pre-request: 基于token数判断是否需要压缩
       const existingMessages = this.llm.getMessages();
@@ -969,7 +937,7 @@ export class SpicaAgent extends EventEmitter {
       const triggerThreshold = Math.floor(contextWindow * triggerRatio);
 
       // 当使用超过触发阈值时自动压缩
-      // 非阻塞：规则截断立即生效，LLM 摘要在后台异步生成
+      // 分层压缩瀑布：Snip → Microcompact → Collapse → AutoCompact
       if (usedTokens > triggerThreshold) {
         const targetTokens = Math.floor(contextWindow * targetRatio);
         this.emit('context_compressing', {
@@ -977,13 +945,7 @@ export class SpicaAgent extends EventEmitter {
           tokensBefore: usedTokens,
           target: targetTokens,
         });
-        await this.startNonBlockingCompression(targetTokens, signal);
-        // Ensure LLM continues working after compression — inject continuation
-        // signal so it knows the tasks are NOT complete and it should resume.
-        this.agentAddMessage({
-          role: 'system' as const,
-          content: '[CONTEXT COMPRESSED] Your conversation history was compressed to stay within the context window. The summary above describes your previous work. Continue from where you left off — the tasks are NOT complete. Do NOT produce a text response. Call tools immediately to resume working.',
-        });
+        await this.manageContext(targetTokens, signal);
       }
 
       this.emit('token_usage', {
@@ -1060,26 +1022,20 @@ export class SpicaAgent extends EventEmitter {
           break;
         }
 
-        // Mid-loop context check: compress if context fills up during long work sessions.
-        // Uses same adaptive thresholds as the pre-request check (line ~961).
+        // Mid-loop: same layered waterfall as pre-request, but with higher
+        // thresholds (Snip+Microcompact are free, so they always run).
         if (this._roundCount > 0 && this._roundCount % 4 === 0 && this.llm) {
           const ctxWindow = this.llm.getProvider().getContextWindow();
           const t = this.llm.getTokenCounter();
           t.setContextWindow(ctxWindow);
-          const midTriggerRatio = ctxWindow < 32000 ? 0.60 :
-            ctxWindow < 64000 ? 0.75 :
-            ctxWindow < 200000 ? 0.85 : 0.90;
-          const midTargetRatio = ctxWindow < 32000 ? 0.52 :
-            ctxWindow < 64000 ? 0.60 :
-            ctxWindow < 200000 ? 0.68 : 0.72;
+          const midTriggerRatio = ctxWindow < 32000 ? 0.65 :
+            ctxWindow < 64000 ? 0.80 :
+            ctxWindow < 200000 ? 0.88 : 0.92;
+          const midTargetRatio = ctxWindow < 32000 ? 0.55 :
+            ctxWindow < 64000 ? 0.65 :
+            ctxWindow < 200000 ? 0.72 : 0.78;
           if (t.estimateMessages(this.llm.getMessages()) > ctxWindow * midTriggerRatio) {
-            await this.startNonBlockingCompression(Math.floor(ctxWindow * midTargetRatio), signal);
-            // Inject completion signal so LLM continues working after compression.
-            // The fallback summary was already injected by startNonBlockingCompression.
-            this.agentAddMessage({
-              role: 'system' as const,
-              content: '[CONTEXT COMPRESSED] Your conversation history was compressed to stay within the context window. The summary above describes your previous work. Continue from where you left off — the tasks are NOT complete. Call tools immediately to resume working.',
-            });
+            await this.manageContext(Math.floor(ctxWindow * midTargetRatio), signal);
           }
         }
 
@@ -1614,38 +1570,7 @@ export class SpicaAgent extends EventEmitter {
       if (this._stateMachine.current !== 'interrupted') {
         this._stateMachine.transition('idle');
       }
-      // Schedule idle compression: if user doesn't send another message,
-      // compress automatically after IDLE_COMPRESS_DELAY_MS of inactivity
-      this.scheduleIdleCompression();
     }
-  }
-
-  /** Schedule a one-shot idle compression check after runLoop completes. */
-  private scheduleIdleCompression(): void {
-    // Clear any previously scheduled timer
-    if (this._idleCompressTimer) {
-      clearTimeout(this._idleCompressTimer);
-      this._idleCompressTimer = null;
-    }
-
-    this._idleCompressTimer = setTimeout(() => {
-      if (!this.llm || this._compacting) return;
-      try {
-        const provider = this.llm.getProvider();
-        const tokenCounter = this.llm.getTokenCounter();
-        const contextWindow = provider.getContextWindow();
-        tokenCounter.setContextWindow(contextWindow);
-        const usedTokens = tokenCounter.estimateMessages(this.llm.getMessages());
-        const usagePercent = Math.floor((usedTokens / contextWindow) * 100);
-
-        if (usagePercent > 60) {
-          const targetTokens = Math.floor(contextWindow * 0.4);
-          this.startNonBlockingCompression(targetTokens).catch(() => {});
-        }
-      } catch {
-        // Best-effort — don't crash on timer errors
-      }
-    }, SpicaAgent.IDLE_COMPRESS_DELAY_MS);
   }
 
   getProjectConfig(): ProjectConfig {
@@ -1786,82 +1711,26 @@ export class SpicaAgent extends EventEmitter {
    * - Keeps recent tool calls and results
    * - Emits 'context_compressed' event
    *
-   * @returns Promise that resolves when compression complete
-   * @emits context_compressed with { before, after, removed }
-   */
-  /**
-   * Non-blocking compression: rule-truncate immediately, LLM summary in background.
-   *
-   * Phase 1 (instant): Keep last N messages, truncate long content — tokens drop NOW.
-   * Phase 2 (background): Fire LLM summary for old messages, store for next request.
-   *
-   * On the next request, applyPendingSummary() injects the summary after system messages.
-   */
-  private async startNonBlockingCompression(
+  /** Synchronous context compression — summary REPLACES old messages. */
+  /** Layered context management: Snip → Microcompact → Collapse → AutoCompact */
+  private async manageContext(
     targetTokens: number,
     signal?: AbortSignal
   ): Promise<void> {
-    return _startNonBlockingCompression(this, targetTokens, signal);
+    return _manageContext(this, targetTokens, signal);
   }
 
-  /**
-   * Inject any deferred compression summary into the message list.
-   * Called at the start of each run() — applies the LLM summary from
-   * the previous request's background compression.
-   */
-  private applyPendingSummary(): void {
-    return _applyPendingSummary(this);
-  }
-
-  /**
-   * Clean tool messages — keep only those with matching assistant toolCalls.
-   * Extracted from compactToTarget for reuse.
-   */
-  private cleanToolMessages(messages: ChatMessage[]): ChatMessage[] {
-    return _cleanToolMessages(messages);
-  }
-
-  /**
-   * Score a message for retention priority during compression.
-   * Higher score = more likely to be kept.
-   *
-   * Scoring rules:
-   * - user messages: 8 base (user intent is critical)
-   * - assistant with write/git/bash: 7 (actual code changes)
-   * - assistant with edit: 6 (edits)
-   * - assistant with other toolCalls: 3 (generic action)
-   * - assistant no toolCalls: 2 (commentary)
-   * - tool for write/git: 4 (result of write)
-   * - tool for read/grep/glob: 1 (transient read)
-   * - tool for other: 2
-   * - recency bonus: +0.5 for messages in the last 25%
-   */
-  private scoreMessage(msg: ChatMessage, index: number, total: number): number {
-    return _scoreMessage(msg, index, total);
-  }
-
-  // Legacy: synchronous compact for backward compatibility
+  // Legacy: synchronous compact for backward compatibility (/compact command)
   public async compact(signal?: AbortSignal): Promise<void> {
-    if (!this.llm || this._compacting) return;
-    this._compacting = true;
-    try {
-      const provider = this.llm.getProvider();
-      const targetTokens = Math.floor(provider.getContextWindow() * 0.4);
-      await this.startNonBlockingCompression(targetTokens, signal);
-      // Wait for background summary to complete before returning
-      if (this._pendingCompression) {
-        await this._pendingCompression;
-        this.applyPendingSummary();
-      }
-    } finally {
-      this._compacting = false;
-    }
+    if (!this.llm) return;
+    const provider = this.llm.getProvider();
+    const targetTokens = Math.floor(provider.getContextWindow() * 0.4);
+    // Delegates to manageContext which handles state + re-entry protection
+    await this.manageContext(targetTokens, signal);
   }
 
   /**
    * Build a summary prompt from messages (without calling LLM).
-   * Produces the same prompt text as generateSummary uses internally.
-   * Used by non-blocking compression to create the prompt for background summarization.
    */
   private buildSummaryPrompt(messages: ChatMessage[]): string {
     return _buildSummaryPrompt(messages);
