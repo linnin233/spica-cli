@@ -20,6 +20,8 @@ export interface ScreenState {
   scrollBottom: number;
   statusText: string;
   completer: ((line: string) => string[]) | null;
+  // Category grouping for tab completion: map<categoryLabel, command[]>
+  completionGroups: Record<string, string[]> | null;
   shownCompletionList: boolean;
   lastCompletionLine: string;
   cursorInScrollArea: boolean;
@@ -55,6 +57,7 @@ export class ScreenManager {
       scrollBottom: height - 3,
       statusText: '',
       completer: null,
+      completionGroups: null,
       shownCompletionList: false,
       lastCompletionLine: '',
       cursorInScrollArea: false,
@@ -767,9 +770,67 @@ export class ScreenManager {
       this.refreshInput();
       this.restoreCursor();
     } else if (hits.length > 1) {
-      this.appendScroll('\n' + hits.join('  ') + '\n');
+      const groups = this.state.completionGroups;
+      this.appendScroll(this.formatTabCompletions(hits, groups));
       this.restoreCursor();
     }
+  }
+
+  // Format tab completions into aligned columns (row-major).
+  // When `groups` is provided, items are rendered group-by-group with
+  // a dimmed header line per category. When filtering (hits are a subset),
+  // groups are skipped — just plain columns.
+  // Terminal-width-aware: adapts column count so each cell has room.
+  private formatTabCompletions(
+    hits: string[],
+    groups: Record<string, string[]> | null,
+  ): string {
+    // Only use groups when showing the full (unfiltered) set.
+    // During filtering (/bra…) the hits are a subset — no headers needed.
+    if (groups) {
+      const allCmds = Object.values(groups).flat();
+      const isFullSet = hits.length === allCmds.length &&
+        hits.every(h => allCmds.includes(h));
+      if (isFullSet) {
+        return this.formatGroupedCompletions(groups);
+      }
+    }
+    return this.formatColumnCompletions(hits);
+  }
+
+  /** Plain column layout (used when filtering or no groups). */
+  private formatColumnCompletions(hits: string[]): string {
+    const termWidth = this.state.terminalWidth || 80;
+    const maxLen = Math.min(Math.max(...hits.map(h => h.length)), 32) + 2;
+    const cols = Math.max(1, Math.floor(termWidth / maxLen));
+
+    let out = '\n';
+    for (let i = 0; i < hits.length; i++) {
+      if (i > 0 && i % cols === 0) out += '\n';
+      out += hits[i].padEnd(maxLen);
+    }
+    out += '\n';
+    return out;
+  }
+
+  /** Grouped layout: header per category, then commands in columns. */
+  private formatGroupedCompletions(groups: Record<string, string[]>): string {
+    const termWidth = this.state.terminalWidth || 80;
+    const allCmds = Object.values(groups).flat();
+    const maxLen = Math.min(Math.max(...allCmds.map(c => c.length)), 32) + 2;
+    const cols = Math.max(1, Math.floor(termWidth / maxLen));
+
+    let out = '\n';
+    for (const [label, cmds] of Object.entries(groups)) {
+      if (cmds.length === 0) continue;
+      out += `\x1b[2m[${label}]\x1b[0m\n`; // dimmed category header
+      for (let i = 0; i < cmds.length; i++) {
+        if (i > 0 && i % cols === 0) out += '\n';
+        out += cmds[i].padEnd(maxLen);
+      }
+      out += '\n';
+    }
+    return out;
   }
 
   handlePaste(data: string): void {
@@ -820,6 +881,10 @@ export class ScreenManager {
 
   setCompleter(fn: (line: string) => string[]): void {
     this.state.completer = fn;
+  }
+
+  setCompletionGroups(groups: Record<string, string[]> | null): void {
+    this.state.completionGroups = groups;
   }
 
   setVerboseToggleCallback(fn: () => void): void {

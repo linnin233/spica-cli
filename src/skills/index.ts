@@ -205,6 +205,40 @@ export function listSkills(workspacePath?: string): SkillDefinition[] {
   return Array.from(loadSkills(workspacePath).values());
 }
 
+// List skills grouped by package name (for categorized tab completion).
+export function listSkillsByPackage(workspacePath?: string): Record<string, string[]> {
+  const groups: Record<string, string[]> = {};
+  const ws = workspacePath || process.cwd();
+
+  if (!fs.existsSync(SKILLS_DIR)) return groups;
+
+  const packageDirs = fs.readdirSync(SKILLS_DIR).filter(d => {
+    const fullPath = join(SKILLS_DIR, d);
+    return fs.statSync(fullPath).isDirectory() && !d.startsWith('_') && !d.startsWith('.');
+  });
+
+  for (const pkgName of packageDirs) {
+    const skills = getPackageSkills(pkgName);
+    // Resolve each skill's install name (from SKILL.md frontmatter)
+    const names: string[] = [];
+    for (const skillDir of skills) {
+      const skillFile = join(SKILLS_DIR, pkgName, skillDir, 'SKILL.md');
+      if (fs.existsSync(skillFile)) {
+        try {
+          const content = fs.readFileSync(skillFile, 'utf-8');
+          const skillDef = parseSkillMarkdown(skillDir, content);
+          if (skillDef) names.push(`/${skillDef.name}`);
+        } catch {}
+      }
+    }
+    if (names.length > 0) {
+      groups[pkgName] = names.sort();
+    }
+  }
+
+  return groups;
+}
+
 // 列出已安装的包
 export async function listInstalledPackages(): Promise<SkillPackageInfo[]> {
   const packages: SkillPackageInfo[] = [];

@@ -2,7 +2,7 @@ import { SpicaAgent } from "../agent";
 import { execSync } from "child_process";
 import { loadGlobalSettings, getProviderConfig, saveGlobalSettings, GLOBAL_SETTINGS_FILE } from "../utils/settings";
 import { loadSession, saveSession } from "../utils/session";
-import { listSkills, installSkill, uninstallSkill, listInstalledPackages, saveSkill, deleteSkill, getSkill, buildSkillPrompt, parseSkillInput } from "../skills";
+import { listSkills, listSkillsByPackage, installSkill, uninstallSkill, listInstalledPackages, saveSkill, deleteSkill, getSkill, buildSkillPrompt, parseSkillInput } from "../skills";
 import { listCheckpoints, getCheckpoint, restoreCheckpoint, cleanCheckpoints } from "../storage/checkpointManager";
 import { getMCPManager, generateExampleConfig, shutdownMCP } from "../mcp/client";
 import { COLORS, BG } from "../cli/ui/colors";
@@ -108,12 +108,23 @@ export async function runInteractiveMode(
         ];
         const getCommands = () => {
           const skills = listSkills(agent.getWorkspacePath());
-          const skillCommands = skills.map((s) => `/${s.name}`);
+          const skillCommands = skills.map((s) => `/${s.name}`).sort();
+          // Base commands first, then skills — natural clustering in tab display
           return [...BASE_COMMANDS, ...skillCommands];
         };
         tuiHandler.getScreen().setCompleter((line: string) => {
           return getCommands().filter((c) => c.startsWith(line));
         });
+
+        // Build grouped completion map for categorized tab display.
+        // Base commands go under "spica", skills under their package name.
+        const skillGroups = listSkillsByPackage(agent.getWorkspacePath());
+        const groups: Record<string, string[]> = { spica: [...BASE_COMMANDS].sort() };
+        // Merge skill groups into the map
+        Object.entries(skillGroups).forEach(([pkg, cmds]) => {
+          groups[pkg] = cmds;
+        });
+        tuiHandler.getScreen().setCompletionGroups(groups);
 
         // 显示状态栏（简洁版）
         // 状态栏：状态 | 模型 | 工作区（智能缩写长路径）
