@@ -14,12 +14,13 @@ describe('compact loop safety', () => {
     expect(source).toContain('context_warning');
   });
 
-  it('should have manageContext in source', async () => {
+  it('should have manageContext and isCompacting guard in source', async () => {
     const fs = await import('fs-extra');
     const source = await fs.readFile('src/agent.ts', 'utf-8');
     // Layered compression waterfall (Snip → Microcompact → Collapse → AutoCompact)
     expect(source).toContain('manageContext');
-    // Guard prevents re-entry during active compression
-    expect(source).toContain('if (!this.llm || this._compacting)');
+    // Re-entry guard: isCompacting() accessor + _compacting flag
+    expect(source).toContain('isCompacting');
+    expect(source).toContain('_compacting');
   });
 });

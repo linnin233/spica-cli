@@ -20,25 +20,25 @@ describe('stagnation detection', () => {
     expect(checkStagnation(false)).toBe('continue');
   });
 
-  it('returns continue after 7 rounds of no progress', () => {
-    for (let i = 0; i < 7; i++) {
+  it('returns continue after 15 rounds of no progress', () => {
+    for (let i = 0; i < 15; i++) {
       expect(checkStagnation(false)).toBe('continue');
     }
   });
 
-  it('returns warn at 8th round of no progress', () => {
-    for (let i = 0; i < 7; i++) checkStagnation(false);
+  it('returns warn at 16th round of no progress', () => {
+    for (let i = 0; i < 15; i++) checkStagnation(false);
     expect(checkStagnation(false)).toBe('warn');
   });
 
   it('warns only once — subsequent rounds return continue', () => {
-    for (let i = 0; i < 7; i++) checkStagnation(false);
-    expect(checkStagnation(false)).toBe('warn'); // 8th
-    expect(checkStagnation(false)).toBe('continue'); // 9th
+    for (let i = 0; i < 15; i++) checkStagnation(false);
+    expect(checkStagnation(false)).toBe('warn'); // 16th
+    expect(checkStagnation(false)).toBe('continue'); // 17th
   });
 
-  it('returns stop at 16th round of no progress', () => {
-    for (let i = 0; i < 15; i++) checkStagnation(false);
+  it('returns stop at 32nd round of no progress', () => {
+    for (let i = 0; i < 31; i++) checkStagnation(false);
     expect(checkStagnation(false)).toBe('stop');
   });
 
