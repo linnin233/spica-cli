@@ -44,15 +44,18 @@ export class MatrixRainController {
   private cols: Column[] = [];
   private pending: TrailChar[] = [];
   private pIdx = 0;
+  private outputCol = 0;  // adjacent placement cursor for output type
   private active = false;
 
   private static readonly TICK_MS = 45;
-  private static readonly TRAIL_MIN = 5;
-  private static readonly TRAIL_MAX = 18;
+  private static readonly TRAIL_MIN = 8;
+  private static readonly TRAIL_MAX = 25;
   private static readonly GAP_MIN = 3;
   private static readonly GAP_MAX = 20;
   private static readonly SPEED_MIN = 1;
   private static readonly SPEED_MAX = 4;
+  private static readonly SPEED_SLOW_MIN = 4;  // output type — slower = more readable
+  private static readonly SPEED_SLOW_MAX = 7;
 
   constructor(config: MatrixRainConfig) {
     this.cfg = config;
@@ -147,7 +150,8 @@ export class MatrixRainController {
 
   private tick(): void {
     const { height } = this.cfg;
-    for (const col of this.cols) {
+    for (let ci = 0; ci < this.cols.length; ci++) {
+      const col = this.cols[ci];
       col.tick++;
       if (col.tick < col.speed) continue;
       col.tick = 0;
@@ -167,6 +171,24 @@ export class MatrixRainController {
           col.trail = this.buildTrail(len);
           col.pos = -len;
           col.phase = 'drop';
+          // Output type: slower speed + adjacent columns for readability
+          if (col.trail.length > 0 && col.trail[0]?.type === 'output') {
+            col.speed = MatrixRainController.SPEED_SLOW_MIN +
+              Math.floor(Math.random() * (MatrixRainController.SPEED_SLOW_MAX - MatrixRainController.SPEED_SLOW_MIN));
+            // Move this column's trail to the output cursor position
+            const targetCol = this.outputCol;
+            this.outputCol = (this.outputCol + 1) % this.cfg.width;
+            if (targetCol !== ci) {
+              this.cols[targetCol].trail = col.trail;
+              this.cols[targetCol].pos = col.pos;
+              this.cols[targetCol].phase = 'drop';
+              this.cols[targetCol].speed = col.speed;
+              this.cols[targetCol].tick = 0;
+              col.trail = [];
+              col.phase = 'gap';
+              col.gapTimer = 1;
+            }
+          }
         }
       }
     }
@@ -191,7 +213,11 @@ export class MatrixRainController {
           const tc = col.trail[i];
           if (tc.ch === ' ') continue;
           if (!grid[row][c]) {
-            grid[row][c] = { ch: tc.ch, type: tc.type, b: col.trail.length - i };
+            // Ratio-based brightness: 1.0=head, 0.0=tail. Works for any trail length.
+            const ratio = col.trail.length > 1
+              ? (col.trail.length - i) / col.trail.length
+              : 1;
+            grid[row][c] = { ch: tc.ch, type: tc.type, b: ratio };
           }
         }
       }
@@ -207,10 +233,11 @@ export class MatrixRainController {
           const [bright, normal, dim] = PALETTE[cell.type] || PALETTE.thinking;
           let s: number;
           let color: string;
-          if (cell.b >= 12)       { s = 1; color = WH; }        // head
-          else if (cell.b >= 6)  { s = 2; color = bright; }    // bright
-          else if (cell.b >= 3)  { s = 3; color = normal; }    // normal
-          else                   { s = 4; color = dim; }        // dim
+          // Ratio-based: works for any trail length
+          if (cell.b > 0.85)         { s = 1; color = WH; }      // head — top 15%
+          else if (cell.b > 0.5)    { s = 2; color = bright; }   // bright — upper half
+          else if (cell.b > 0.2)    { s = 3; color = normal; }   // normal — mid
+          else                       { s = 4; color = dim; }      // dim — tail
 
           if (s !== cur) { line += R + color; cur = s; }
           line += cell.ch;
