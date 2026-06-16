@@ -21,7 +21,11 @@ import {
   listCheckpoints,
   type CheckpointMeta,
 } from './storage/checkpointManager';
-import { EventEmitter } from 'events';
+import { EventEmitter, setMaxListeners } from 'events';
+
+// 提高默认 MaxListeners 上限 — 单次 runLoop 内可能有
+// LLMClient (2) + task subagents (≤6) + retry delays (≤10) 同时监听同一个 AbortSignal
+setMaxListeners(30);
 import simpleGit from 'simple-git';
 import type { ChatMessage } from './llm/providers/BaseProvider';
 import {
@@ -285,6 +289,9 @@ export class SpicaAgent extends EventEmitter {
   private _stagnationCounter: number = 0;
   private static readonly STAGNATION_WARNING = 16;
   private static readonly STAGNATION_LIMIT = 32;
+  // 防止 reasoning-only 响应无限循环（DeepSeek 等模型可能连续返回 reasoning 而没有 content/tool_calls）
+  private _reasoningContinueCount: number = 0;
+  private static readonly MAX_REASONING_CONTINUE = 5;
   // finish_reason="stop" = LLM's turn is over. Respect it.
   // No reflection hacks, no heuristic counters, no exceptions.
   // Periodic session save: persist every N tool rounds for crash resilience
@@ -1005,6 +1012,7 @@ export class SpicaAgent extends EventEmitter {
       }
 
       this._stagnationCounter = 0;
+      this._reasoningContinueCount = 0;
 
       const allToolResults: Array<{ name: string; id: string; result: string }> = [];
       let criticalErrorDetected: { tool: string; error: string; suggestion: string } | null = null;
@@ -1059,6 +1067,15 @@ export class SpicaAgent extends EventEmitter {
           if (this.reasoningReceived) {
             // 模型发送了 reasoning 但没有 content，可能是正在思考
             // 不触发警告，直接继续调用 LLM 获取下一个响应
+            this._reasoningContinueCount++;
+            if (this._reasoningContinueCount > SpicaAgent.MAX_REASONING_CONTINUE) {
+              this.emit('error_suggestion', {
+                tool: 'llm_generate',
+                error: `Exceeded ${SpicaAgent.MAX_REASONING_CONTINUE} consecutive reasoning-only responses`,
+                suggestion: 'LLM is stuck in a reasoning loop. Try rephrasing your request or providing more specific instructions.',
+              });
+              break;
+            }
             this.reasoningReceived = false; // 重置状态
             this.emit('waiting_for_llm');
             try {

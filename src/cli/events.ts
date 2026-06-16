@@ -248,14 +248,20 @@ export function setupAgentEvents(
   });
 
   on('stream', (data: StreamData) => {
-    // Always clear thinking animation on every chunk.
-    // DeepSeek sends content before reasoning in the same delta —
-    // stream fires before reasoning, so clearing only on first chunk
-    // misses the spinner that reasoning starts milliseconds later.
+    if (state.isInterrupted()) return;
     screen.clearThinkingAnimation();
 
+    // Hacker mode: all output → rain during processing
+    if (state.getDisplayMode() === 'hacker') {
+      screen.feedRain(data.chunk);
+      if (!state.isStreamingOutput()) {
+        state.setStreamingOutput(true);
+        screen.setStreaming(true);
+      }
+      return;
+    }
+
     if (!state.isStreamingOutput()) {
-      // If transitioning from reasoning, flush buffered reasoning lines
       if (reasoningStarted) {
         screen.flushStreamBuffer();
         screen.appendScroll('\n');
@@ -263,28 +269,29 @@ export function setupAgentEvents(
       state.setStreamingOutput(true);
       screen.setStreaming(true);
     }
-    // AI流式输出使用行缓冲
     screen.appendStreamChunk(COLORS.primary(data.chunk));
   });
 
   on('message', (data: { role: string; content: string }) => {
     if (data.role === 'assistant' && data.content) {
-      // 确保thinking动画已清除
       screen.clearThinkingAnimation();
-      // 如果流式没有输出（非流式响应），直接显示完整消息
-      if (!state.isStreamingOutput()) {
+      if (state.getDisplayMode() === 'hacker') {
+        screen.feedRain(data.content);
+      } else if (!state.isStreamingOutput()) {
         screen.appendScroll(COLORS.primary(data.content + '\n'));
       }
     }
   });
 
   on('reasoning', (data: ReasoningData) => {
+    const mode = state.getDisplayMode();
+
     if (!reasoningStarted) {
       reasoningStarted = true;
       // compact模式：启动thinking动画
       // 但如果stream已开始（DeepSeek: content先于reasoning到达），
       // 不要启动动画——内容已开始输出，spinner只会污染屏幕
-      if (!state.isVerboseMode() && !state.isStreamingOutput()) {
+      if (mode === 'compact' && !state.isStreamingOutput()) {
         screen.startThinkingAnimation();
       }
       if (!state.isStreamingOutput()) {
@@ -293,10 +300,13 @@ export function setupAgentEvents(
       }
     }
 
-    // verbose 模式下显示完整 reasoning（使用行缓冲）
-    if (state.isVerboseMode()) {
+    // Route reasoning based on display mode
+    if (mode === 'verbose') {
       screen.appendStreamChunk(COLORS.reasoning(data.content));
+    } else if (mode === 'hacker') {
+      screen.feedRain(data.content);
     }
+    // compact: discard content (spinner only)
   });
 
   // 工具调用开始 - 清除thinking动画，更新状态栏
@@ -518,9 +528,17 @@ export function setupAgentEvents(
     }
   });
 
-  // Subagent reasoning — show with reasoning color
+  // Subagent reasoning — route based on display mode
   on('sub_agent_reasoning', (data: SubAgentReasoningData) => {
+    const mode = state.getDisplayMode();
+    if (mode === 'compact') return;
+
     if (data.content && data.content.trim()) {
+      if (mode === 'hacker') {
+        screen.feedRain(data.content);
+        return;
+      }
+      // verbose: show as text
       const record = subAgentState.get(data.id);
       const prefix = record?.label || '[sub]';
       const lines = data.content.split('\n');
@@ -533,9 +551,18 @@ export function setupAgentEvents(
   });
 
   // Subagent streaming — buffer chunks per subagent, flush on newline
+  // 大阈值避免 reasoning/thinking 碎片被逐行 flush（DeepSeek 等模型会逐字发送 reasoning）
   const subAgentStreamBuffer = new Map<string, string>();
   on('sub_agent_stream', (data: SubAgentStreamData) => {
     if (!data.chunk) return;
+
+    // Hacker mode: route to matrix rain instead of scroll area
+    if (state.getDisplayMode() === 'hacker') {
+      screen.feedRain(data.chunk);
+      subAgentStreamedChars.set(data.id, (subAgentStreamedChars.get(data.id) || 0) + data.chunk.length);
+      return;
+    }
+
     const record = subAgentState.get(data.id);
     const prefix = record?.label || '[sub]';
 
@@ -545,25 +572,22 @@ export function setupAgentEvents(
     let buffer = subAgentStreamBuffer.get(data.id) || '';
     buffer += data.chunk;
 
-    // Flush complete lines on newline, or flush when buffer gets large
-    if (buffer.includes('\n')) {
+    // Flush only when buffer is substantial — prevents one-word-per-line fragmentation
+    if (buffer.length > 500) {
       const lines = buffer.split('\n');
-      // Keep the last incomplete line in the buffer
       const incomplete = buffer.endsWith('\n') ? '' : (lines.pop() || '');
       const completeLines = lines.filter(l => l.trim());
       if (completeLines.length > 0) {
-        // First line gets prefix, rest flush without — so text flows naturally
-        const output = [`  ${prefix} │ ${completeLines[0]}`];
-        for (let i = 1; i < completeLines.length; i++) {
-          output.push(`  ${completeLines[i]}`);
+        const output = [`  ${prefix} │ ${completeLines[0].slice(0, 300)}`];
+        for (let i = 1; i < Math.min(completeLines.length, 10); i++) {
+          output.push(`  ${completeLines[i].slice(0, 300)}`);
+        }
+        if (completeLines.length > 10) {
+          output.push(`  ... (${completeLines.length - 10} more lines)`);
         }
         screen.appendScroll(COLORS.subAgent(output.join('\n') + '\n'));
       }
       subAgentStreamBuffer.set(data.id, incomplete);
-    } else if (buffer.length > 200) {
-      // No newline but buffer is large — flush as a single line
-      screen.appendScroll(COLORS.subAgent(`  ${prefix} │ ${buffer.slice(0, 300)}\n`));
-      subAgentStreamBuffer.set(data.id, '');
     } else {
       subAgentStreamBuffer.set(data.id, buffer);
     }
@@ -614,6 +638,7 @@ export function setupAgentEvents(
 
   on('agent_interrupted', (data: AgentInterruptedData) => {
     state.setStreamingOutput(false);
+    state.setInterrupted(true);
     screen.setStreaming(false);
     screen.clearThinkingAnimation();
 

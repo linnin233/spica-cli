@@ -25,7 +25,8 @@ interface RuntimeState {
 
   // UI state
   connectionErrorShown: boolean;
-  verboseMode: boolean;
+  /** Display mode: compact (spinner only) | verbose (full reasoning text) | hacker (matrix rain) */
+  displayMode: 'compact' | 'verbose' | 'hacker';
   showThinking: boolean;
 
   // Git branch (for status bar display, null when no repo)
@@ -35,6 +36,8 @@ interface RuntimeState {
   interruptCount: number;
   lastInterruptTime: number;
   shouldExit: boolean;
+  /** Set when agent is interrupted — prevents buffered stream chunks from displaying after interrupt */
+  interrupted: boolean;
 }
 
 /**
@@ -65,12 +68,13 @@ class RuntimeStateManager {
     isProcessing: false,
     streamingOutput: false,
     connectionErrorShown: false,
-    verboseMode: false,
+    displayMode: 'compact',
     showThinking: false,
     currentBranch: null,
     interruptCount: 0,
     lastInterruptTime: 0,
     shouldExit: false,
+    interrupted: false,
   };
 
   // Agent
@@ -122,18 +126,36 @@ class RuntimeStateManager {
     return this.state.connectionErrorShown;
   }
 
-  // Verbose Mode
-  setVerboseMode(verbose: boolean): void {
-    this.state.verboseMode = verbose;
+  // Display Mode (compact / verbose / hacker)
+  getDisplayMode(): 'compact' | 'verbose' | 'hacker' {
+    return this.state.displayMode;
   }
 
+  setDisplayMode(mode: 'compact' | 'verbose' | 'hacker'): void {
+    this.state.displayMode = mode;
+  }
+
+  cycleDisplayMode(): 'compact' | 'verbose' | 'hacker' {
+    const order: Array<'compact' | 'verbose' | 'hacker'> = ['compact', 'verbose', 'hacker'];
+    const idx = order.indexOf(this.state.displayMode);
+    this.state.displayMode = order[(idx + 1) % 3];
+    return this.state.displayMode;
+  }
+
+  // Backward-compatible API (legacy callers)
+  /** @deprecated Use getDisplayMode() === 'verbose' */
   isVerboseMode(): boolean {
-    return this.state.verboseMode;
+    return this.state.displayMode !== 'compact';
   }
 
+  /** @deprecated Use setDisplayMode() */
+  setVerboseMode(verbose: boolean): void {
+    this.state.displayMode = verbose ? 'verbose' : 'compact';
+  }
+
+  /** @deprecated Use cycleDisplayMode() */
   toggleVerboseMode(): boolean {
-    this.state.verboseMode = !this.state.verboseMode;
-    return this.state.verboseMode;
+    return this.cycleDisplayMode() !== 'compact';
   }
 
   // Thinking display mode (Ctrl+O toggle)
@@ -178,6 +200,15 @@ class RuntimeStateManager {
     this.state.interruptCount = 0;
   }
 
+  // Interrupted flag — prevents buffered stream chunks from displaying after ESC ESC
+  setInterrupted(value: boolean): void {
+    this.state.interrupted = value;
+  }
+
+  isInterrupted(): boolean {
+    return this.state.interrupted;
+  }
+
   // Exit flag
   setShouldExit(exit: boolean): void {
     this.state.shouldExit = exit;
@@ -202,12 +233,13 @@ class RuntimeStateManager {
       isProcessing: false,
       streamingOutput: false,
       connectionErrorShown: false,
-      verboseMode: false,
+      displayMode: 'compact',
       showThinking: false,
       currentBranch: null,
       interruptCount: 0,
       lastInterruptTime: 0,
       shouldExit: false,
+      interrupted: false,
     };
   }
 }

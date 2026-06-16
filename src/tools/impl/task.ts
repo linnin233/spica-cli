@@ -112,8 +112,16 @@ export async function executeTask(
   args: Record<string, any>,
   eventCallback?: ToolEventCallback
 ): Promise<ToolResult> {
-  const tasks = args.tasks as SubAgentTask[];
+  const tasks = args.tasks as SubAgentTask[] | undefined;
   const externalSignal = args._abortSignal as AbortSignal | undefined;
+
+  // Guard: LLM may omit tasks or pass a single object instead of an array
+  if (!tasks || !Array.isArray(tasks) || tasks.length === 0) {
+    return {
+      success: false,
+      error: 'No tasks provided. Pass an array of tasks with at least one { type, prompt } object.',
+    };
+  }
 
   // Limit: max 3 parallel tasks
   if (tasks.length > 3) {

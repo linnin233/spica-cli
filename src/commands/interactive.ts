@@ -167,13 +167,18 @@ export async function runInteractiveMode(
         const tokenCounter = new TokenCounter();
         tokenCounter.setContextWindow(contextWindow);
 
-        // 设置 Ctrl+O 切换回调
+        // 设置 Ctrl+O 切换回调（compact → verbose → hacker → compact）
         screen.setVerboseToggleCallback(() => {
           screen.clearThinkingAnimation();
-          const newMode = state.toggleVerboseMode();
+          const newMode = state.cycleDisplayMode();
+          const modeLabels: Record<string, string> = {
+            compact: 'Compact',
+            verbose: 'Verbose',
+            hacker: 'Hacker (matrix rain)',
+          };
           screen.appendScroll(
             COLORS.secondary(
-              `\n[MODE] ${newMode ? "Verbose" : "Compact"} display enabled\n`,
+              `\n[MODE] ${modeLabels[newMode] || newMode} display enabled\n`,
             ),
           );
           updateStatusBar();
@@ -758,9 +763,23 @@ If AGENTS.md already exists, preserve valuable content and supplement updates.`;
                 );
                 isProcessing = true;
                 state.setProcessing(true);
+                state.setInterrupted(false);
                 updateStatusBar();
+
+                const isHackerSkill = state.getDisplayMode() === 'hacker';
+                if (isHackerSkill) screen.startRain();
+
                 try {
                   const result = await agent.runLoop(prompt);
+
+                  if (isHackerSkill) {
+                    screen.stopRain();
+                    // Reprint the response that was consumed by rain
+                    if (result && !result.startsWith('[')) {
+                      screen.appendScroll(COLORS.primary(result + '\n'));
+                    }
+                  }
+
                   screen.clearThinkingAnimation();
                   screen.setStreaming(false);
                   if (result && result.startsWith('[')) {
@@ -768,15 +787,17 @@ If AGENTS.md already exists, preserve valuable content and supplement updates.`;
                   } else {
                     screen.appendScroll(COLORS.success("\n[OK] Done\n"));
                   }
-                  playBell("done"); // 工作完成提示音（正常/中断/停滞都响）
+                  playBell("done");
                 } catch (error: unknown) {
+                  if (isHackerSkill) screen.stopRain();
+
                   screen.clearThinkingAnimation();
                   screen.setStreaming(false);
                   const errorMsg = error instanceof Error ? error.message : String(error);
                   screen.appendScroll(
                     COLORS.error(`\n[ERR] ${errorMsg}\n`),
                   );
-                  playBell("error"); // 错误提示音
+                  playBell("error");
                 }
                 screen.restoreCursor();
                 screen.refreshInput();
@@ -808,6 +829,7 @@ If AGENTS.md already exists, preserve valuable content and supplement updates.`;
 
           isProcessing = true;
           state.setProcessing(true);
+          state.setInterrupted(false);
           updateStatusBar();
 
           // 设置队列输入回调，让 agent 在迭代间隙获取队列输入
@@ -819,10 +841,15 @@ If AGENTS.md already exists, preserve valuable content and supplement updates.`;
             return null;
           });
 
-          // 显示处理状态（心跳由 waiting_for_llm 事件自动启动）
-          screen.appendScroll(
-            COLORS.muted("Processing... (ESC ESC to interrupt)\n"),
-          );
+          // Hacker mode: start rain before processing
+          const isHacker = state.getDisplayMode() === 'hacker';
+          if (isHacker) {
+            screen.startRain();
+          } else {
+            screen.appendScroll(
+              COLORS.muted("Processing... (ESC ESC to interrupt)\n"),
+            );
+          }
 
           const startTime = Date.now();
           try {
@@ -831,14 +858,23 @@ If AGENTS.md already exists, preserve valuable content and supplement updates.`;
             if (state.isStreamingOutput()) {
               state.setStreamingOutput(false);
               screen.setStreaming(false);
-              screen.appendScroll("\n");
             }
+
+            // Hacker mode: stop rain, reprint result that was consumed by rain
+            if (isHacker) {
+              screen.stopRain();
+              screen.appendScroll(COLORS.primary(`\n> ${finalInput}\n`));
+              // Reprint the actual response (it was shown as rain, now as text)
+              if (result && !result.startsWith('[')) {
+                screen.appendScroll(COLORS.primary(result + '\n'));
+              }
+            }
+
+            screen.appendScroll("\n");
             screen.clearThinkingAnimation();
 
-            // 显示运行统计
             const stats = formatRunStats(elapsed, agent, tokenCounter);
             screen.appendScroll(COLORS.muted(`\n${stats}\n`));
-            // 检查 result 是否以 [STATUS] 开头（中断/停滞/错误等特殊状态）
             if (result && result.startsWith('[')) {
               screen.appendScroll(COLORS.muted(`${result}\n`));
             } else {
@@ -851,10 +887,16 @@ If AGENTS.md already exists, preserve valuable content and supplement updates.`;
             if (state.isStreamingOutput()) {
               state.setStreamingOutput(false);
               screen.setStreaming(false);
-              screen.appendScroll("\n");
             }
+
+            // Hacker mode: stop rain, restore normal display
+            if (isHacker) {
+              screen.stopRain();
+              screen.appendScroll(COLORS.primary(`\n> ${finalInput}\n`));
+            }
+
+            screen.appendScroll("\n");
             screen.clearThinkingAnimation();
-            // 显示运行统计（即使失败也显示）
             const stats = formatRunStats(elapsed, agent, tokenCounter);
             screen.appendScroll(COLORS.muted(`\n${stats}\n`));
             screen.appendScroll(COLORS.error(`[ERR] ${errorMsg}\n`));

@@ -3,6 +3,8 @@ import { COLORS } from './colors';
 import { getScrollbackBuffer, ScrollbackBuffer } from './scrollbackBuffer';
 import { renderMarkdownTables } from './tableRenderer';
 import { ansiStrip, ansiClean } from './ansiFilter';
+import { MatrixRainController } from './matrixRain';
+import type { MatrixRainConfig } from './matrixRain';
 
 const ESC = '\x1b';
 
@@ -27,6 +29,11 @@ export interface ScreenState {
   cursorInScrollArea: boolean;
   isStreaming: boolean;
   onVerboseToggle?: () => void;
+  // Matrix rain (hacker mode)
+  matrixRain: MatrixRainController | null;
+  hackerMode: boolean;
+  /** In hacker mode: first row of the output zone (rain fills rows 1..rainTop-1) */
+  rainTop: number;
   // 缓冲的输入，用于流式输出结束后刷新
   pendingInputRefresh: boolean;
   // 历史缓冲区（用于resize后重绘）
@@ -63,6 +70,9 @@ export class ScreenManager {
       cursorInScrollArea: false,
       isStreaming: false,
       onVerboseToggle: undefined,
+      matrixRain: null,
+      hackerMode: false,
+      rainTop: 1,
       pendingInputRefresh: false,
       scrollbackBuffer: getScrollbackBuffer(3000),
     };
@@ -83,9 +93,19 @@ export class ScreenManager {
     this.state.statusRow = this.state.terminalHeight - this.state.inputLines - 1;
     this.state.scrollBottom = this.state.statusRow - 1;
 
-    // Clear and set new scroll region
-    writeStdout(`${ESC}[2J${ESC}[H`);
-    writeStdout(`${ESC}[1;${this.state.scrollBottom}r`);
+    // Hacker mode: full-screen rain, no scroll regions
+    if (this.state.hackerMode) {
+      this.state.scrollBottom = this.state.statusRow - 1;
+      this.state.rainTop = 1;
+      if (this.state.matrixRain) {
+        this.state.matrixRain.resize(newWidth, this.state.scrollBottom, 1);
+      }
+      writeStdout(`${ESC}[2J${ESC}[H`);
+      writeStdout(`${ESC}[r`); // reset scroll region
+    } else {
+      writeStdout(`${ESC}[2J${ESC}[H`);
+      writeStdout(`${ESC}[1;${this.state.scrollBottom}r`);
+    }
 
     // Redraw: show all available history, capped to avoid flicker on huge buffers
     const allLines = this.state.scrollbackBuffer.getLines();
@@ -201,6 +221,13 @@ export class ScreenManager {
 
   // 直接输出（用于工具调用、thinking等非流式内容）
   appendScroll(text: string): void {
+    // Hacker mode: route all text output to rain
+    if (this.state.hackerMode && this.state.matrixRain) {
+      this.state.scrollbackBuffer.append(ansiClean(text));
+      this.state.matrixRain.feed(text);
+      return;
+    }
+
     // 保存清洗后文本到历史缓冲区（strip ANSI for resize replay）
     this.state.scrollbackBuffer.append(ansiClean(text));
 
@@ -899,6 +926,54 @@ export class ScreenManager {
 
   writeRaw(text: string): void {
     process.stdout.write(text);
+  }
+
+  // ── Hacker Mode ───────────────────────────────────────────────────────
+
+  /** Start the rain — called before processing begins */
+  startRain(): void {
+    if (this.state.matrixRain) return; // already running
+    this.state.hackerMode = true;
+
+    this.state.scrollBottom = this.state.statusRow - 1;
+    this.state.matrixRain = new MatrixRainController({
+      height: this.state.scrollBottom,
+      width: this.state.terminalWidth,
+      terminalRow: 1,
+    });
+    this.state.matrixRain.start();
+
+    writeStdout(`${ESC}[2J${ESC}[H`);
+    writeStdout(`${ESC}[r`);
+    this.drawStatus();
+    this.refreshInput();
+    this.restoreCursor();
+  }
+
+  /** Stop the rain and restore normal display — called after processing */
+  stopRain(): void {
+    if (!this.state.matrixRain) return;
+    this.state.matrixRain.clear();
+    this.state.matrixRain = null;
+    this.state.hackerMode = false;
+
+    // Restore normal scroll area
+    this.state.scrollBottom = this.state.statusRow - 1;
+    this.state.cursorInScrollArea = false;
+    this.state.isStreaming = false;
+
+    writeStdout(`${ESC}[2J${ESC}[H`);
+    writeStdout(`${ESC}[1;${this.state.scrollBottom}r`);
+    this.drawStatus();
+    this.refreshInput();
+    this.restoreCursor();
+  }
+
+  /** Feed any text into the rain */
+  feedRain(text: string): void {
+    if (this.state.matrixRain) {
+      this.state.matrixRain.feed(text);
+    }
   }
 }
 
