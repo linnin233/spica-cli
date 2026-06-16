@@ -1058,6 +1058,30 @@ export class SpicaAgent extends EventEmitter {
 
         if (!response.toolCalls || response.toolCalls.length === 0) {
           if (response.content) {
+            // If queue was just injected, send it to LLM instead of breaking.
+            // Otherwise the queue content is consumed but never processed,
+            // and autoDrainQueue cannot recover it (items already marked processed).
+            if (queueInjectedThisIteration) {
+              this.emit('waiting_for_llm');
+              try {
+                response = await this.callLLMWithRetry(
+                  sig => this.llm!.generateFromHistory(toolDefinitions, sig),
+                  'llm_generate_queue',
+                  10,
+                  signal
+                );
+              } catch (retryError: unknown) {
+                const errorMsg =
+                  retryError instanceof Error ? retryError.message : String(retryError);
+                this.emit('error_suggestion', {
+                  tool: 'llm_generate',
+                  error: errorMsg,
+                  suggestion: 'LLM failed to process queued input. Check API status.',
+                });
+                break;
+              }
+              continue;
+            }
             // finished=true with content → LLM intentionally ended its turn.
             // Equivalent to Anthropic's stop_reason="end_turn".
             // Respect the API signal: exit loop, show text to user.

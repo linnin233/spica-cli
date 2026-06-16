@@ -84,6 +84,18 @@ export class InputQueue {
     return pending.map(i => i.content).join('\n\n---\n\n');
   }
 
+  // 查看待处理内容但不标记为已处理（用于 agent 注入队列时 peek）
+  // agent 在 LLM 成功处理后调用 mergePending() 消费
+  peekPendingContent(): string | null {
+    const pending = this.getPending();
+    if (pending.length === 0) return null;
+
+    if (pending.length === 1) {
+      return pending[0].content;
+    }
+    return pending.map(i => i.content).join('\n\n---\n\n');
+  }
+
   // 撤回最后一个未处理的输入
   undoLast(): QueuedInput | null {
     const pending = this.getPending();
