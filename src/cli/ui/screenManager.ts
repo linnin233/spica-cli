@@ -224,7 +224,7 @@ export class ScreenManager {
     // Hacker mode: route all text output to rain
     if (this.state.hackerMode && this.state.matrixRain) {
       this.state.scrollbackBuffer.append(ansiClean(text));
-      this.state.matrixRain.feed(text);
+      this.state.matrixRain.feed(text, 'tool');
       return;
     }
 
@@ -970,9 +970,9 @@ export class ScreenManager {
   }
 
   /** Feed any text into the rain */
-  feedRain(text: string): void {
+  feedRain(text: string, type: import('./matrixRain').RainType = 'thinking'): void {
     if (this.state.matrixRain) {
-      this.state.matrixRain.feed(text);
+      this.state.matrixRain.feed(text, type);
     }
   }
 }

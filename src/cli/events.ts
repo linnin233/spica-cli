@@ -253,7 +253,7 @@ export function setupAgentEvents(
 
     // Hacker mode: all output → rain during processing
     if (state.getDisplayMode() === 'hacker') {
-      screen.feedRain(data.chunk);
+      screen.feedRain(data.chunk, 'output');
       if (!state.isStreamingOutput()) {
         state.setStreamingOutput(true);
         screen.setStreaming(true);
@@ -276,7 +276,7 @@ export function setupAgentEvents(
     if (data.role === 'assistant' && data.content) {
       screen.clearThinkingAnimation();
       if (state.getDisplayMode() === 'hacker') {
-        screen.feedRain(data.content);
+        screen.feedRain(data.content, 'output');
       } else if (!state.isStreamingOutput()) {
         screen.appendScroll(COLORS.primary(data.content + '\n'));
       }
@@ -304,7 +304,7 @@ export function setupAgentEvents(
     if (mode === 'verbose') {
       screen.appendStreamChunk(COLORS.reasoning(data.content));
     } else if (mode === 'hacker') {
-      screen.feedRain(data.content);
+      screen.feedRain(data.content, 'thinking');
     }
     // compact: discard content (spinner only)
   });
@@ -535,7 +535,7 @@ export function setupAgentEvents(
 
     if (data.content && data.content.trim()) {
       if (mode === 'hacker') {
-        screen.feedRain(data.content);
+        screen.feedRain(data.content, 'subagent');
         return;
       }
       // verbose: show as text
@@ -558,7 +558,7 @@ export function setupAgentEvents(
 
     // Hacker mode: route to matrix rain instead of scroll area
     if (state.getDisplayMode() === 'hacker') {
-      screen.feedRain(data.chunk);
+      screen.feedRain(data.chunk, 'subagent');
       subAgentStreamedChars.set(data.id, (subAgentStreamedChars.get(data.id) || 0) + data.chunk.length);
       return;
     }
