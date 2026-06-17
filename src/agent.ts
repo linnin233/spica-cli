@@ -16,11 +16,6 @@ import {
 import { runPreHooks, runPostHooks } from './hooks';
 import { isCorrection, saveLearning } from './core/learnings';
 import { saveSession } from './utils/session';
-import {
-  createCheckpoint,
-  listCheckpoints,
-  type CheckpointMeta,
-} from './storage/checkpointManager';
 import { EventEmitter, setMaxListeners } from 'events';
 
 // 提高默认 MaxListeners 上限 — 单次 runLoop 内可能有
@@ -479,32 +474,6 @@ export class SpicaAgent extends EventEmitter {
     this.toolWhitelist = allowedTools;
   }
 
-  // 创建自动 checkpoint（文件快照，不创建 git commit）
-  private async createAutoCheckpoint(prompt: string): Promise<CheckpointMeta | null> {
-    try {
-      const meta = await createCheckpoint(this.workspacePath, prompt);
-
-      if (meta) {
-        this.emit('checkpoint_created', {
-          id: meta.id,
-          message: meta.message,
-          filesBackedUp: meta.filesBackedUp.length,
-        });
-      }
-
-      return meta;
-    } catch {
-      // checkpoint 失败不影响 AI 工作
-      this.emit('checkpoint_warning', { error: 'Failed to create checkpoint' });
-      return null;
-    }
-  }
-
-  // 获取最近的 checkpoint 列表
-  async getCheckpoints(): Promise<CheckpointMeta[]> {
-    return await listCheckpoints(this.workspacePath, 50);
-  }
-
   // 获取git状态（辅助方法）
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- simpleGit status.files type is complex
   private async getGitStatus(): Promise<{ files: any[] }> {
@@ -853,9 +822,8 @@ export class SpicaAgent extends EventEmitter {
    *
    * Workflow:
    * 1. Match skill if input matches skill pattern
-   * 2. Create auto checkpoint before work
-   * 3. Compress context if needed
-   * 4. Generate LLM response
+   * 2. Compress context if needed
+   * 3. Generate LLM response
    * 5. Execute tools (parallel or sequential based on conflicts)
    * 6. Continue until finished or stagnation detected
    *
@@ -897,9 +865,6 @@ export class SpicaAgent extends EventEmitter {
       if (!this.llm) {
         throw new Error('LLM client not initialized');
       }
-
-      // Auto-checkpoint before AI work (file snapshot, no git pollution)
-      await this.createAutoCheckpoint(prompt);
 
       // Pre-request: 基于token数判断是否需要压缩
       const existingMessages = this.llm.getMessages();

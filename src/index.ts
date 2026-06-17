@@ -89,7 +89,7 @@ program
   .version("1.0.0")
   .addHelpText(
     "after",
-    '\nExamples:\n  spica                    Start interactive session\n  spica run "fix bug"      Execute one task\n  spica set openai https://api.openai.com/v1 sk-xxx gpt-4o\n\nInternal commands (in session):\n  /checkpoint, /skill, /mcp, /session, /queue, /status, /help',
+    '\nExamples:\n  spica                    Start interactive session\n  spica run "fix bug"      Execute one task\n  spica set openai https://api.openai.com/v1 sk-xxx gpt-4o\n\nInternal commands (in session):\n  /skill, /mcp, /session, /queue, /status, /help',
   );
 
 // 默认：持续对话模式（自动加载历史）

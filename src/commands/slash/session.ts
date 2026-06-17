@@ -172,10 +172,11 @@ export const sessionHandler: SlashHandler = async (args, ctx) => {
     const prefix = isCurrent ? '*' : ' ';
     const date = new Date(s.lastActivity).toLocaleDateString();
     const name = s.name || s.id;
+    const idDisplay = s.name ? COLORS.muted(` [${s.id}]`) : '';
     const summary = s.summary || '';
 
     ctx.screen.appendScroll(
-      COLORS.muted(`${prefix} ${i + 1}. ${name}  (${s.messageCount} msgs, ${date})\n`),
+      COLORS.muted(`${prefix} ${i + 1}. ${name}${idDisplay}  (${s.messageCount} msgs, ${date})\n`),
     );
     if (summary) {
       ctx.screen.appendScroll(COLORS.muted(`     ${summary}\n`));

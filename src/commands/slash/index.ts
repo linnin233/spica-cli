@@ -1,7 +1,6 @@
 import type { SlashContext, SlashHandler } from './types';
 import { queueHandler } from './queue';
 import { sessionHandler } from './session';
-import { checkpointHandler } from './checkpoint';
 import { skillManageHandler, skillInvokeHandler } from './skill';
 import { mcpHandler } from './mcp';
 import { compactHandler, summaryHandler } from './compact';
@@ -63,12 +62,6 @@ export async function dispatchSlash(trimmed: string, ctx: SlashContext): Promise
   // /status
   if (cmd === 'status') {
     await statusHandler('', ctx);
-    return true;
-  }
-
-  // /checkpoint
-  if (cmd === 'checkpoint') {
-    await checkpointHandler(parts.slice(1).join(' '), ctx);
     return true;
   }
 

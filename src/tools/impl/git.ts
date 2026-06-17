@@ -139,35 +139,6 @@ export async function executeGit(safeArgs: Record<string, any>): Promise<ToolRes
 
       return { success: false, error: `Unknown stash action: ${stashAction}` };
     }
-    case 'checkpoint_restore': {
-      // 查找最近的SPICA-CHECKPOINT commit
-      const log = await git.log({ maxCount: 20 });
-      const checkpoint = log.all.find(c => c.message.includes('[SPICA-CHECKPOINT]'));
-
-      if (!checkpoint) {
-        return {
-          success: false,
-          error:
-            '没有找到checkpoint。建议：\n1. git action:log (查看历史)\n2. git action:reset mode:hard (手动恢复到某个commit)',
-        };
-      }
-
-      // 检查当前是否有未保存工作
-      const currentStatus = await git.status();
-      if (currentStatus.files.length > 0) {
-        return {
-          success: false,
-          error: `当前有 ${currentStatus.files.length} 个未保存更改。\n建议先处理：\n1. git action:stash (保存当前工作)\n2. git action:reset mode:hard (恢复checkpoint)\n3. git action:stash_pop (恢复之前工作)`,
-        };
-      }
-
-      // 安全恢复到checkpoint
-      await git.reset(['--hard', checkpoint.hash]);
-      return {
-        success: true,
-        output: `Restored to checkpoint: ${checkpoint.hash.substring(0, 7)}\nMessage: ${checkpoint.message}\nTime: ${checkpoint.date}`,
-      };
-    }
     default:
       return { success: false, error: `Unknown git action: ${action}` };
   }

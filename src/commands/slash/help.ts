@@ -13,12 +13,6 @@ export const helpHandler: SlashHandler = async (_args, ctx) => {
   ctx.screen.appendScroll(COLORS.muted('  /delete <id>     Delete session\n'));
   ctx.screen.appendScroll(COLORS.muted('  /archive         Archive current session\n'));
   ctx.screen.appendScroll('\n');
-  ctx.screen.appendScroll(COLORS.primary.bold('Checkpoint:\n'));
-  ctx.screen.appendScroll(COLORS.muted('  /checkpoint list        List checkpoints\n'));
-  ctx.screen.appendScroll(COLORS.muted('  /checkpoint show <id>   Show details\n'));
-  ctx.screen.appendScroll(COLORS.muted('  /checkpoint restore <id>  Restore\n'));
-  ctx.screen.appendScroll(COLORS.muted('  /checkpoint clean        Clean old\n'));
-  ctx.screen.appendScroll('\n');
   ctx.screen.appendScroll(COLORS.primary.bold('Skills:\n'));
   ctx.screen.appendScroll(COLORS.muted('  /skill list               List skills\n'));
   ctx.screen.appendScroll(COLORS.muted('  /skill install <url>      Install skill\n'));

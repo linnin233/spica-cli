@@ -140,10 +140,12 @@ function renderTable(table: ParsedTable): string {
   const sepCells = colWidths.map(w => COLORS.muted('-'.repeat(w)));
   lines.push(sepCells.join(COLORS.muted(SEP)));
 
-  // Data rows
-  for (const row of table.rows) {
-    const cells = row.map((cell, i) => padCell(cell, colWidths[i], table.alignments[i] || 'left'));
-    lines.push(cells.join(COLORS.muted(SEP)));
+  // Data rows — alternate colors for zebra striping
+  for (let i = 0; i < table.rows.length; i++) {
+    const row = table.rows[i];
+    const cells = row.map((cell, j) => padCell(cell, colWidths[j], table.alignments[j] || 'left'));
+    const rowText = cells.join(COLORS.muted(SEP));
+    lines.push(i % 2 === 0 ? rowText : COLORS.muted(rowText));
   }
 
   return lines.join('\n');

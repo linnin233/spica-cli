@@ -34,7 +34,6 @@ const BASE_COMMANDS = [
   '/undo',
   '/clear',
   '/reset',
-  '/checkpoint',
   '/skill',
   '/mcp',
   '/history',
@@ -346,10 +345,6 @@ describe('Command Parsing', () => {
     '/undo': { type: 'undo' },
     '/clear': { type: 'clear' },
     '/reset': { type: 'clear' },
-    '/checkpoint': { type: 'checkpoint', action: 'list' },
-    '/checkpoint list': { type: 'checkpoint', action: 'list' },
-    '/checkpoint show abc': { type: 'checkpoint', action: 'show', id: 'abc' },
-    '/checkpoint restore abc': { type: 'checkpoint', action: 'restore', id: 'abc' },
     '/skill': { type: 'skill', action: 'list' },
     '/skill list': { type: 'skill', action: 'list' },
     '/mcp': { type: 'mcp', action: 'status' },
@@ -399,13 +394,6 @@ describe('Command Parsing', () => {
     // Clear/Reset
     if (mainCmd === 'clear' || mainCmd === 'reset') {
       return { type: 'clear' };
-    }
-
-    // Checkpoint
-    if (mainCmd === 'checkpoint') {
-      const action = args[0] || 'list';
-      const id = args[1];
-      return { type: 'checkpoint', action, id };
     }
 
     // Skill

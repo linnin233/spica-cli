@@ -231,39 +231,15 @@ export class ScreenManager {
     // 保存清洗后文本到历史缓冲区（strip ANSI for resize replay）
     this.state.scrollbackBuffer.append(ansiClean(text));
 
-    // 检测是否为 markdown 表格行 — 需要跨多次 appendScroll 调用积累
-    // 因为 renderMarkdownTables 要求 header+separator+data 同时存在
-    // 表格行格式: | col1 | col2 | 或带前缀的: [#N] │ | col1 | col2 |
-    const stripped = ansiStrip(text); // strip ANSI for pattern matching
-    const lines = stripped.split('\n');
-    const nonEmptyLines = lines.filter(l => l.trim() !== '');
-    const isTableRow = (l: string): boolean => {
-      const t = l.trim();
-      return /^\|.+\|$/.test(t) || /\│\s*\|/.test(t);
-    };
-    const isTableLike =
-      nonEmptyLines.length > 0 &&
-      nonEmptyLines.every(isTableRow);
-
-    if (isTableLike && this.appendScrollTableBuffer.length < 40) {
-      // Accumulate table lines for later batch rendering
-      this.appendScrollTableBuffer.push(text);
-      return;
+    // Feed lines through unified table state machine
+    const lines = text.split('\n');
+    for (const line of lines) {
+      this.processLine(line);
     }
 
-    // Flush any pending table buffer first
-    this.flushAppendScrollTableBuffer();
-
-    // 渲染 markdown 表格为 ANSI 对齐列
-    const displayText = renderMarkdownTables(text);
-
-    // 直接输出
-    if (!this.state.cursorInScrollArea) {
-      writeStdout(`${ESC}[?25l`);
-      writeStdout(`${ESC}[${this.state.scrollBottom};1H`);
-      this.state.cursorInScrollArea = true;
-    }
-    writeStdout(displayText);
+    // Flush any pending table at end of batch
+    this.flushTableBuffer();
+    this.tableState = 'idle';
 
     // 如果有换行符，刷新输入框
     if (text.includes('\n')) {
@@ -271,45 +247,19 @@ export class ScreenManager {
     }
   }
 
-  /** Flush accumulated table lines through renderMarkdownTables */
-  private flushAppendScrollTableBuffer(): void {
-    if (this.appendScrollTableBuffer.length === 0) return;
-    const buffered = this.appendScrollTableBuffer.join('');
-    this.appendScrollTableBuffer = [];
-
-    // Strip ANSI codes and sub-agent prefixes (e.g., "  [#3 explore] │ ") to get
-    // clean markdown table format that renderMarkdownTables can parse
-    const stripped = ansiStrip(buffered);
-    const cleaned = stripped.split('\n').map(l => {
-      const pipeIdx = l.indexOf('│');
-      if (pipeIdx >= 0) return l.slice(pipeIdx + 1);
-      return l;
-    }).join('\n');
-
-    const displayText = renderMarkdownTables(cleaned);
-    if (displayText.trim()) {
-      if (!this.state.cursorInScrollArea) {
-        writeStdout(`${ESC}[?25l`);
-        writeStdout(`${ESC}[${this.state.scrollBottom};1H`);
-        this.state.cursorInScrollArea = true;
-      }
-      writeStdout(displayText);
-    }
-  }
-
-  /** Flush pending appendScroll table buffer (call when streaming/processing ends) */
+  /** Flush pending table buffer (call when streaming/processing ends) */
   flushTableScrollBuffer(): void {
-    this.flushAppendScrollTableBuffer();
+    this.flushTableBuffer();
+    this.tableState = 'idle';
   }
 
   // 行缓冲输出（用于AI流式输出）
   private streamBuffer: string = '';
-  // 表格行缓冲 — 延迟输出表格行直到表格完整，以便 ANSI 对齐渲染
-  private tableLineBuffer: string[] = [];
-  // appendScroll 表格缓冲 — 跨 appendScroll 调用的表格行积累
-  // renderMarkdownTables 需要 header+separator+data 三行同时存在才能检测表格，
-  // 但流式输出时这些行可能分多次 appendScroll 到达，需要积累后一次渲染。
-  private appendScrollTableBuffer: string[] = [];
+  // 统一表格状态机 — 流式和非流式路径共用
+  // States: idle → pending (saw |...| header) → table (separator confirmed)
+  private tableState: 'idle' | 'pending' | 'table' = 'idle';
+  private tableBuffer: string[] = [];
+  private readonly TABLE_MAX_ROWS = 200;
 
   appendStreamChunk(text: string): void {
     // 保存清洗后文本到历史缓冲区（strip ANSI for resize replay）
@@ -323,61 +273,85 @@ export class ScreenManager {
       const lines = this.streamBuffer.split('\n');
       // 处理所有完整行
       for (let i = 0; i < lines.length - 1; i++) {
-        this.processStreamLine(lines[i]);
+        this.processLine(lines[i]);
       }
       // 保留最后一行在缓冲中
       this.streamBuffer = lines[lines.length - 1] || '';
     }
   }
 
-  // 表格行检测：以 | 开头且包含 |
-  private isTableDataLine(line: string): boolean {
-    const trimmed = ansiStrip(line).trim();
-    return /^\|.+\|/.test(trimmed);
-  }
+  // ── Unified table state machine ──────────────────────────────
+  // States: idle → pending (saw |...| header) → table (separator confirmed)
+  // Two-phase confirmation prevents false-positive buffering of single |text| lines.
 
-  // 分隔行检测：|---|---|
-  private isTableSepLine(line: string): boolean {
-    const trimmed = ansiStrip(line).trim();
-    return /^\|[\s:]*-{3,}[\s:]*\|/.test(trimmed) || /^\|[\s:]*-{3,}[\s:]*[\|:]/.test(trimmed);
-  }
+  private processLine(line: string): void {
+    const stripped = ansiStrip(line).trim();
+    const isDataLine = /^\|.+\|/.test(stripped);
+    const isSepLine = /^\|[\s:]*-{3,}[\s:]*\|/.test(stripped);
 
-  private processStreamLine(line: string): void {
-    if (this.tableLineBuffer.length > 0) {
-      // 正在缓冲表格
-      if (this.isTableDataLine(line) || this.isTableSepLine(line)) {
-        this.tableLineBuffer.push(line);
+    if (this.tableState === 'table') {
+      if (isDataLine) {
+        if (this.tableBuffer.length < this.TABLE_MAX_ROWS) {
+          this.tableBuffer.push(line);
+        }
         return;
       }
-      // 表格结束 — 渲染并输出
+      // Table ended — render and flush
       this.flushTableBuffer();
-    }
-
-    // 检测表格开始：当前行是表格数据行，下一行可能是分隔行
-    if (this.isTableDataLine(line)) {
-      // 可能是表头，先缓冲
-      this.tableLineBuffer.push(line);
+      this.tableState = 'idle';
+      this.writeOutputLine(line);
       return;
     }
 
-    // 普通行 — 直接输出
-    this.writeStreamLine(line);
-  }
-
-  private flushTableBuffer(): void {
-    if (this.tableLineBuffer.length === 0) return;
-
-    const text = this.tableLineBuffer.join('\n');
-    const rendered = renderMarkdownTables(text);
-
-    for (const renderedLine of rendered.split('\n')) {
-      this.writeStreamLine(renderedLine);
+    if (this.tableState === 'pending') {
+      if (isSepLine) {
+        // Confirmed: header + separator = table
+        this.tableBuffer.push(line);
+        this.tableState = 'table';
+        return;
+      }
+      // False alarm — flush buffered header as plain text
+      const buffered = this.tableBuffer[0];
+      this.tableBuffer = [];
+      this.tableState = 'idle';
+      this.writeOutputLine(buffered);
+      this.writeOutputLine(line);
+      return;
     }
 
-    this.tableLineBuffer = [];
+    // idle
+    if (isDataLine) {
+      // Potential table header — buffer and wait for separator confirmation
+      this.tableBuffer = [line];
+      this.tableState = 'pending';
+      return;
+    }
+
+    // Plain line
+    this.writeOutputLine(line);
   }
 
-  private writeStreamLine(line: string): void {
+  /** Flush buffered table through renderMarkdownTables */
+  private flushTableBuffer(): void {
+    if (this.tableBuffer.length < 3) {
+      // Not enough lines for a table — flush as plain text
+      for (const l of this.tableBuffer) {
+        this.writeOutputLine(l);
+      }
+      this.tableBuffer = [];
+      return;
+    }
+
+    const text = this.tableBuffer.join('\n');
+    const rendered = renderMarkdownTables(text);
+
+    for (const l of rendered.split('\n')) {
+      this.writeOutputLine(l);
+    }
+    this.tableBuffer = [];
+  }
+
+  private writeOutputLine(line: string): void {
     if (!this.state.cursorInScrollArea) {
       writeStdout(`${ESC}[?25l`);
       writeStdout(`${ESC}[${this.state.scrollBottom};1H`);
@@ -391,7 +365,7 @@ export class ScreenManager {
   flushStreamBuffer(): void {
     // 先刷新待处理的表格缓冲
     this.flushTableBuffer();
-    this.flushAppendScrollTableBuffer();
+    this.tableState = 'idle';
 
     if (this.streamBuffer) {
       if (!this.state.cursorInScrollArea) {
@@ -407,7 +381,8 @@ export class ScreenManager {
 
   // 强制刷新（用于工具调用结束等）
   flushOutput(): void {
-    this.flushAppendScrollTableBuffer();
+    this.flushTableBuffer();
+    this.tableState = 'idle';
     this.refreshInputDuringStreaming();
   }
 
@@ -478,7 +453,7 @@ export class ScreenManager {
       writeStdout(`${ESC}[${this.state.scrollBottom};1H`);
       writeStdout(`${ESC}[2K`);
     }
-    // 重置光标状态——下次 writeStreamLine/appendScroll 会重新定位到行首
+    // 重置光标状态——下次 writeOutputLine/appendScroll 会重新定位到行首
     // 防止 thinking 帧残留混入后续输出（如 "⠏ thinking**content**"）
     this.state.cursorInScrollArea = false;
   }

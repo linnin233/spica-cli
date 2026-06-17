@@ -13,7 +13,6 @@ import {
   isFullWidth,
   buildStatusText,
   formatArgsCompact,
-  formatToolArgs,
   countDiffLines,
   countMatches,
   countFiles,
@@ -232,7 +231,6 @@ export function setupAgentEvents(
     reasoningStarted = false;
     resetToolTracking();
     subAgentState.clear();
-    subAgentStreamBuffer.clear();
     subAgentStreamedChars.clear();
     subAgentSeq = 0;
     // 清除thinking动画
@@ -439,41 +437,16 @@ export function setupAgentEvents(
   });
 
   on('sub_agent_tool_call', (data: SubAgentToolCallData) => {
-    // Track tool count
+    // Track tool count (no scroll output — panel shows status only)
     const record = subAgentState.get(data.id);
     if (record) record.toolCount++;
-
-    // Flush any pending stream buffer before showing tool call
-    const pending = subAgentStreamBuffer.get(data.id);
-    if (pending?.trim()) {
-      const prefix = record?.label || '[sub]';
-      screen.appendScroll(COLORS.subAgent(`  ${prefix} │ ${pending.slice(0, 300)}\n`));
-      subAgentStreamBuffer.set(data.id, '');
-    }
-
-    // Show tool call with subagent label and key args
-    const prefix = record?.label || '[sub]';
-    const args = formatToolArgs(data.name, data.arguments);
-    screen.appendScroll(COLORS.subAgent(`  ${prefix} → ${data.name}${args ? ` ${args}` : ''}\n`));
   });
 
-  on('sub_agent_tool_result', (data: SubAgentToolResultData) => {
-    const record = subAgentState.get(data.id);
-    const prefix = record?.label || '[sub]';
-    const icon = data.success ? '✓' : '✗';
-    const colorFn = data.success ? COLORS.success : COLORS.error;
-    screen.appendScroll(colorFn(`  ${prefix} ${icon} ${data.name}\n`));
+  on('sub_agent_tool_result', (_data: SubAgentToolResultData) => {
+    // No scroll output — panel shows status only
   });
 
   on('sub_agent_done', (data: SubAgentDoneData) => {
-    // Flush any remaining stream buffer
-    const remaining = subAgentStreamBuffer.get(data.id);
-    if (remaining?.trim()) {
-      const record = subAgentState.get(data.id);
-      const prefix = record?.label || '[sub]';
-      screen.appendScroll(COLORS.subAgent(`  ${prefix} │ ${remaining.slice(0, 300)}\n`));
-    }
-    subAgentStreamBuffer.delete(data.id);
     subAgentStreamedChars.delete(data.id);
 
     const record = subAgentState.get(data.id);
@@ -482,19 +455,10 @@ export function setupAgentEvents(
       record.summary = truncateToWidth(data.summary || 'done', 60);
     }
 
-    // 更新状态面板
     displaySubAgentPanel();
   });
 
   on('sub_agent_error', (data: SubAgentErrorData) => {
-    // Flush any remaining stream buffer
-    const remaining = subAgentStreamBuffer.get(data.id);
-    if (remaining?.trim()) {
-      const record = subAgentState.get(data.id);
-      const prefix = record?.label || '[sub]';
-      screen.appendScroll(COLORS.subAgent(`  ${prefix} │ ${remaining.slice(0, 300)}\n`));
-    }
-    subAgentStreamBuffer.delete(data.id);
     subAgentStreamedChars.delete(data.id);
 
     const record = subAgentState.get(data.id);
@@ -503,32 +467,18 @@ export function setupAgentEvents(
       record.error = truncateToWidth(data.error, 80);
     }
 
-    // 更新状态面板
     displaySubAgentPanel();
   });
 
-  // Subagent text output — show what subagent is saying
-  // Uses subAgentStreamedChars to avoid duplicate display (streaming already showed content)
+  // Subagent text output — only track streamed chars, no scroll output
   on('sub_agent_message', (data: SubAgentMessageData) => {
     if (data.role === 'assistant' && data.content) {
-      const streamed = subAgentStreamedChars.get(data.id) || 0;
-      // Only display message content if nothing was streamed (non-streaming fallback)
-      if (streamed === 0) {
-        const record = subAgentState.get(data.id);
-        const prefix = record?.label || '[sub]';
-        const lines = data.content.split('\n');
-        for (const line of lines) {
-          if (line.trim()) {
-            screen.appendScroll(COLORS.subAgent(`  ${prefix} │ ${line.slice(0, 200)}\n`));
-          }
-        }
-      }
       // Reset streamed counter for next turn
       subAgentStreamedChars.set(data.id, 0);
     }
   });
 
-  // Subagent reasoning — route based on display mode
+  // Subagent reasoning — only hacker mode rain, no text output
   on('sub_agent_reasoning', (data: SubAgentReasoningData) => {
     const mode = state.getDisplayMode();
     if (mode === 'compact') return;
@@ -536,60 +486,21 @@ export function setupAgentEvents(
     if (data.content && data.content.trim()) {
       if (mode === 'hacker') {
         screen.feedRain(data.content, 'subagent');
-        return;
       }
-      // verbose: show as text
-      const record = subAgentState.get(data.id);
-      const prefix = record?.label || '[sub]';
-      const lines = data.content.split('\n');
-      for (const line of lines) {
-        if (line.trim()) {
-          screen.appendScroll(COLORS.reasoning(`  ${prefix} │ ${line.slice(0, 200)}\n`));
-        }
-      }
+      // verbose: no text output — panel shows status only
     }
   });
 
-  // Subagent streaming — buffer chunks per subagent, flush on newline
-  // 大阈值避免 reasoning/thinking 碎片被逐行 flush（DeepSeek 等模型会逐字发送 reasoning）
-  const subAgentStreamBuffer = new Map<string, string>();
+  // Subagent streaming — only hacker mode rain, no text output
   on('sub_agent_stream', (data: SubAgentStreamData) => {
     if (!data.chunk) return;
 
-    // Hacker mode: route to matrix rain instead of scroll area
-    if (state.getDisplayMode() === 'hacker') {
-      screen.feedRain(data.chunk, 'subagent');
-      subAgentStreamedChars.set(data.id, (subAgentStreamedChars.get(data.id) || 0) + data.chunk.length);
-      return;
-    }
-
-    const record = subAgentState.get(data.id);
-    const prefix = record?.label || '[sub]';
-
-    // Track streamed chars to prevent duplicate display in message event
+    // Track streamed chars
     subAgentStreamedChars.set(data.id, (subAgentStreamedChars.get(data.id) || 0) + data.chunk.length);
 
-    let buffer = subAgentStreamBuffer.get(data.id) || '';
-    buffer += data.chunk;
-
-    // Flush only when buffer is substantial — prevents one-word-per-line fragmentation
-    if (buffer.length > 500) {
-      const lines = buffer.split('\n');
-      const incomplete = buffer.endsWith('\n') ? '' : (lines.pop() || '');
-      const completeLines = lines.filter(l => l.trim());
-      if (completeLines.length > 0) {
-        const output = [`  ${prefix} │ ${completeLines[0].slice(0, 300)}`];
-        for (let i = 1; i < Math.min(completeLines.length, 10); i++) {
-          output.push(`  ${completeLines[i].slice(0, 300)}`);
-        }
-        if (completeLines.length > 10) {
-          output.push(`  ... (${completeLines.length - 10} more lines)`);
-        }
-        screen.appendScroll(COLORS.subAgent(output.join('\n') + '\n'));
-      }
-      subAgentStreamBuffer.set(data.id, incomplete);
-    } else {
-      subAgentStreamBuffer.set(data.id, buffer);
+    // Hacker mode: route to matrix rain
+    if (state.getDisplayMode() === 'hacker') {
+      screen.feedRain(data.chunk, 'subagent');
     }
   });
 

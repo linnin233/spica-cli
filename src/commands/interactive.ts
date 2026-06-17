@@ -3,7 +3,6 @@ import { execSync } from "child_process";
 import { loadGlobalSettings, getProviderConfig, saveGlobalSettings, GLOBAL_SETTINGS_FILE } from "../utils/settings";
 import { loadSession, saveSession } from "../utils/session";
 import { listSkills, listSkillsByPackage, installSkill, uninstallSkill, listInstalledPackages, saveSkill, deleteSkill, getSkill, buildSkillPrompt, parseSkillInput } from "../skills";
-import { listCheckpoints, getCheckpoint, restoreCheckpoint, cleanCheckpoints } from "../storage/checkpointManager";
 import { getMCPManager, generateExampleConfig, shutdownMCP } from "../mcp/client";
 import { COLORS, BG } from "../cli/ui/colors";
 import { getInputQueue, clearInputQueue } from "../cli/ui/queue";
@@ -93,7 +92,6 @@ export async function runInteractiveMode(
           "/clear",
           "/reset",
           "/new",
-          "/checkpoint",
           "/skill",
           "/mcp",
           "/history",
@@ -414,68 +412,6 @@ export async function runInteractiveMode(
                 `  Workspace: ${agent.getWorkspacePath()}\n\n`,
               );
 
-              return;
-            }
-
-            // Checkpoint 管理
-            if (cmd === "checkpoint" || cmd.startsWith("checkpoint ")) {
-              const subCmd = cmd.startsWith("checkpoint ") ? cmd.slice(11).trim() : "";
-              const parts = subCmd.split(" ");
-              const action = parts[0];
-              const id = parts.slice(1).join(" ");
-
-              if (!action || action === "list") {
-                const checkpoints = await listCheckpoints(agent.getWorkspacePath(), 20);
-                screen.appendScroll(COLORS.primary.bold("\nCheckpoints:\n"));
-                if (checkpoints.length === 0) {
-                  screen.appendScroll(COLORS.muted("  (none)\n"));
-                } else {
-                  checkpoints.forEach((c) => {
-                    const date = new Date(c.timestamp).toLocaleString();
-                    screen.appendScroll(`  ${COLORS.success(c.id)} - ${date}\n`);
-                    screen.appendScroll(COLORS.muted(`    ${c.promptPreview}\n`));
-                  });
-                }
-                screen.appendScroll(COLORS.muted("\n  Commands: /checkpoint show <id>, /checkpoint restore <id>, /checkpoint clean\n"));
-              } else if (action === "show") {
-                if (!id) {
-                  screen.appendScroll(COLORS.warning("\nUsage: /checkpoint show <id>\n"));
-                } else {
-                  const meta = await getCheckpoint(agent.getWorkspacePath(), id);
-                  if (!meta) {
-                    screen.appendScroll(COLORS.error(`\n[ERR] Checkpoint not found: ${id}\n`));
-                  } else {
-                    screen.appendScroll(COLORS.primary.bold(`\nCheckpoint: ${meta.id}\n`));
-                    screen.appendScroll(`  Timestamp: ${new Date(meta.timestamp).toLocaleString()}\n`);
-                    screen.appendScroll(`  Prompt: ${meta.promptPreview}\n`);
-                    screen.appendScroll(COLORS.primary.bold("  Files:\n"));
-                    meta.filesBackedUp.forEach((f) => {
-                      screen.appendScroll(COLORS.muted(`    - ${f}\n`));
-                    });
-                  }
-                }
-              } else if (action === "restore") {
-                if (!id) {
-                  screen.appendScroll(COLORS.warning("\nUsage: /checkpoint restore <id>\n"));
-                } else {
-                  const result = await restoreCheckpoint(agent.getWorkspacePath(), id);
-                  if (result.success) {
-                    screen.appendScroll(COLORS.success(`\n[OK] Restored ${result.restoredFiles.length} files from ${id}\n`));
-                    result.restoredFiles.forEach((f) => {
-                      screen.appendScroll(COLORS.muted(`  - ${f}\n`));
-                    });
-                  } else {
-                    screen.appendScroll(COLORS.error(`\n[ERR] ${result.error}\n`));
-                  }
-                }
-              } else if (action === "clean") {
-                const result = await cleanCheckpoints(agent.getWorkspacePath(), 20);
-                screen.appendScroll(COLORS.success(`\n[OK] Cleaned checkpoints\n`));
-                screen.appendScroll(COLORS.muted(`  Deleted: ${result.deleted.length}, Kept: ${result.kept.length}\n`));
-              } else {
-                screen.appendScroll(COLORS.warning("\nUsage: /checkpoint [list|show <id>|restore <id>|clean]\n"));
-              }
-              screen.restoreCursor();
               return;
             }
 
@@ -941,12 +877,6 @@ If AGENTS.md already exists, preserve valuable content and supplement updates.`;
           screen.appendScroll(COLORS.primary.bold("Queue:\n"));
           screen.appendScroll(COLORS.muted("  /queue /q    Show input queue\n"));
           screen.appendScroll(COLORS.muted("  /undo        Remove last queued input\n"));
-          screen.appendScroll("\n");
-          screen.appendScroll(COLORS.primary.bold("Checkpoint:\n"));
-          screen.appendScroll(COLORS.muted("  /checkpoint list            List checkpoints\n"));
-          screen.appendScroll(COLORS.muted("  /checkpoint show <id>       Show checkpoint details\n"));
-          screen.appendScroll(COLORS.muted("  /checkpoint restore <id>    Restore files from checkpoint\n"));
-          screen.appendScroll(COLORS.muted("  /checkpoint clean           Clean old checkpoints\n"));
           screen.appendScroll("\n");
           screen.appendScroll(COLORS.primary.bold("Skill:\n"));
           screen.appendScroll(COLORS.muted("  /skill list             List skills\n"));
