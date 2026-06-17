@@ -1,6 +1,8 @@
 // Markdown table → ANSI-aligned column rendering
 // Detects |---| separator pattern and renders tables with aligned columns.
-// Pure ANSI coloring (no box-drawing chars) for maximum compatibility.
+// Uses box-drawing chars (─) for continuous separator line.
+// Header in primary color, separator in muted, data rows plain text.
+// Column widths computed via getStringWidth (CJK = 2, ASCII = 1).
 
 import { getStringWidth, padRight } from './stringWidth';
 import { COLORS } from './colors';
@@ -113,7 +115,11 @@ function padCell(content: string, width: number, alignment: 'left' | 'right' | '
 
 function renderTable(table: ParsedTable): string {
   const MIN_COL_WIDTH = 3;
-  const SEP = '  '; // 2 spaces between columns
+  const COL_GAP = 2; // spaces between columns
+  const SEP = ' '.repeat(COL_GAP);
+  // Box-drawing horizontal line: continuous visual appearance
+  // unlike '-' which looks choppy/dotted in many terminal fonts.
+  const H = '─'; // U+2500 BOX DRAWINGS LIGHT HORIZONTAL
 
   // Calculate column widths
   const colCount = table.header.length;
@@ -130,22 +136,24 @@ function renderTable(table: ParsedTable): string {
   // Render
   const lines: string[] = [];
 
-  // Header row (primary color / bold)
+  // Header row — primary color, left-aligned
   const headerCells = table.header.map((cell, i) =>
     COLORS.primary(padCell(cell, colWidths[i], table.alignments[i] || 'left'))
   );
   lines.push(headerCells.join(COLORS.muted(SEP)));
 
-  // Separator (muted dashes)
-  const sepCells = colWidths.map(w => COLORS.muted('-'.repeat(w)));
-  lines.push(sepCells.join(COLORS.muted(SEP)));
+  // Separator — single continuous muted line using box-drawing chars
+  // Each column: H repeated to width, gaps filled with spaces (also muted).
+  const sepLine = COLORS.muted(
+    colWidths.map(w => H.repeat(w)).join(SEP)
+  );
+  lines.push(sepLine);
 
-  // Data rows — alternate colors for zebra striping
+  // Data rows — all plain text, no zebra striping
   for (let i = 0; i < table.rows.length; i++) {
     const row = table.rows[i];
     const cells = row.map((cell, j) => padCell(cell, colWidths[j], table.alignments[j] || 'left'));
-    const rowText = cells.join(COLORS.muted(SEP));
-    lines.push(i % 2 === 0 ? rowText : COLORS.muted(rowText));
+    lines.push(cells.join(COLORS.muted(SEP)));
   }
 
   return lines.join('\n');

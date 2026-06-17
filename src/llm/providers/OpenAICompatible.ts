@@ -8,6 +8,7 @@ import {
   ChatMessage,
   ToolCall,
 } from './BaseProvider';
+import { sessionStats } from '../../core/sessionStats';
 import { cleanMessages } from '../../utils/messageCleaner';
 
 // Error types and hints
@@ -301,6 +302,9 @@ export class OpenAICompatibleProvider extends BaseProvider {
       }
     }
 
+    // Per-session request counting (always works, even if API doesn't report usage)
+    sessionStats.countRequest();
+
     try {
       const stream = await this.client.chat.completions.create(
         {
@@ -315,6 +319,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
             },
           })),
           stream: true,
+          stream_options: { include_usage: true },
           temperature: 0.3, // 低温度加速响应
         },
         { signal }
@@ -324,6 +329,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- OpenAI tool_calls structure is complex
       const toolCalls: any[] = [];
       let hasToolCalls = false;
+      let lastUsage: any = null; // captured from final stream chunk
 
       for await (const chunk of stream) {
         if (signal?.aborted) break;
@@ -359,6 +365,23 @@ export class OpenAICompatibleProvider extends BaseProvider {
             }
           });
         }
+
+        // Capture usage from final chunk (stream_options.include_usage)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if ((chunk as any).usage) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          lastUsage = (chunk as any).usage;
+        }
+      }
+
+      // Emit actual API usage for stats tracking
+      if (lastUsage) {
+        this.emit('llm_usage', {
+          promptTokens: lastUsage.prompt_tokens || 0,
+          completionTokens: lastUsage.completion_tokens || 0,
+          totalTokens: lastUsage.total_tokens || 0,
+          cachedTokens: lastUsage.prompt_tokens_details?.cached_tokens || 0,
+        });
       }
 
       // 中断时抛出错误，让调用者知道是被中断的
@@ -409,6 +432,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
 
   // 直接生成（不添加到历史，用于摘要等）
   async generateDirect(prompt: string, signal?: AbortSignal): Promise<LLMResponse> {
+    sessionStats.countRequest();
     try {
       const response = await this.client.chat.completions.create(
         {
@@ -421,6 +445,17 @@ export class OpenAICompatibleProvider extends BaseProvider {
       );
 
       const content = response.choices[0]?.message?.content || '';
+
+      // Emit actual API usage for stats tracking
+      if (response.usage) {
+        this.emit('llm_usage', {
+          promptTokens: response.usage.prompt_tokens || 0,
+          completionTokens: response.usage.completion_tokens || 0,
+          totalTokens: response.usage.total_tokens || 0,
+          cachedTokens: response.usage.prompt_tokens_details?.cached_tokens || 0,
+        });
+      }
+
       return { content, finished: true };
     } catch (error: any) {
       if (signal?.aborted) {

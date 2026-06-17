@@ -9,6 +9,7 @@ import {
   clearSession,
 } from '../../utils/session';
 import { clearInputQueue } from '../../cli/ui/queue';
+import { sessionStats } from '../../core/sessionStats';
 import type { SlashHandler } from './types';
 
 export const sessionHandler: SlashHandler = async (args, ctx) => {
@@ -60,6 +61,9 @@ export const sessionHandler: SlashHandler = async (args, ctx) => {
     clearSession(workspacePath);
     ctx.agent.setMessages([]);
     clearInputQueue();
+
+    // Reset per-session usage stats for fresh start
+    sessionStats.reset();
 
     ctx.screen.appendScroll(COLORS.success('[NEW] Started fresh session\n'));
     ctx.screen.appendScroll(COLORS.muted('Use /history to view archived chats (read-only)\n'));

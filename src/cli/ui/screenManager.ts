@@ -231,30 +231,44 @@ export class ScreenManager {
     // 保存清洗后文本到历史缓冲区（strip ANSI for resize replay）
     this.state.scrollbackBuffer.append(ansiClean(text));
 
-    // Feed lines through unified table state machine
-    const lines = text.split('\n');
-    for (const line of lines) {
-      this.processLine(line);
+    // Prepend any pending partial from previous call
+    const full = this.appendScrollPartial + text;
+    const lines = full.split('\n');
+
+    // Process all complete lines through the table state machine
+    for (let i = 0; i < lines.length - 1; i++) {
+      this.processLine(lines[i]);
     }
 
-    // Flush any pending table at end of batch
-    this.flushTableBuffer();
-    this.tableState = 'idle';
+    // Save trailing partial for next call (empty string if text ends with \n)
+    this.appendScrollPartial = lines[lines.length - 1] || '';
+
+    // Note: tableState persists across appendScroll calls — tables may span calls.
+    // Flush only via flushTableScrollBuffer/flushOutput when processing ends.
 
     // 如果有换行符，刷新输入框
-    if (text.includes('\n')) {
+    if (full !== text || text.includes('\n')) {
       this.refreshInputDuringStreaming();
     }
   }
 
-  /** Flush pending table buffer (call when streaming/processing ends) */
+  /** Flush pending table buffer + partial line (call when streaming/processing ends) */
   flushTableScrollBuffer(): void {
+    // Flush any trailing partial line first
+    if (this.appendScrollPartial) {
+      this.processLine(this.appendScrollPartial);
+      // Force the partial to be output as a complete line
+      this.appendScrollPartial = '';
+    }
     this.flushTableBuffer();
     this.tableState = 'idle';
   }
 
   // 行缓冲输出（用于AI流式输出）
   private streamBuffer: string = '';
+  // Partial line buffer for appendScroll — accumulates across calls so
+  // multi-fragment lines (built from several appendScroll calls) stay intact.
+  private appendScrollPartial: string = '';
   // 统一表格状态机 — 流式和非流式路径共用
   // States: idle → pending (saw |...| header) → table (separator confirmed)
   private tableState: 'idle' | 'pending' | 'table' = 'idle';
@@ -381,6 +395,11 @@ export class ScreenManager {
 
   // 强制刷新（用于工具调用结束等）
   flushOutput(): void {
+    // Flush any trailing partial line
+    if (this.appendScrollPartial) {
+      this.processLine(this.appendScrollPartial);
+      this.appendScrollPartial = '';
+    }
     this.flushTableBuffer();
     this.tableState = 'idle';
     this.refreshInputDuringStreaming();

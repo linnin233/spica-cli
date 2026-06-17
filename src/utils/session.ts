@@ -244,41 +244,10 @@ ${parts.join('\n')}`;
     const sessionPath = join(sessionsDir, `${session.id}.json`);
     fs.writeJsonSync(sessionPath, session, { spaces: 2 });
 
-    // Clean up old sessions (keep max 50 recent)
-    cleanupOldSessions(sessionsDir, 50);
-
     return summary;
   } catch (e) {
     console.error(`[session] archiveSession failed for ${workspacePath}:`, e instanceof Error ? e.message : String(e));
     return '';
-  }
-}
-
-// Clean up old sessions
-function cleanupOldSessions(sessionsDir: string, maxKeep: number): void {
-  try {
-    const files = fs
-      .readdirSync(sessionsDir)
-      .filter(f => f.endsWith('.json') && f.startsWith('sess_'))
-      .map(f => ({
-        name: f,
-        path: join(sessionsDir, f),
-        time: fs.statSync(join(sessionsDir, f)).mtime.getTime(),
-      }))
-      .sort((a, b) => b.time - a.time);
-
-    // Remove oldest sessions beyond maxKeep
-    if (files.length > maxKeep) {
-      files.slice(maxKeep).forEach(f => {
-        try {
-          fs.removeSync(f.path);
-        } catch (e) {
-          console.error(`[session] cleanupOldSessions failed to remove ${f.path}:`, e instanceof Error ? e.message : String(e));
-        }
-      });
-    }
-  } catch (e) {
-    console.error(`[session] cleanupOldSessions failed for ${sessionsDir}:`, e instanceof Error ? e.message : String(e));
   }
 }
 

@@ -32,6 +32,7 @@ import {
 } from './core/compression';
 import { ProgressTracker } from './core/progressTracker';
 import { AgentStateMachine } from './core/AgentState';
+import { sessionStats } from './core/sessionStats';
 import { recordToolUsage } from './tools/analytics';
 import {
   initAgent,
@@ -196,7 +197,13 @@ export class SpicaAgent extends EventEmitter {
   // ── Init accessors (typed — replaces string-index access from init.ts) ──
 
   /** @internal — used by init.ts */
-  setLLM(llm: LLMClient): void { this.llm = llm; }
+  setLLM(llm: LLMClient): void {
+    this.llm = llm;
+    // Register session-wide usage tracker — every LLM request is recorded
+    llm.on('llm_usage', (usage) => {
+      sessionStats.record(usage);
+    });
+  }
 
   /** @internal — used by init.ts for session loading */
   getFullHistory(): ChatMessage[] { return this._fullHistory; }
@@ -1596,6 +1603,7 @@ export class SpicaAgent extends EventEmitter {
     this._initialized = false;
     this._initPromise = null;
     this._stateMachine.reset(); // sync with _initialized=false
+    sessionStats.reset();
 
     // 清空LLM消息历史
     if (this.llm) {
