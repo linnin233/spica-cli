@@ -226,7 +226,10 @@ export async function runInteractiveMode(
 
           // 处理输入
           if (result.shouldProcess && result.content.trim()) {
-            handleInput(result.content.trim());
+            handleInput(result.content.trim()).catch((err: unknown) => {
+              const msg = err instanceof Error ? err.message : String(err);
+              screen.appendScroll(COLORS.error(`\n[ERR] handleInput: ${msg}\n`));
+            });
           }
         });
 

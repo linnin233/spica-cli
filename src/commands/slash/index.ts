@@ -6,6 +6,7 @@ import { mcpHandler } from './mcp';
 import { compactHandler, summaryHandler } from './compact';
 import { statusHandler } from './status';
 import { helpHandler, initHandler, historyMsgHandler } from './help';
+import { getSkill } from '../../skills';
 
 /**
  * Dispatch slash commands to their handlers.
@@ -29,8 +30,8 @@ export async function dispatchSlash(trimmed: string, ctx: SlashContext): Promise
     return true;
   }
 
-  // /history /sessions /h (archive list)
-  if (cmd === 'history' || cmd === 'sessions' || cmd === 'h') {
+  // /history /sessions (archive list)
+  if (cmd === 'history' || cmd === 'sessions') {
     await sessionHandler('', ctx);
     return true;
   }
@@ -77,8 +78,8 @@ export async function dispatchSlash(trimmed: string, ctx: SlashContext): Promise
     return true;
   }
 
-  // /summary
-  if (cmd === 'summary') {
+  // /summary /sum
+  if (cmd === 'summary' || cmd === 'sum') {
     await summaryHandler('', ctx);
     return true;
   }
@@ -96,14 +97,17 @@ export async function dispatchSlash(trimmed: string, ctx: SlashContext): Promise
   }
 
   // /h /help
-  if (cmd === 'help') {
+  if (cmd === 'help' || cmd === 'h') {
     await helpHandler('', ctx);
     return true;
   }
 
-  // /skill_name invocation
+  // /skill_name invocation — only if skill exists
   if (parts[0].startsWith('/')) {
     const skillName = parts[0].replace(/^\//, '');
+    // Check skill exists before invoking (prevents silent failure for unknown commands)
+    const skill = getSkill(skillName, ctx.agent.getWorkspacePath());
+    if (!skill) return false;
     await skillInvokeHandler(skillName + (parts.length > 1 ? ' ' + parts.slice(1).join(' ') : ''), ctx);
     return true;
   }
