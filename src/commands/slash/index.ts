@@ -6,6 +6,7 @@ import { mcpHandler } from './mcp';
 import { compactHandler, summaryHandler } from './compact';
 import { statusHandler } from './status';
 import { helpHandler, initHandler, historyMsgHandler } from './help';
+import { subagentsHandler } from './subagents';
 import { getSkill } from '../../skills';
 
 /**
@@ -99,6 +100,12 @@ export async function dispatchSlash(trimmed: string, ctx: SlashContext): Promise
   // /h /help
   if (cmd === 'help' || cmd === 'h') {
     await helpHandler('', ctx);
+    return true;
+  }
+
+  // /subagents
+  if (cmd === 'subagents') {
+    await subagentsHandler('', ctx);
     return true;
   }
 

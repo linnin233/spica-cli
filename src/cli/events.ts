@@ -23,10 +23,11 @@ import {
   formatToolSummary,
   formatElapsed,
   getMainArg,
+  formatToolArgs,
 } from './formatting';
 import type { ToolResultData } from './formatting';
 import { resetToolTracking, registerToolCall, matchToolResult, calcElapsedMs, displayToolResult, isInterruptAlreadyShown, markInterruptShown, type ToolCallRecord } from './results';
-import { subAgentState, displaySubAgentPanel, type SubAgentRecord } from './subagentPanel';
+import { subAgentState, renderOverlay, writeFinalPanelToScrollback, type SubAgentRecord } from './subagentPanel';
 
 // 事件数据类型定义
 interface ConnectionErrorData {
@@ -207,6 +208,22 @@ const state = getRuntimeState();
 // ============================================
 
 let subAgentSeq = 0;
+let subAgentOverlayActive = false;
+
+function allAgentsFinished(): boolean {
+  for (const a of subAgentState.agents.values()) {
+    if (a.status === 'running') return false;
+  }
+  return subAgentState.agents.size > 0;
+}
+
+function closeSubAgentOverlay(): void {
+  if (!subAgentOverlayActive) return;
+  subAgentOverlayActive = false;
+  screen.stopSubAgentRefresh();
+  writeFinalPanelToScrollback();
+  screen.setSubAgentOverlay(false);
+}
 
 export function setupAgentEvents(
   agent: SpicaAgent,
@@ -230,6 +247,7 @@ export function setupAgentEvents(
   on('waiting_for_llm', () => {
     reasoningStarted = false;
     resetToolTracking();
+    closeSubAgentOverlay();
     subAgentState.clear();
     subAgentStreamedChars.clear();
     subAgentSeq = 0;
@@ -426,11 +444,10 @@ export function setupAgentEvents(
     }
   });
 
-  // Subagent 事件
+  // Subagent 事件 — overlay lifecycle
   on('sub_agent_start', (data: SubAgentStartData) => {
     subAgentSeq++;
     const type = data.type || 'sub';
-    // Generate unique label: [#1 explore], [#2 review], etc.
     const label = `[#${subAgentSeq} ${type}]`;
     subAgentState.add(data.id, {
       type,
@@ -439,20 +456,32 @@ export function setupAgentEvents(
       startTime: Date.now(),
       toolCount: 0,
       label,
+      priority: 1,
     });
 
-    // 显示状态面板
-    displaySubAgentPanel();
+    // First subagent: open overlay
+    if (!subAgentOverlayActive) {
+      subAgentOverlayActive = true;
+      screen.setSubAgentOverlay(true);
+      screen.startSubAgentRefresh(1000, renderOverlay);
+    }
   });
 
   on('sub_agent_tool_call', (data: SubAgentToolCallData) => {
-    // Track tool count (no scroll output — panel shows status only)
     const record = subAgentState.get(data.id);
-    if (record) record.toolCount++;
+    if (record) {
+      record.toolCount++;
+      record.currentTool = `${data.name}${formatToolArgs(data.name, data.arguments || {})}`;
+      record.toolStartTime = Date.now();
+    }
   });
 
   on('sub_agent_tool_result', (_data: SubAgentToolResultData) => {
-    // No scroll output — panel shows status only
+    const record = subAgentState.get(_data.id);
+    if (record) {
+      record.currentTool = undefined;
+      record.toolStartTime = undefined;
+    }
   });
 
   on('sub_agent_done', (data: SubAgentDoneData) => {
@@ -462,9 +491,13 @@ export function setupAgentEvents(
     if (record) {
       record.status = 'done';
       record.summary = truncateToWidth(data.summary || 'done', 60);
+      record.priority = 2;
+      record.currentTool = undefined;
     }
 
-    displaySubAgentPanel();
+    if (allAgentsFinished()) {
+      closeSubAgentOverlay();
+    }
   });
 
   on('sub_agent_error', (data: SubAgentErrorData) => {
@@ -473,10 +506,15 @@ export function setupAgentEvents(
     const record = subAgentState.get(data.id);
     if (record) {
       record.status = 'error';
-      record.error = truncateToWidth(data.error, 80);
+      record.error = data.error; // Full error, no truncation
+      record.summary = data.error.split('\n')[0].slice(0, 60);
+      record.priority = 0;
+      record.currentTool = undefined;
     }
 
-    displaySubAgentPanel();
+    if (allAgentsFinished()) {
+      closeSubAgentOverlay();
+    }
   });
 
   // Subagent text output — only track streamed chars, no scroll output
