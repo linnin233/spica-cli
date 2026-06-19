@@ -35,7 +35,7 @@ process.on("SIGINT", () => {
       try {
         saveSession(
           agent.getWorkspacePath(),
-          agent.getMessages(),
+          agent.getSessionState(),
           undefined,
           agent.getProgressSnapshot(),
         );
@@ -59,7 +59,7 @@ process.on("SIGINT", () => {
       const a = state.getAgent()!;
       saveSession(
         a.getWorkspacePath(),
-        a.getMessages(),
+        a.getSessionState(),
         undefined,
         a.getProgressSnapshot(),
       );

@@ -264,15 +264,16 @@ export class SpicaAgent extends EventEmitter {
   private _cachedSkills: SkillDefinition[] = [];
   private _compacting = false;
   /**
-   * Full history — append-only, independent of LLM context compression.
+   * Full transcript — append-only, independent of LLM context compression.
    *
    * INVARIANT: _fullHistory NEVER contains system prompts. System prompts are
    * injected directly into provider.messages via `setSystemPromptSplit()` and
    * never synced to _fullHistory. This split is intentional:
-   *   - _fullHistory → session.json (persistence, ~5,500 tokens lighter)
-   *   - provider.msgs → LLM API context (with system prompts, compressed)
+   *   - _fullHistory → getMessages() for display (/history, /summary, archive)
+   *   - provider.msgs → getSessionState() for persistence (session.json)
    *
-   * Used by getMessages() for session persistence. Never truncated by compression.
+   * Never truncated by compression — grows throughout the session.
+   * On restart, restored from session.json (which is the compressed state).
    * Updated by syncFullHistory() which copies new messages from provider.msgs.
    */
   private _fullHistory: ChatMessage[] = [];
@@ -746,14 +747,29 @@ export class SpicaAgent extends EventEmitter {
   }
 
   /**
-   * Return messages for SESSION PERSISTENCE.
+   * Return the SESSION STATE for persistence.
+   *
+   * Returns provider.msgs filtered to remove system prompts — this is the
+   * compressed working state the LLM actually sees. On restart, restoring this
+   * resumes from exactly where the agent left off, without wasted re-compression.
+   *
+   * Falls back to _fullHistory if provider is unavailable (edge case: called
+   * after dispose()).
+   */
+  getSessionState(): ChatMessage[] {
+    if (!this.llm) return [...this._fullHistory];
+    return this.llm.getMessages().filter(m => m.role !== 'system');
+  }
+
+  /**
+   * Return the FULL TRANSCRIPT for display and archiving.
    *
    * Returns `_fullHistory` — append-only, never truncated by compression.
-   * Does NOT include system prompts (they live only in provider.msgs via
-   * `setSystemPromptSplit`). This split saves ~5,500 tokens in session files
-   * and keeps system prompts out of `/history` views.
+   * Does NOT include system prompts.
    *
-   * For LLM context messages (with system prompts), use getContextMessages().
+   * Use this for: /history, /summary, /archive (user-facing views).
+   * For session persistence, use getSessionState().
+   * For LLM API context (with system prompts), use getContextMessages().
    */
   getMessages(): ChatMessage[] {
     return this._fullHistory;
@@ -1424,7 +1440,7 @@ export class SpicaAgent extends EventEmitter {
             try {
               saveSession(
                 this.workspacePath,
-                this._fullHistory,
+                this.getSessionState(),
                 undefined,
                 this._progress.toJSON(),
               );

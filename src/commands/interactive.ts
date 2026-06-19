@@ -252,7 +252,7 @@ export async function runInteractiveMode(
             screen.writeRaw(`${ESC}[?2004l`);
             tuiHandler!.end();
             screen.end();  // 先结束TUI，恢复终端
-            const messages = agent.getMessages();
+            const messages = agent.getSessionState();
             saveSession(agent.getWorkspacePath(), messages, undefined, agent.getProgressSnapshot());
             await shutdownMCP();
             state.setAgent(null);
@@ -440,7 +440,7 @@ export async function runInteractiveMode(
           // 清理队列输入回调
           agent.setQueueInputCallback(null);
           
-          saveSession(agent.getWorkspacePath(), agent.getMessages());
+          saveSession(agent.getWorkspacePath(), agent.getSessionState());
 
           // Auto-drain remaining queued inputs（处理未被注入的剩余队列）
           await autoDrainQueue(getInputQueue(), async (merged) => {
