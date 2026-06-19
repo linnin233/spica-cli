@@ -843,9 +843,9 @@ describe('Continuation signal after compression', () => {
 
     const finalMsgs = mockLLM._msgs as ChatMessage[];
 
-    // Continuation signal must be present
+    // Continuation signal must be present (role: 'user' to avoid leaking into _fullHistory)
     const signal = finalMsgs.find(
-      m => m.role === 'system' && m.content?.includes('[CONTEXT COMPRESSED]')
+      m => m.role === 'user' && m.content?.includes('[CONTEXT COMPRESSED]')
     );
     expect(signal).toBeDefined();
     expect(signal!.content).toContain('Continue from where you left off');

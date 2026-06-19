@@ -941,10 +941,13 @@ export class SpicaAgent extends EventEmitter {
         this.emit('learning_detected', { source: 'correction', text: prompt.slice(0, 100) });
       }
 
-      // Inject progress context from ProgressTracker (survives compression)
+      // Inject progress context from ProgressTracker (survives compression).
+      // Provider-only — NOT synced to _fullHistory (system messages don't belong there).
       const progressBlock = this._progress.toContextBlock();
-      if (progressBlock) {
-        this.agentAddMessage({ role: "system" as const, content: progressBlock });
+      if (progressBlock && this.llm) {
+        this.llm.addMessage({ role: "system" as const, content: progressBlock });
+        // Prevent syncFullHistory from picking up this system-only message
+        this._lastSyncedProviderIndex = this.llm.getMessages().length - 1;
       }
 
       const toolDefinitions = getActiveToolDefinitions(this._usedTools);

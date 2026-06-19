@@ -326,6 +326,9 @@ export async function autoCompactContext(
       return;
     }
 
+    // On final attempt, still use LLM summary but hard-truncate afterwards
+    // if still over target — guarantees we never exceed context window.
+    const isLastAttempt = attempt >= 2;
     const summaryMsg = await generateSummary(llm, head, signal);
     const newMessages = [...systemMessages, summaryMsg, ...tail];
     llm.setMessages(newMessages);
@@ -347,6 +350,17 @@ export async function autoCompactContext(
 
     // If under target, done
     if (isUnderThreshold(llm, targetTokens)) return;
+
+    // If last attempt and still over, hard-truncate summary to fit.
+    // Only reached when tail expansion wasn't enough.
+    if (isLastAttempt) {
+      const excessTokens = newTokens - targetTokens + 500;
+      const charsPerToken = 3;
+      const maxSummaryChars = Math.max(500, (summaryMsg.content || '').length - excessTokens * charsPerToken);
+      summaryMsg.content = (summaryMsg.content || '').slice(0, maxSummaryChars)
+        + '\n...[summary truncated to fit context window]';
+      return;
+    }
     // Otherwise loop: tail gets bigger, head gets smaller
   }
 }
@@ -455,6 +469,11 @@ export async function manageContext(
           });
         }
       }
+      // Update sync index after continuation signal injection so it
+      // doesn't leak into _fullHistory via syncFullHistory().
+      if (agent.getLLM()) {
+        agent.setLastSyncedProviderIndex(agent.getLLM()!.getMessages().length - 1);
+      }
     }
     agent.stateMachine.transition(prevState);
     agent.setCompacting(false);
@@ -526,24 +545,33 @@ function findLastUserBeforeTail(nonSystem: ChatMessage[], tail: ChatMessage[]): 
 function ensureToolChainBoundary(nonSystem: ChatMessage[], tailStart: number): number {
   if (tailStart >= nonSystem.length || tailStart <= 0) return tailStart;
 
-  const firstTailMsg = nonSystem[tailStart];
+  // Loop until boundary stabilizes — each adjustment backward might expose
+  // another orphan tool result at the new boundary position.
+  let current = tailStart;
+  for (let iter = 0; iter < 5; iter++) {
+    if (current <= 0 || current >= nonSystem.length) break;
 
-  // If the first tail message is a tool result, find its parent assistant
-  if (firstTailMsg.role === 'tool' && (firstTailMsg as any).toolCallId) {
+    const firstTailMsg = nonSystem[current];
+    if (firstTailMsg.role !== 'tool' || !(firstTailMsg as any).toolCallId) break;
+
     const orphanId = (firstTailMsg as any).toolCallId as string;
-    for (let i = tailStart - 1; i >= 0; i--) {
+    let found = false;
+    for (let i = current - 1; i >= 0; i--) {
       const m = nonSystem[i];
       if (
         m.role === 'assistant' &&
         m.toolCalls &&
         m.toolCalls.some(tc => tc.id === orphanId)
       ) {
-        return i; // Move tailStart to include the parent assistant message
+        current = i; // Move tailStart to include the parent assistant
+        found = true;
+        break;
       }
     }
+    if (!found) break; // orphan without parent — stop
   }
 
-  return tailStart;
+  return current;
 }
 
 /**
@@ -571,7 +599,7 @@ export function buildSummaryPrompt(messages: ChatMessage[]): string {
 
       if (m.role === 'tool') {
         const toolName = (m as any).name || 'unknown';
-        const tc = (m.content || '').slice(0, 500).replace(/\n/g, '\\n');
+        const tc = (m.content || '').slice(0, TOOL_RESULT_TRUNCATE_LIMIT).replace(/\n/g, '\\n');
         const err = /error|Error|FAILED|denied|refused|stack trace|fatal/i.test(
           (m.content || '').slice(0, 200)
         );
