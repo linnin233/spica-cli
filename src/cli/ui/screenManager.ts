@@ -34,6 +34,8 @@ export interface ScreenState {
   hackerMode: boolean;
   /** In hacker mode: first row of the output zone (rain fills rows 1..rainTop-1) */
   rainTop: number;
+  /** Subagent overlay: 0 when hidden, 6 when visible */
+  subAgentOverlayRows: number;
   // 缓冲的输入，用于流式输出结束后刷新
   pendingInputRefresh: boolean;
   // 历史缓冲区（用于resize后重绘）
@@ -47,6 +49,7 @@ export class ScreenManager {
   // Thinking动画状态
   private thinkingAnimationFrame: number = 0;
   private thinkingAnimationTimer: NodeJS.Timeout | null = null;
+  private subAgentRefreshTimer: NodeJS.Timeout | null = null;
   private thinkingAnimationStopped: boolean = false;
   private thinkingAnimationFrames: string[] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
@@ -73,6 +76,7 @@ export class ScreenManager {
       matrixRain: null,
       hackerMode: false,
       rainTop: 1,
+      subAgentOverlayRows: 0,
       pendingInputRefresh: false,
       scrollbackBuffer: getScrollbackBuffer(3000),
     };
@@ -91,7 +95,7 @@ export class ScreenManager {
     this.state.terminalWidth = newWidth;
     this.state.inputLines = this.calcInputLines();
     this.state.statusRow = this.state.terminalHeight - this.state.inputLines - 1;
-    this.state.scrollBottom = this.state.statusRow - 1;
+    this.state.scrollBottom = this.state.statusRow - 1 - this.state.subAgentOverlayRows;
 
     // Hacker mode: full-screen rain, no scroll regions
     if (this.state.hackerMode) {
@@ -172,7 +176,7 @@ export class ScreenManager {
       const oldScrollBottom = this.state.scrollBottom;
       this.state.inputLines = newLines;
       this.state.statusRow = this.state.terminalHeight - newLines - 1;
-      this.state.scrollBottom = this.state.statusRow - 1;
+      this.state.scrollBottom = this.state.statusRow - 1 - this.state.subAgentOverlayRows;
 
       if (oldStatusRow > this.state.statusRow) {
         for (let row = this.state.statusRow + 1; row <= oldStatusRow; row++) {
@@ -475,6 +479,63 @@ export class ScreenManager {
     // 重置光标状态——下次 writeOutputLine/appendScroll 会重新定位到行首
     // 防止 thinking 帧残留混入后续输出（如 "⠏ thinking**content**"）
     this.state.cursorInScrollArea = false;
+  }
+
+  // ── Subagent overlay ──────────────────────────────────────────────────
+
+  /** Reserve/free 6 rows for subagent overlay between scrollback and status bar */
+  setSubAgentOverlay(visible: boolean): void {
+    const newRows = visible ? 6 : 0;
+    if (this.state.subAgentOverlayRows === newRows) return;
+
+    this.state.subAgentOverlayRows = newRows;
+    this.state.scrollBottom = this.state.statusRow - 1 - newRows;
+
+    // Clear overlay area if hiding
+    if (!visible) {
+      for (let row = this.state.scrollBottom + 1; row <= this.state.statusRow - 1; row++) {
+        writeStdout(`${ESC}[${row};1H${ESC}[2K`);
+      }
+    }
+
+    // Reset scroll region
+    writeStdout(`${ESC}[1;${this.state.scrollBottom}r`);
+
+    // Reposition cursor to scroll bottom
+    this.state.cursorInScrollArea = true;
+    writeStdout(`${ESC}[?25l`);
+    writeStdout(`${ESC}[${this.state.scrollBottom};1H`);
+  }
+
+  /** Write lines directly to overlay region — no scrollback buffer, no table state machine */
+  writeSubAgentOverlay(lines: string[]): void {
+    if (this.state.subAgentOverlayRows === 0) return;
+
+    const startRow = this.state.scrollBottom + 1;
+    writeStdout(`${ESC}[?25l`);
+    for (let i = 0; i < this.state.subAgentOverlayRows && i < lines.length; i++) {
+      writeStdout(`${ESC}[${startRow + i};1H${ESC}[2K${lines[i]}`);
+    }
+  }
+
+  /** Start periodic overlay refresh. Stops automatically when renderFn returns empty array. */
+  startSubAgentRefresh(intervalMs: number, renderFn: () => string[]): void {
+    this.stopSubAgentRefresh();
+    this.subAgentRefreshTimer = setInterval(() => {
+      const lines = renderFn();
+      if (lines.length === 0) {
+        this.stopSubAgentRefresh();
+        return;
+      }
+      this.writeSubAgentOverlay(lines);
+    }, intervalMs);
+  }
+
+  stopSubAgentRefresh(): void {
+    if (this.subAgentRefreshTimer) {
+      clearInterval(this.subAgentRefreshTimer);
+      this.subAgentRefreshTimer = null;
+    }
   }
 
   refreshStatus(): void {
