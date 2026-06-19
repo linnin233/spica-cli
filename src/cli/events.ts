@@ -367,7 +367,16 @@ export function setupAgentEvents(
     // 强制刷新
     screen.flushOutput();
 
-    // 更新状态栏
+    // 更新状态栏（先重新检测 git 分支，确保分支切换后实时更新）
+    try {
+      const branch = execSync('git branch --show-current', {
+        cwd: agent.getWorkspacePath(),
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).toString().trim();
+      state.setCurrentBranch(branch || null);
+    } catch {
+      state.setCurrentBranch(null);
+    }
     if (model) {
       screen.setStatus(buildStatusText(agent, model));
     }
