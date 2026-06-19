@@ -163,12 +163,20 @@ export function microcompactMessages(messages: ChatMessage[], cachePrefixEnd: nu
 
 /**
  * Collapse the "middle" of a conversation, preserving:
- * - Early setup: first user message + following assistant response
- * - Recent tail: last N messages
+ * - Early setup: last user→assistant→tool_results chain before the tail
+ *   (the complete tool-call cycle so plan contents, read results etc survive)
+ * - Recent tail: last N messages (generous — see tailSizeForWindow)
  *
  * Only the middle range is summarized — cheaper and less destructive
  * than full AutoCompact.
  */
+function tailSizeForWindow(contextWindow: number): number {
+  if (contextWindow < 32000) return 6;
+  if (contextWindow < 64000) return 10;
+  if (contextWindow < 200000) return 16;
+  return 20;
+}
+
 export async function collapseContext(
   agent: SpicaAgent,
   targetTokens: number,
@@ -181,49 +189,49 @@ export async function collapseContext(
   const systemMessages = allMessages.filter(m => m.role === 'system');
   const nonSystem = allMessages.filter(m => m.role !== 'system');
 
-  if (nonSystem.length < 12) return false; // Not enough to split
+  if (nonSystem.length < 12) return false;
 
   const contextWindow = llm.getProvider().getContextWindow();
-  const tailSize = contextWindow < 32000 ? 4 : 8;
+  const tailSize = tailSizeForWindow(contextWindow);
 
-  // Early setup: preserve the LAST user message before the tail.
-  // This is the user's current instruction — the most important piece of
-  // context. The FIRST user message (old behavior) is often irrelevant to
-  // the current task in multi-topic sessions.
-  // Compute tailStart and apply tool-chain boundary check.
-  // `slice(-tailSize)` could cut in the middle of a tool-call chain,
-  // producing orphan tool results without their parent assistant message.
+  // Compute tail: slice last N messages, adjusted for tool-chain boundaries
   const rawTailStart = nonSystem.length - tailSize;
   const tailStart = ensureToolChainBoundary(nonSystem, rawTailStart);
   const tail = nonSystem.slice(tailStart);
   const tailSet = new Set(tail);
-  const lastUserBeforeTail = findLastUserBeforeTail(nonSystem, tail);
 
+  // Early setup: preserve the COMPLETE last tool-call cycle before the tail.
+  // This means: user message → assistant(tool_calls) → all tool_results for
+  // those calls. This ensures plan contents, file reads, lint/test output
+  // that informed the current task survive compression verbatim.
   const earlySetup: ChatMessage[] = [];
+  const lastUserBeforeTail = findLastUserBeforeTail(nonSystem, tail);
   if (lastUserBeforeTail) {
     earlySetup.push(lastUserBeforeTail);
-    // Include the assistant response that follows this user message
     const userIdx = nonSystem.indexOf(lastUserBeforeTail);
-    const nextAssistant = nonSystem.slice(userIdx + 1).find(m => m.role === 'assistant');
-    if (nextAssistant && !tailSet.has(nextAssistant)) earlySetup.push(nextAssistant);
+
+    // Collect assistant + its tool results
+    const afterUser = nonSystem.slice(userIdx + 1);
+    for (const m of afterUser) {
+      if (tailSet.has(m)) break; // stop at tail boundary
+      if (m.role === 'user') break; // stop at next user message
+      earlySetup.push(m);
+    }
   }
 
-  // Determine if there's enough middle to collapse
+  // Determine middle: everything NOT in early setup and NOT in tail
   const earlySet = new Set(earlySetup);
   const middle = nonSystem.filter(m => !earlySet.has(m) && !tailSet.has(m));
 
-  if (middle.length < 4) return false; // Not enough middle messages to justify collapse
+  if (middle.length < 4) return false;
 
-  // Generate summary of middle messages
   const summaryMsg = await generateSummary(llm, middle, signal);
 
-  // Build new messages: [system] + [early setup] + [summary] + [tail]
   const newMessages = [...systemMessages, ...earlySetup, summaryMsg, ...tail];
   llm.setMessages(newMessages);
   agent.setLastSyncedProviderIndex(newMessages.length - 1);
   restoreCachePrefix(llm, systemMessages.length);
 
-  // Check if collapse brought us under target
   const underThreshold = isUnderThreshold(llm, targetTokens);
 
   agent.emit('context_compressed', {
@@ -244,7 +252,8 @@ export async function collapseContext(
 
 /**
  * Full head summarization — summarize ALL non-tail messages.
- * Highest cost, guaranteed to bring context under threshold.
+ * Recursive: if still over target after one pass, extends tail and retries
+ * until either under target or no more head to summarize.
  */
 export async function autoCompactContext(
   agent: SpicaAgent,
@@ -254,85 +263,92 @@ export async function autoCompactContext(
   const llm: LLMClient | null = agent.getLLM();
   if (!llm) return;
 
-  const allMessages = llm.getMessages();
-  const systemMessages = allMessages.filter(m => m.role === 'system');
-  const nonSystem = allMessages.filter(m => m.role !== 'system');
-
-  if (nonSystem.length === 0) {
-    agent.emit('context_compressed', {
-      before: allMessages.length,
-      after: allMessages.length,
-      tokensBefore: 0,
-      tokensAfter: 0,
-      phase: 'auto-noop-empty',
-    });
-    return;
-  }
-
   const contextWindow = llm.getProvider().getContextWindow();
-  const usedTokens = estimateTokens(llm, nonSystem);
+  const baseTailSize = tailSizeForWindow(contextWindow);
 
-  if (usedTokens < targetTokens) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (signal?.aborted) break;
+
+    const allMessages = llm.getMessages();
+    const systemMessages = allMessages.filter(m => m.role === 'system');
+    const nonSystem = allMessages.filter(m => m.role !== 'system');
+
+    if (nonSystem.length === 0) {
+      agent.emit('context_compressed', {
+        before: allMessages.length,
+        after: allMessages.length,
+        tokensBefore: 0,
+        tokensAfter: 0,
+        phase: 'auto-noop-empty',
+      });
+      return;
+    }
+
+    const usedTokens = estimateTokens(llm, nonSystem);
+
+    if (usedTokens < targetTokens) {
+      agent.emit('context_compressed', {
+        before: allMessages.length,
+        after: allMessages.length,
+        tokensBefore: usedTokens,
+        tokensAfter: usedTokens,
+        phase: attempt === 0 ? 'auto-noop-under-target' : 'auto-compact-done',
+      });
+      return;
+    }
+
+    // Expand tail on each retry so more context survives verbatim
+    const adjustedTail = baseTailSize + attempt * (baseTailSize / 2);
+
+    // Ensure the LAST user message is ALWAYS preserved verbatim
+    const lastUserIdx = findLastIndex(nonSystem, m => m.role === 'user');
+    let tailStart: number;
+    if (lastUserIdx >= 0 && lastUserIdx >= nonSystem.length - adjustedTail) {
+      tailStart = nonSystem.length - adjustedTail;
+    } else if (lastUserIdx >= 0) {
+      tailStart = Math.min(lastUserIdx, nonSystem.length - 1);
+    } else {
+      tailStart = nonSystem.length - adjustedTail;
+    }
+    tailStart = Math.max(0, tailStart);
+    tailStart = ensureToolChainBoundary(nonSystem, tailStart);
+    const tail = nonSystem.slice(tailStart);
+    const head = nonSystem.slice(0, tailStart);
+
+    if (head.length === 0) {
+      agent.emit('context_compressed', {
+        before: allMessages.length,
+        after: allMessages.length,
+        tokensBefore: usedTokens,
+        tokensAfter: usedTokens,
+        phase: 'auto-noop-all-tail',
+      });
+      return;
+    }
+
+    const summaryMsg = await generateSummary(llm, head, signal);
+    const newMessages = [...systemMessages, summaryMsg, ...tail];
+    llm.setMessages(newMessages);
+    agent.setLastSyncedProviderIndex(newMessages.length - 1);
+    restoreCachePrefix(llm, systemMessages.length);
+
+    const newTokens = estimateTokens(llm, newMessages.filter(m => m.role !== 'system'));
+
     agent.emit('context_compressed', {
       before: allMessages.length,
-      after: allMessages.length,
+      after: newMessages.length,
       tokensBefore: usedTokens,
-      tokensAfter: usedTokens,
-      phase: 'auto-noop-under-target',
+      tokensAfter: newTokens,
+      phase: attempt > 0 ? 'auto-compact-retry' : 'auto-compact',
+      headCount: head.length,
+      tailCount: tail.length,
+      attempt,
     });
-    return;
+
+    // If under target, done
+    if (isUnderThreshold(llm, targetTokens)) return;
+    // Otherwise loop: tail gets bigger, head gets smaller
   }
-
-  const baseTailSize = contextWindow < 32000 ? 4 : contextWindow < 200000 ? 6 : 8;
-
-  // Ensure the LAST user message is ALWAYS preserved verbatim in the tail.
-  // Without this, the user's actual latest instruction gets summarized and
-  // the model may follow a conflated summary instead of the real request.
-  const lastUserIdx = findLastIndex(nonSystem, m => m.role === 'user');
-  let tailStart: number;
-  if (lastUserIdx >= 0 && lastUserIdx >= nonSystem.length - baseTailSize) {
-    // Last user is already in the default tail — use baseTailSize
-    tailStart = nonSystem.length - baseTailSize;
-  } else if (lastUserIdx >= 0) {
-    // Last user is further back — extend tail to include it
-    tailStart = Math.min(lastUserIdx, nonSystem.length - 1);
-  } else {
-    tailStart = nonSystem.length - baseTailSize;
-  }
-  // Don't split tool-call chains — if tailStart would orphan a tool result
-  // from its parent assistant tool_calls, extend backward to keep the chain intact.
-  tailStart = ensureToolChainBoundary(nonSystem, tailStart);
-  const tail = nonSystem.slice(tailStart);
-  const head = nonSystem.slice(0, tailStart);
-
-  if (head.length === 0) {
-    agent.emit('context_compressed', {
-      before: allMessages.length,
-      after: allMessages.length,
-      tokensBefore: usedTokens,
-      tokensAfter: usedTokens,
-      phase: 'auto-noop-all-tail',
-    });
-    return;
-  }
-
-  const summaryMsg = await generateSummary(llm, head, signal);
-  const newMessages = [...systemMessages, summaryMsg, ...tail];
-  llm.setMessages(newMessages);
-  agent.setLastSyncedProviderIndex(newMessages.length - 1);
-  restoreCachePrefix(llm, systemMessages.length);
-
-  const newTokens = estimateTokens(llm, newMessages.filter(m => m.role !== 'system'));
-
-  agent.emit('context_compressed', {
-    before: allMessages.length,
-    after: newMessages.length,
-    tokensBefore: usedTokens,
-    tokensAfter: newTokens,
-    phase: 'auto-compact',
-    headCount: head.length,
-    tailCount: tail.length,
-  });
 }
 
 // Backward-compatible alias
@@ -404,15 +420,24 @@ export async function manageContext(
     }
 
     // ── Layer 3: Context Collapse (LLM, cheaper — only middle range) ──
+    // Snapshot provider messages before Collapse. If Collapse fails to bring
+    // context under target, restore the snapshot so Layer 4 works on ORIGINAL
+    // messages — preventing double summarization (summary-of-summary).
+    const preCollapseSnapshot = [...llm.getMessages()];
     const collapsed = await collapseContext(agent, targetTokens, signal);
     if (collapsed) {
       compressed = true;
       return;
     }
 
-    // ── Layer 4: AutoCompact (LLM, full head summary) ──
+    // Collapse ran but wasn't enough — restore original messages
+    llm.setMessages(preCollapseSnapshot);
+    agent.setLastSyncedProviderIndex(preCollapseSnapshot.length - 1);
+    restoreCachePrefix(llm, preCollapseSnapshot.filter(m => m.role === 'system').length);
+
+    // ── Layer 4: AutoCompact (LLM, full head summary, recursive) ──
     await autoCompactContext(agent, targetTokens, signal);
-    compressed = true; // Layer 4 always compresses if it reaches this point
+    compressed = true;
   } finally {
     // Inject continuation signal so LLM knows to resume working, not re-analyze.
     // This was present in the pre-waterfall design (commits 23b6903, 458e7cc)
@@ -425,7 +450,7 @@ export async function manageContext(
         const lastMsg = finalMsgs[finalMsgs.length - 1];
         if (!lastMsg.content?.includes('[CONTEXT COMPRESSED]')) {
           finalMsgs.push({
-            role: 'system' as const,
+            role: 'user' as const,
             content: '[CONTEXT COMPRESSED] Your conversation history was just compressed. The summary above describes previous work. Continue from where you left off — tasks are NOT complete. Do NOT re-analyze or produce a text response. Call tools immediately to resume working.',
           });
         }

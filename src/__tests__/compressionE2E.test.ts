@@ -231,7 +231,7 @@ describe('Compression E2E — agent continues after compression', () => {
 
       // The continuation signal should be the last message
       const lastMsg = finalMsgs[finalMsgs.length - 1];
-      expect(lastMsg.role).toBe('system');
+      expect(lastMsg.role).toBe('user');
       expect(lastMsg.content).toContain('[CONTEXT COMPRESSED]');
     });
   });
