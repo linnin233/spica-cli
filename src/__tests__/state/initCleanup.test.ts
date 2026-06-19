@@ -21,10 +21,13 @@ describe.skipIf(shouldSkip)('init error cleanup', () => {
     await fs.remove(tmpDir);
   });
 
-  it('should clear _initPromise after connection failure', async () => {
+  it('should clear _initPromise after connection failure', { timeout: 15000 }, async () => {
     // Create agent with invalid provider that will fail connection
     const agent = new SpicaAgent('nonexistent-provider', tmpDir);
     const agentAny = agent as any;
+
+    // Set a short timeout so the connection failure is fast
+    process.env.SPICA_REQUEST_TIMEOUT = '2000';
 
     // First init should fail
     try {
@@ -38,9 +41,12 @@ describe.skipIf(shouldSkip)('init error cleanup', () => {
     expect(agentAny._initialized).toBe(false);
   });
 
-  it('should allow re-init after initial failure', async () => {
+  it('should allow re-init after initial failure', { timeout: 15000 }, async () => {
     const agent = new SpicaAgent('nonexistent-provider', tmpDir);
     const agentAny = agent as any;
+
+    // Set a short timeout so the connection failure is fast
+    process.env.SPICA_REQUEST_TIMEOUT = '2000';
 
     // First attempt fails
     try {
