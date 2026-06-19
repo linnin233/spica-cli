@@ -506,9 +506,11 @@ describe('Microcompact — boundary conditions', () => {
       { role: 'tool', toolCallId: 't1', content: exactContent },
     ];
 
-    const truncated = microcompactMessages(msgs, -1);
+    const { messages: resultMsgs, truncated } = microcompactMessages(msgs, -1);
     expect(truncated).toBe(1);
-    expect(msgs[1].content).toContain('[truncated]');
+    expect(resultMsgs[1].content).toContain('[truncated]');
+    // Original should NOT be mutated
+    expect(msgs[1].content!.length).toBe(20001);
   });
 
   it('should NOT truncate at exact limit', () => {
@@ -518,7 +520,7 @@ describe('Microcompact — boundary conditions', () => {
       { role: 'tool', toolCallId: 't1', content: exactContent },
     ];
 
-    const truncated = microcompactMessages(msgs, -1);
+    const { truncated } = microcompactMessages(msgs, -1);
     expect(truncated).toBe(0);
   });
 
@@ -528,10 +530,10 @@ describe('Microcompact — boundary conditions', () => {
       { role: 'assistant', content: 'A'.repeat(30000) },
     ];
 
-    const truncated = microcompactMessages(msgs, -1);
+    const { messages: resultMsgs, truncated } = microcompactMessages(msgs, -1);
     expect(truncated).toBe(0);
-    expect(msgs[0].content!.length).toBe(30000);
-    expect(msgs[1].content!.length).toBe(30000);
+    expect(resultMsgs[0].content!.length).toBe(30000);
+    expect(resultMsgs[1].content!.length).toBe(30000);
   });
 });
 

@@ -177,12 +177,15 @@ describe('Layer 2: Microcompact (zero-cost)', () => {
       { role: 'assistant', content: 'File is very long' },
     ];
 
-    const truncated = microcompactMessages(msgs, 0); // cache prefix = 0 (system only)
+    const { messages: resultMsgs, truncated } = microcompactMessages(msgs, 0);
     expect(truncated).toBe(1);
-    // Tool result should be truncated
-    const toolMsg = msgs.find(m => m.role === 'tool')!;
+    // Tool result should be truncated in RESULT (not original)
+    const toolMsg = resultMsgs.find(m => m.role === 'tool')!;
     expect(toolMsg.content).toContain('[truncated]');
     expect(toolMsg.content!.length).toBe(20000 + '...[truncated]'.length);
+    // Original should NOT be mutated
+    const origToolMsg = msgs.find(m => m.role === 'tool')!;
+    expect(origToolMsg.content!.length).toBe(30000);
   });
 
   it('should skip messages within cache prefix', () => {
@@ -194,9 +197,9 @@ describe('Layer 2: Microcompact (zero-cost)', () => {
     ];
 
     // cachePrefixEnd = 2 means indices 0,1,2 are cached → tool result at index 2 is preserved
-    const truncated = microcompactMessages(msgs, 2);
+    const { messages: resultMsgs, truncated } = microcompactMessages(msgs, 2);
     expect(truncated).toBe(0);
-    const toolMsg = msgs.find(m => m.role === 'tool')!;
+    const toolMsg = resultMsgs.find(m => m.role === 'tool')!;
     expect(toolMsg.content).not.toContain('[truncated]');
     expect(toolMsg.content!.length).toBe(30000);
   });
@@ -207,7 +210,7 @@ describe('Layer 2: Microcompact (zero-cost)', () => {
       { role: 'tool', toolCallId: 'tc1', content: 'short result' },
     ];
 
-    const truncated = microcompactMessages(msgs, -1);
+    const { truncated } = microcompactMessages(msgs, -1);
     expect(truncated).toBe(0);
   });
 });

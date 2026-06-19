@@ -140,21 +140,26 @@ const TOOL_RESULT_TRUNCATE_LIMIT = 20000; // chars
  * Cache-aware: messages before cachePrefixEnd are NOT truncated
  * (to preserve API-side prompt caching).
  *
- * Returns whether any messages were modified in place.
+ * Creates new message objects instead of mutating in place — prevents
+ * shared object references (from agentAddMessage) in _fullHistory from
+ * being truncated alongside provider messages.
+ *
+ * Returns a new array if any truncation occurred, or the original if not.
  */
-export function microcompactMessages(messages: ChatMessage[], cachePrefixEnd: number): number {
+export function microcompactMessages(messages: ChatMessage[], cachePrefixEnd: number): { messages: ChatMessage[]; truncated: number } {
   let truncated = 0;
-  for (let i = 0; i < messages.length; i++) {
-    // Cache-aware: skip messages in the prefix (they're cached by the API)
-    if (i <= cachePrefixEnd) continue;
-
-    const m = messages[i];
+  const result = messages.map((m, i) => {
+    if (i <= cachePrefixEnd) return m;
     if (m.role === 'tool' && (m.content || '').length > TOOL_RESULT_TRUNCATE_LIMIT) {
-      m.content = (m.content || '').slice(0, TOOL_RESULT_TRUNCATE_LIMIT) + '...[truncated]';
       truncated++;
+      return {
+        ...m,
+        content: (m.content || '').slice(0, TOOL_RESULT_TRUNCATE_LIMIT) + '...[truncated]',
+      };
     }
-  }
-  return truncated;
+    return m;
+  });
+  return { messages: result, truncated };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -418,15 +423,15 @@ export async function manageContext(
 
     // ── Layer 2: Microcompact (zero cost, cache-aware) ──
     const msgs = llm.getMessages();
-    const truncated = microcompactMessages(msgs, cachePrefixEnd);
+    const { messages: microMsgs, truncated } = microcompactMessages(msgs, cachePrefixEnd);
     if (truncated > 0) {
       compressed = true;
-      llm.setMessages(msgs);
-      agent.setLastSyncedProviderIndex(msgs.length - 1);
-      restoreCachePrefix(llm, msgs.filter(m => m.role === 'system').length);
+      llm.setMessages(microMsgs);
+      agent.setLastSyncedProviderIndex(microMsgs.length - 1);
+      restoreCachePrefix(llm, microMsgs.filter(m => m.role === 'system').length);
       agent.emit('context_compressed', {
         before: msgs.length,
-        after: msgs.length,
+        after: microMsgs.length,
         phase: 'microcompact',
         truncatedResults: truncated,
       });
