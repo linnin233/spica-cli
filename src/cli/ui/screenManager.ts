@@ -789,8 +789,18 @@ export class ScreenManager {
         return false;
       }
 
-      // Tab 键
+      // Tab: allow single-hit auto-complete during streaming (no scrollback write).
+      // Multi-hit completion would write to scrollback which races with stream output.
       if (data === '\t') {
+        const line = this.state.inputBuffer[0];
+        if (!line.startsWith('/') || !this.state.completer) return false;
+        const hits = this.state.completer(line);
+        if (hits.length === 1) {
+          this.state.inputBuffer[0] = hits[0];
+          this.state.cursorCol = (hits[0].match(/\P{M}\p{M}*/gu) || []).length;
+          this.updateLayout();
+          this.refreshInputForUserTyping();
+        }
         return false;
       }
 
