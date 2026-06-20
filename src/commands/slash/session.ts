@@ -10,6 +10,7 @@ import {
 } from '../../utils/session';
 import { clearInputQueue } from '../../cli/ui/queue';
 import { sessionStats } from '../../core/sessionStats';
+import { subAgentState } from '../../cli/subagentPanel';
 import type { SlashHandler } from './types';
 
 export const sessionHandler: SlashHandler = async (args, ctx) => {
@@ -61,6 +62,7 @@ export const sessionHandler: SlashHandler = async (args, ctx) => {
     clearSession(workspacePath);
     ctx.agent.setMessages([]);
     clearInputQueue();
+    subAgentState.clear();
 
     // Reset per-session usage stats for fresh start
     sessionStats.reset();

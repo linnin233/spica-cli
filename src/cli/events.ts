@@ -227,13 +227,11 @@ export function setupAgentEvents(
   let reasoningStarted = false;
   const subAgentStreamedChars = new Map<string, number>();
 
-  // 每次新对话开始时重置状态
+  // 每次 LLM 请求开始时重置流式状态
   on('waiting_for_llm', () => {
     reasoningStarted = false;
     resetToolTracking();
-    subAgentState.clear();
     subAgentStreamedChars.clear();
-    subAgentSeq = 0;
     // 清除thinking动画
     screen.clearThinkingAnimation();
   });
