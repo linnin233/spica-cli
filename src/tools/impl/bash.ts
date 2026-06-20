@@ -50,6 +50,8 @@ export async function executeBash(
   // Bypass 模式：跳过 shell injection 检测（用户明确信任）
   const bypassMode = safeArgs._bypassMode === true;
 
+  const detachedHint = '\n\n[DETACHED?] If this command starts a server/watcher, retry with: bash({ command: "...", detached: true }). Shell & and nohup do NOT work.';
+
   // 卡住检测阈值（默认10秒，比之前的30秒更快响应）
   const stuckWarningMs = (safeArgs.stuckWarning as number) || 10000;
 
@@ -216,7 +218,7 @@ Write-Output $proc.Id;
           command: actualCommand.slice(0, 50),
           timeout: stuckWarningMs / 1000,
           elapsedMs: stuckWarningMs,
-          message: `Command stuck after ${stuckWarningMs / 1000}s, forcing termination...`,
+          message: `Command stuck after ${stuckWarningMs / 1000}s — if this is a server, use detached: true. Terminating...`,
         });
 
         abortController.abort();
@@ -263,12 +265,12 @@ Write-Output $proc.Id;
         if (abortController.signal.aborted && !bashResult.timedOut) {
           return {
             success: false,
-            error: 'Command aborted by user (ESC ESC).',
+            error: `Command aborted by user (ESC ESC).${detachedHint}`,
           };
         }
         return {
           success: false,
-          error: `Command timed out after ${timeout / 1000}s. AI should decide: retry with detached=true, increase timeout, or use different approach.`,
+          error: `Command timed out after ${timeout / 1000}s.${detachedHint}`,
         };
       }
       // 合并stdout和stderr显示完整输出
