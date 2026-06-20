@@ -252,6 +252,13 @@ async function runBackgroundSubagent(
         const retryNote = round > 0 ? '\n[CONTEXT] Previous answer: see above.' : '';
         const result = await taskAgent.runLoop(currentPrompt + retryNote);
 
+        // runLoop returns string on interrupt, not throw. Check for it.
+        if (result.includes('[INTERRUPTED]')) {
+          taskAgent.dispose();
+          eventCallback('sub_agent_error', { id: subTaskId, error: 'Interrupted by user' });
+          return;
+        }
+
         // Check if result indicates a question.
         // RELIABLE: explicit NEEDS_CONTEXT status or text ending with a question mark.
         // Unreliable (false positives): question-word at start without "?".
@@ -551,6 +558,24 @@ export async function executeTask(
               : '';
 
           const result = await taskAgent.runLoop(task.prompt + retryNote);
+
+          // runLoop returns string on interrupt, not throw. Check for it.
+          if (result.includes('[INTERRUPTED]')) {
+            taskAgent.off('tool_call', toolCallHandler);
+            taskAgent.off('tool_result', toolResultHandler);
+            taskAgent.off('message', messageHandler);
+            taskAgent.off('reasoning', reasoningHandler);
+            taskAgent.off('stream', streamHandler);
+            if (abortHandler && externalSignal) {
+              externalSignal.removeEventListener('abort', abortHandler);
+            }
+            if (siblingAbortHandler) {
+              siblingAbortController.signal.removeEventListener('abort', siblingAbortHandler);
+            }
+            taskAgent.interrupt();
+            taskAgent.dispose();
+            return { status: 'BLOCKED', taskLabel, error: 'Interrupted by user' };
+          }
 
           // Success — cleanup and return
           taskAgent.off('tool_call', toolCallHandler);
