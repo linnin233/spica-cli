@@ -233,9 +233,6 @@ export class ScreenManager {
   }
 
   start(): void {
-    // Enable modifyOtherKeys level 2 — terminal sends CSI sequences for
-    // modified keys (Ctrl+Tab, Ctrl+Shift+Tab, etc.)
-    writeStdout(`${ESC}[>4;2m`);
     writeStdout(`${ESC}[1;${this.state.scrollBottom}r`);
     writeStdout(`${ESC}[2J${ESC}[1;1H`);
     this.drawStatus();
@@ -244,8 +241,6 @@ export class ScreenManager {
   }
 
   end(): void {
-    // Disable modifyOtherKeys before restoring terminal
-    writeStdout(`${ESC}[>4;0m`);
     writeStdout(`${ESC}[r${ESC}[2J${ESC}[1;1H`);
   }
 
@@ -755,10 +750,7 @@ export class ScreenManager {
   }
 
   handleInput(data: string): boolean {
-    // Workspace toggle: Ctrl+Tab
-    //   \e[1;5I        — xterm basic Ctrl+Tab
-    //   \e[27;5;9~     — xterm modifyOtherKeys level 2, Ctrl+Tab
-    //   \e[27;6;9~     — xterm modifyOtherKeys level 2, Ctrl+Shift+Tab
+    // Workspace toggle: Ctrl+Tab / Ctrl+Shift+Tab
     const isToggleSeq = (
       data === '\x1b[1;5I' ||
       data === '\x1b[27;5;9~' ||
