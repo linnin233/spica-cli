@@ -4,12 +4,35 @@ import { join } from 'path';
 import { SubAgentTask, getSubAgentConfig, summarizeResult, type SubAgentResult } from '../subAgent';
 import { WORKSPACE } from '../helpers';
 import type { ToolResult, ToolEventCallback } from '../helpers';
+import { getSkill, buildSkillPrompt } from '../../skills';
+import { registerWaitingSubagent, unregisterWaitingSubagent } from './replySubagent';
 
 interface TaskResult {
   status: SubAgentResult['status'];
   taskLabel: string;
   summary?: string;
   error?: string;
+}
+
+// ── Background task tracking ──────────────────────────────────────────
+
+interface BackgroundTask {
+  taskId: string;
+  abort: () => void;
+}
+
+const backgroundTasks = new Map<string, BackgroundTask>();
+
+export function getBackgroundTaskIds(): string[] {
+  return Array.from(backgroundTasks.keys());
+}
+
+export function stopBackgroundTask(taskId: string): boolean {
+  const task = backgroundTasks.get(taskId);
+  if (!task) return false;
+  task.abort();
+  backgroundTasks.delete(taskId);
+  return true;
 }
 
 // ── Worktree isolation helpers ────────────────────────────────────────────
@@ -107,6 +130,204 @@ async function cleanupWorktree(basePath: string, handle: WorktreeHandle): Promis
   }
 }
 
+// ── Background execution path ──────────────────────────────────────
+
+async function executeTaskBackground(
+  tasks: SubAgentTask[],
+  externalSignal: AbortSignal | undefined,
+  eventCallback: ToolEventCallback
+): Promise<ToolResult> {
+  const taskIds: string[] = [];
+
+  for (let i = 0; i < tasks.length; i++) {
+    const task = tasks[i];
+    const subTaskId = `bg-${i}-${Date.now().toString(36)}`;
+    taskIds.push(subTaskId);
+
+    // Fire each background task
+    runBackgroundSubagent(subTaskId, task, i, externalSignal, eventCallback);
+  }
+
+  return {
+    success: true,
+    output: `Dispatched ${tasks.length} background subagent(s): ${taskIds.join(', ')}`,
+  };
+}
+
+async function runBackgroundSubagent(
+  subTaskId: string,
+  task: SubAgentTask,
+  taskIndex: number,
+  externalSignal: AbortSignal | undefined,
+  eventCallback: ToolEventCallback
+): Promise<void> {
+  const config = getSubAgentConfig(task.type);
+  const taskLabel = task.description || task.prompt.slice(0, 30);
+  const taskWorkspace = WORKSPACE;
+
+  let abortController: AbortController | null = null;
+
+  // Register for external stop
+  const cleanup = () => {
+    backgroundTasks.delete(subTaskId);
+    unregisterWaitingSubagent(subTaskId);
+    if (abortController) abortController.abort();
+  };
+  backgroundTasks.set(subTaskId, { taskId: subTaskId, abort: cleanup });
+
+  try {
+    if (externalSignal?.aborted) {
+      eventCallback('sub_agent_error', { id: subTaskId, error: 'Cancelled before start' });
+      return;
+    }
+
+    // Emit start
+    eventCallback('sub_agent_start', {
+      id: subTaskId,
+      type: task.type || 'sub',
+      description: taskLabel,
+      prompt: task.prompt,
+    });
+
+    const { SpicaAgent } = await import('../../agent');
+    const { getRuntimeState } = await import('../../core/RuntimeState');
+    const parentAgent = getRuntimeState().getAgent();
+
+    abortController = new AbortController();
+
+    if (externalSignal) {
+      if (externalSignal.aborted) {
+        eventCallback('sub_agent_error', { id: subTaskId, error: 'Parent interrupted' });
+        return;
+      }
+      externalSignal.addEventListener('abort', () => abortController?.abort(), { once: true });
+    }
+
+    let currentPrompt = task.prompt;
+    const MAX_QUESTIONS = 3;
+
+    for (let round = 0; round <= MAX_QUESTIONS; round++) {
+      if (abortController.signal.aborted) {
+        eventCallback('sub_agent_error', { id: subTaskId, error: 'Aborted' });
+        return;
+      }
+
+      const taskAgent = new SpicaAgent(undefined, taskWorkspace);
+
+      if (config.allowedTools !== '*') {
+        taskAgent.setToolWhitelist(config.allowedTools);
+      }
+
+      // Wire subagent events
+      const forwardEvent = (event: string) => (data: any) => {
+        eventCallback(event as any, { id: subTaskId, ...data });
+      };
+      taskAgent.on('tool_call', forwardEvent('sub_agent_tool_call'));
+      taskAgent.on('tool_result', forwardEvent('sub_agent_tool_result'));
+      taskAgent.on('message', forwardEvent('sub_agent_message'));
+      taskAgent.on('reasoning', forwardEvent('sub_agent_reasoning'));
+      taskAgent.on('stream', (data: any) => {
+        eventCallback('sub_agent_stream', { id: subTaskId, chunk: data.chunk });
+      });
+
+      try {
+        if (parentAgent) {
+          await taskAgent.initAsSubAgent(parentAgent, task.model);
+        } else {
+          await taskAgent.init();
+        }
+
+        // Inject skill if specified
+        if (task.skill) {
+          const skill = getSkill(task.skill, taskWorkspace);
+          if (skill) {
+            const skillPrompt = buildSkillPrompt(skill, {});
+            taskAgent.getLLM()?.addMessage({
+              role: 'system',
+              content: `[SKILL: ${task.skill}]\n\n${skillPrompt}`,
+            });
+          }
+        }
+
+        const retryNote = round > 0 ? '\n[CONTEXT] Previous answer: see above.' : '';
+        const result = await taskAgent.runLoop(currentPrompt + retryNote);
+
+        // Check if result indicates a question.
+        // RELIABLE: explicit NEEDS_CONTEXT status or text ending with a question mark.
+        // Unreliable (false positives): question-word at start without "?".
+        const isQuestion =
+          result.includes('NEEDS_CONTEXT') ||
+          (result.includes('?') && result.trim().length < 500);
+
+        if (isQuestion && round < MAX_QUESTIONS) {
+          // Extract question from result
+          const question = result.slice(0, 400);
+
+          eventCallback('sub_agent_question', {
+            id: subTaskId,
+            question,
+            label: taskLabel,
+          });
+
+          // Wait for reply (with abort safety — reject if aborted while waiting)
+          const answer = await new Promise<string>((resolve, reject) => {
+            registerWaitingSubagent(subTaskId, resolve);
+            const onAbort = () => {
+              unregisterWaitingSubagent(subTaskId);
+              reject(new Error('Aborted while waiting for reply'));
+            };
+            abortController?.signal.addEventListener('abort', onAbort, { once: true });
+          });
+
+          if (abortController.signal.aborted) {
+            eventCallback('sub_agent_error', { id: subTaskId, error: 'Aborted while waiting for reply' });
+            return;
+          }
+
+          // Prep for next round with answer
+          currentPrompt = `${task.prompt}\n\n[ANSWER TO YOUR QUESTION]\n${answer}\n\nContinue with the task using the answer above.`;
+          taskAgent.dispose();
+          continue;
+        }
+
+        // Done — success
+        const summary = summarizeResult(result);
+        taskAgent.dispose();
+
+        eventCallback('sub_agent_done', {
+          id: subTaskId,
+          result,
+          summary,
+          status: 'DONE',
+        });
+        return;
+      } catch (err: any) {
+        taskAgent.interrupt();
+        taskAgent.dispose();
+
+        const errMsg = String(err.message || err);
+        if (errMsg.includes('interrupt') || errMsg.includes('abort')) {
+          eventCallback('sub_agent_error', { id: subTaskId, error: 'Interrupted' });
+          return;
+        }
+
+        eventCallback('sub_agent_error', { id: subTaskId, error: errMsg });
+        return;
+      }
+    }
+
+    // Max questions exceeded
+    eventCallback('sub_agent_error', {
+      id: subTaskId,
+      error: 'Max questions (3) exceeded — subagent could not resolve task',
+    });
+  } finally {
+    cleanup();
+  }
+}
+
+// ── Blocking execution path ─────────────────────────────────────────
+
 export async function executeTask(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Tool arguments are dynamic
   args: Record<string, any>,
@@ -129,6 +350,13 @@ export async function executeTask(
       success: false,
       error: 'Maximum 3 parallel sub-agents supported. Split your tasks into multiple task() calls.',
     };
+  }
+
+  const blocking = args.blocking !== false; // default true
+
+  // Non-blocking path: fire background tasks, return immediately
+  if (!blocking && eventCallback) {
+    return executeTaskBackground(tasks, externalSignal, eventCallback);
   }
 
   // Check for parallel implementation subagents (fix/build types)
@@ -305,6 +533,18 @@ export async function executeTask(
             await taskAgent.init();
           }
 
+          // Inject skill if specified — load skill prompt into subagent context
+          if (task.skill) {
+            const skill = getSkill(task.skill, taskWorkspace);
+            if (skill) {
+              const skillPrompt = buildSkillPrompt(skill, {});
+              taskAgent.getLLM()?.addMessage({
+                role: 'system',
+                content: `[SKILL: ${task.skill}]\n\n${skillPrompt}`,
+              });
+            }
+          }
+
           const retryNote =
             attempt > 0
               ? '\n[RETRY] Previous attempt failed. Please try a different approach.'
@@ -347,7 +587,6 @@ export async function executeTask(
           // Check if this result is definitive — if so, signal siblings to stop early
           if (!earlyExitTriggered && tasks.length > 1) {
             const definitiveMarkers = [
-              /✓/,
               /success/i,
               /done/i,
               /complete/i,

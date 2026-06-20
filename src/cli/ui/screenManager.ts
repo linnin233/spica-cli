@@ -29,13 +29,24 @@ export interface ScreenState {
   cursorInScrollArea: boolean;
   isStreaming: boolean;
   onVerboseToggle?: () => void;
+  /** Render function for idea overlay — called when entering idea workspace */
+  ideaOverlayRenderFn?: () => string[];
+  /** Called when workspace changes — for status bar refresh */
+  onWorkspaceChange?: () => void;
   // Matrix rain (hacker mode)
   matrixRain: MatrixRainController | null;
   hackerMode: boolean;
   /** In hacker mode: first row of the output zone (rain fills rows 1..rainTop-1) */
   rainTop: number;
   /** Subagent overlay: 0 when hidden, 6 when visible */
-  subAgentOverlayRows: number;
+  overlayRows: number;
+  /** Current workspace: main (coding) or idea (idea capture) */
+  workspace: 'main' | 'idea';
+  /** Input buffer preserved when switching to idea workspace */
+  ideaInputBuffer: string[];
+  ideaCursorCol: number;
+  lastMainInputBuffer: string[];
+  lastMainCursorCol: number;
   // 缓冲的输入，用于流式输出结束后刷新
   pendingInputRefresh: boolean;
   // 历史缓冲区（用于resize后重绘）
@@ -49,7 +60,6 @@ export class ScreenManager {
   // Thinking动画状态
   private thinkingAnimationFrame: number = 0;
   private thinkingAnimationTimer: NodeJS.Timeout | null = null;
-  private subAgentRefreshTimer: NodeJS.Timeout | null = null;
   private thinkingAnimationStopped: boolean = false;
   private thinkingAnimationFrames: string[] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
@@ -76,7 +86,12 @@ export class ScreenManager {
       matrixRain: null,
       hackerMode: false,
       rainTop: 1,
-      subAgentOverlayRows: 0,
+      overlayRows: 0,
+      workspace: 'main',
+      ideaInputBuffer: [''],
+      ideaCursorCol: 0,
+      lastMainInputBuffer: [''],
+      lastMainCursorCol: 0,
       pendingInputRefresh: false,
       scrollbackBuffer: getScrollbackBuffer(3000),
     };
@@ -95,7 +110,7 @@ export class ScreenManager {
     this.state.terminalWidth = newWidth;
     this.state.inputLines = this.calcInputLines();
     this.state.statusRow = this.state.terminalHeight - this.state.inputLines - 1;
-    this.state.scrollBottom = this.state.statusRow - 1 - this.state.subAgentOverlayRows;
+    this.state.scrollBottom = this.state.statusRow - 1 - this.state.overlayRows;
 
     // Hacker mode: full-screen rain, no scroll regions
     if (this.state.hackerMode) {
@@ -152,6 +167,11 @@ export class ScreenManager {
     return width;
   }
 
+  /** Prompt text width in characters (not display width). */
+  private getPromptWidth(): number {
+    return this.state.workspace === 'idea' ? 'idea> '.length : '> '.length;
+  }
+
   private calcInputLines(): number {
     const content = this.state.inputBuffer[0];
     const width = this.state.terminalWidth;
@@ -161,7 +181,8 @@ export class ScreenManager {
 
     for (let i = 0; i < logicalLines.length; i++) {
       const line = logicalLines[i];
-      const prefixWidth = i === 0 ? 2 : 0;
+      const promptWidth = this.getPromptWidth();
+      const prefixWidth = i === 0 ? promptWidth : 0;
       const lineWidth = prefixWidth + this.getStringDisplayWidth(line);
       totalLines += Math.max(1, Math.ceil(lineWidth / width));
     }
@@ -176,7 +197,7 @@ export class ScreenManager {
       const oldScrollBottom = this.state.scrollBottom;
       this.state.inputLines = newLines;
       this.state.statusRow = this.state.terminalHeight - newLines - 1;
-      this.state.scrollBottom = this.state.statusRow - 1 - this.state.subAgentOverlayRows;
+      this.state.scrollBottom = this.state.statusRow - 1 - this.state.overlayRows;
 
       if (oldStatusRow > this.state.statusRow) {
         for (let row = this.state.statusRow + 1; row <= oldStatusRow; row++) {
@@ -212,6 +233,9 @@ export class ScreenManager {
   }
 
   start(): void {
+    // Enable modifyOtherKeys level 2 — terminal sends CSI sequences for
+    // modified keys (Ctrl+Tab, Ctrl+Shift+Tab, etc.)
+    writeStdout(`${ESC}[>4;2m`);
     writeStdout(`${ESC}[1;${this.state.scrollBottom}r`);
     writeStdout(`${ESC}[2J${ESC}[1;1H`);
     this.drawStatus();
@@ -220,6 +244,8 @@ export class ScreenManager {
   }
 
   end(): void {
+    // Disable modifyOtherKeys before restoring terminal
+    writeStdout(`${ESC}[>4;0m`);
     writeStdout(`${ESC}[r${ESC}[2J${ESC}[1;1H`);
   }
 
@@ -481,14 +507,14 @@ export class ScreenManager {
     this.state.cursorInScrollArea = false;
   }
 
-  // ── Subagent overlay ──────────────────────────────────────────────────
+  // ── Overlay ──────────────────────────────────────────────────
 
-  /** Reserve/free 6 rows for subagent overlay between scrollback and status bar */
-  setSubAgentOverlay(visible: boolean): void {
-    const newRows = visible ? 6 : 0;
-    if (this.state.subAgentOverlayRows === newRows) return;
+  /** Reserve/free rows for overlay between scrollback and status bar (idea workspace) */
+  setOverlay(visible: boolean, rows: number = 6): void {
+    const newRows = visible ? rows : 0;
+    if (this.state.overlayRows === newRows) return;
 
-    this.state.subAgentOverlayRows = newRows;
+    this.state.overlayRows = newRows;
     this.state.scrollBottom = this.state.statusRow - 1 - newRows;
 
     // Clear overlay area if hiding
@@ -508,34 +534,81 @@ export class ScreenManager {
   }
 
   /** Write lines directly to overlay region — no scrollback buffer, no table state machine */
-  writeSubAgentOverlay(lines: string[]): void {
-    if (this.state.subAgentOverlayRows === 0) return;
-
+  writeOverlay(lines: string[]): void {
+    if (this.state.overlayRows === 0) return;
     const startRow = this.state.scrollBottom + 1;
     writeStdout(`${ESC}[?25l`);
-    for (let i = 0; i < this.state.subAgentOverlayRows && i < lines.length; i++) {
+    for (let i = 0; i < this.state.overlayRows && i < lines.length; i++) {
       writeStdout(`${ESC}[${startRow + i};1H${ESC}[2K${lines[i]}`);
     }
   }
 
-  /** Start periodic overlay refresh. Stops automatically when renderFn returns empty array. */
-  startSubAgentRefresh(intervalMs: number, renderFn: () => string[]): void {
-    this.stopSubAgentRefresh();
-    this.subAgentRefreshTimer = setInterval(() => {
-      const lines = renderFn();
-      if (lines.length === 0) {
-        this.stopSubAgentRefresh();
-        return;
-      }
-      this.writeSubAgentOverlay(lines);
-    }, intervalMs);
+  /** Enter idea workspace — show idea overlay, switch input buffer. */
+  enterIdeaWorkspace(): void {
+    if (this.state.workspace === 'idea') return;
+
+    // Save main input buffer before switching
+    this.state.lastMainInputBuffer = [...this.state.inputBuffer];
+    this.state.lastMainCursorCol = this.state.cursorCol;
+
+    // Restore idea input buffer
+    this.state.inputBuffer = this.state.ideaInputBuffer.length > 0
+      ? [...this.state.ideaInputBuffer] : [''];
+    this.state.cursorCol = this.state.ideaCursorCol;
+
+    this.state.workspace = 'idea';
+
+    // Reserve overlay space (max 7 rows: 1 top + 1 title + 4 ideas + 1 help + 1 bottom,
+    // but 4 rows for empty state). Use fixed 7 to avoid re-layout on every idea change.
+    this.setOverlay(true, 7);
+
+    // Write idea overlay content
+    if (this.state.ideaOverlayRenderFn) {
+      this.writeOverlay(this.state.ideaOverlayRenderFn());
+    }
+
+    if (this.state.onWorkspaceChange) this.state.onWorkspaceChange();
+    this.drawStatus();
+    this.refreshInput();
+    this.restoreCursor();
   }
 
-  stopSubAgentRefresh(): void {
-    if (this.subAgentRefreshTimer) {
-      clearInterval(this.subAgentRefreshTimer);
-      this.subAgentRefreshTimer = null;
+  /** Exit idea workspace — hide overlay, restore main input buffer. */
+  exitIdeaWorkspace(): void {
+    if (this.state.workspace !== 'idea') return;
+
+    // Save idea input buffer before switching
+    this.state.ideaInputBuffer = [...this.state.inputBuffer];
+    this.state.ideaCursorCol = this.state.cursorCol;
+
+    // Restore main input buffer
+    this.state.inputBuffer = this.state.lastMainInputBuffer.length > 0
+      ? [...this.state.lastMainInputBuffer] : [''];
+    this.state.cursorCol = Math.min(this.state.lastMainCursorCol,
+      (this.state.inputBuffer[0] || '').length);
+
+    this.state.workspace = 'main';
+
+    // Remove overlay, restore scroll region
+    this.setOverlay(false);
+
+    if (this.state.onWorkspaceChange) this.state.onWorkspaceChange();
+    this.drawStatus();
+    this.refreshInput();
+    this.restoreCursor();
+  }
+
+  /** Toggle between main and idea workspaces */
+  toggleWorkspace(): void {
+    if (this.state.workspace === 'idea') {
+      this.exitIdeaWorkspace();
+    } else {
+      this.enterIdeaWorkspace();
     }
+  }
+
+  isInIdeaWorkspace(): boolean {
+    return this.state.workspace === 'idea';
   }
 
   refreshStatus(): void {
@@ -580,9 +653,11 @@ export class ScreenManager {
     let currentRow = inputStartRow;
     for (let i = 0; i < logicalLines.length; i++) {
       const lineContent = logicalLines[i];
-      const displayContent = i === 0 ? '> ' + this.formatInputContent(lineContent) : lineContent;
+      const promptText = this.state.workspace === 'idea' ? 'idea> ' : '> ';
+      const displayContent = i === 0 ? promptText + this.formatInputContent(lineContent) : lineContent;
 
-      const prefixWidth = i === 0 ? 2 : 0;
+      const promptWidth = this.getPromptWidth();
+      const prefixWidth = i === 0 ? promptWidth : 0;
       const lineWidth = prefixWidth + this.getStringDisplayWidth(lineContent);
       const physicalLines = Math.max(1, Math.ceil(lineWidth / width));
 
@@ -629,14 +704,15 @@ export class ScreenManager {
       displayWidthInLine += this.getCharDisplayWidth(char);
     }
 
-    const prefixWidth = logicalLineIndex === 0 ? 2 : 0;
+    const promptW = this.getPromptWidth();
+    const prefixWidth = logicalLineIndex === 0 ? promptW : 0;
     const cursorDisplayWidth = prefixWidth + displayWidthInLine;
 
     // 计算之前逻辑行占用的物理行数
     let physicalLinesBefore = 0;
     for (let i = 0; i < logicalLineIndex; i++) {
       const line = logicalLines[i];
-      const pWidth = i === 0 ? 2 : 0;
+      const pWidth = i === 0 ? promptW : 0;
       const lineWidth = pWidth + this.getStringDisplayWidth(line);
       physicalLinesBefore += Math.max(1, Math.ceil(lineWidth / width));
     }
@@ -679,6 +755,20 @@ export class ScreenManager {
   }
 
   handleInput(data: string): boolean {
+    // Workspace toggle: Ctrl+Tab
+    //   \e[1;5I        — xterm basic Ctrl+Tab
+    //   \e[27;5;9~     — xterm modifyOtherKeys level 2, Ctrl+Tab
+    //   \e[27;6;9~     — xterm modifyOtherKeys level 2, Ctrl+Shift+Tab
+    const isToggleSeq = (
+      data === '\x1b[1;5I' ||
+      data === '\x1b[27;5;9~' ||
+      data === '\x1b[27;6;9~'
+    );
+    if (isToggleSeq) {
+      this.toggleWorkspace();
+      return false;
+    }
+
     // 流式输出时，刷新输入框但光标留在输入框
     if (this.state.isStreaming) {
       // Ctrl+O 切换 verbose 模式
@@ -951,9 +1041,10 @@ export class ScreenManager {
   clear(): void {
     this.state.inputBuffer[0] = '';
     this.state.cursorCol = 0;
-    this.state.inputLines = 1;
-    this.state.statusRow = this.state.terminalHeight - 2;
-    this.state.scrollBottom = this.state.terminalHeight - 3;
+    // Recalculate layout accounting for active overlay rows
+    this.state.inputLines = this.calcInputLines();
+    this.state.statusRow = this.state.terminalHeight - this.state.inputLines - 1;
+    this.state.scrollBottom = this.state.statusRow - 1 - this.state.overlayRows;
     this.state.pendingInputRefresh = false;
     writeStdout(`${ESC}[1;${this.state.scrollBottom}r`);
     this.drawStatus();
@@ -971,6 +1062,23 @@ export class ScreenManager {
 
   setVerboseToggleCallback(fn: () => void): void {
     this.state.onVerboseToggle = fn;
+  }
+
+  /** Set render function for idea overlay — called on every enterIdeaWorkspace */
+  setIdeaOverlayRenderFn(fn: () => string[]): void {
+    this.state.ideaOverlayRenderFn = fn;
+  }
+
+  /** Set the input buffer content (used by idea workspace to fill text). */
+  setInput(text: string): void {
+    this.state.inputBuffer = [text];
+    this.state.cursorCol = text.length;
+  }
+
+  /** Clear the input buffer. */
+  clearInput(): void {
+    this.state.inputBuffer = [''];
+    this.state.cursorCol = 0;
   }
 
   setStatus(text: string): void {

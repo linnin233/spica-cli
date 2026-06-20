@@ -27,7 +27,7 @@ import {
 } from './formatting';
 import type { ToolResultData } from './formatting';
 import { resetToolTracking, registerToolCall, matchToolResult, calcElapsedMs, displayToolResult, isInterruptAlreadyShown, markInterruptShown, type ToolCallRecord } from './results';
-import { subAgentState, renderOverlay, writeFinalPanelToScrollback, type SubAgentRecord } from './subagentPanel';
+import { subAgentState, SUBAGENT_TYPE_ICONS, getRunningCount, type SubAgentRecord } from './subagentPanel';
 
 // 事件数据类型定义
 interface ConnectionErrorData {
@@ -208,22 +208,6 @@ const state = getRuntimeState();
 // ============================================
 
 let subAgentSeq = 0;
-let subAgentOverlayActive = false;
-
-function allAgentsFinished(): boolean {
-  for (const a of subAgentState.agents.values()) {
-    if (a.status === 'running') return false;
-  }
-  return subAgentState.agents.size > 0;
-}
-
-function closeSubAgentOverlay(): void {
-  if (!subAgentOverlayActive) return;
-  subAgentOverlayActive = false;
-  screen.stopSubAgentRefresh();
-  writeFinalPanelToScrollback();
-  screen.setSubAgentOverlay(false);
-}
 
 export function setupAgentEvents(
   agent: SpicaAgent,
@@ -247,7 +231,6 @@ export function setupAgentEvents(
   on('waiting_for_llm', () => {
     reasoningStarted = false;
     resetToolTracking();
-    closeSubAgentOverlay();
     subAgentState.clear();
     subAgentStreamedChars.clear();
     subAgentSeq = 0;
@@ -378,7 +361,7 @@ export function setupAgentEvents(
       displayToolResult(record, data);
     } else {
       // 未找到匹配，显示简单格式
-      const icon = data.success ? COLORS.success('✓') : COLORS.error('✗');
+      const icon = data.success ? COLORS.success('OK') : COLORS.error('ERR');
       const summary = formatToolSummary(data);
       screen.appendScroll(`${icon} ${data.name} → ${summary}\n`);
     }
@@ -459,11 +442,13 @@ export function setupAgentEvents(
       priority: 1,
     });
 
-    // First subagent: open overlay
-    if (!subAgentOverlayActive) {
-      subAgentOverlayActive = true;
-      screen.setSubAgentOverlay(true);
-      screen.startSubAgentRefresh(1000, renderOverlay);
+    // Inline scrollback announcement
+    const icon = SUBAGENT_TYPE_ICONS[type] || '•';
+    screen.appendScroll(COLORS.secondary(`${icon} ${label} ${truncateToWidth(data.description || data.prompt.slice(0, 60), 50)}\n`));
+
+    // Refresh status bar to show subagent count
+    if (model) {
+      screen.setStatus(buildStatusText(agent, model));
     }
   });
 
@@ -493,10 +478,15 @@ export function setupAgentEvents(
       record.summary = truncateToWidth(data.summary || 'done', 60);
       record.priority = 2;
       record.currentTool = undefined;
-    }
 
-    if (allAgentsFinished()) {
-      closeSubAgentOverlay();
+      const icon = SUBAGENT_TYPE_ICONS[record.type] || '•';
+      const elapsed = formatElapsed(Date.now() - record.startTime);
+      screen.appendScroll(COLORS.success(`  [${icon}] OK ${record.label} done (${elapsed}, ${record.toolCount} tools)\n`));
+
+      // Refresh status bar to update subagent count
+      if (model) {
+        screen.setStatus(buildStatusText(agent, model));
+      }
     }
   });
 
@@ -506,14 +496,48 @@ export function setupAgentEvents(
     const record = subAgentState.get(data.id);
     if (record) {
       record.status = 'error';
-      record.error = data.error; // Full error, no truncation
+      record.error = data.error;
       record.summary = data.error.split('\n')[0].slice(0, 60);
       record.priority = 0;
       record.currentTool = undefined;
+
+      const icon = SUBAGENT_TYPE_ICONS[record.type] || '•';
+      const elapsed = formatElapsed(Date.now() - record.startTime);
+      const errBrief = data.error.split('\n')[0].slice(0, 80);
+      screen.appendScroll(COLORS.error(`  [${icon}] ERR ${record.label} ${errBrief} (${elapsed})\n`));
+
+      // Refresh status bar to update subagent count
+      if (model) {
+        screen.setStatus(buildStatusText(agent, model));
+      }
+    }
+  });
+
+  // Background subagent asks a question — inject into parent LLM history
+  on('sub_agent_question', (data: { id: string; question: string; label: string }) => {
+    const record = subAgentState.get(data.id);
+    const icon = record ? SUBAGENT_TYPE_ICONS[record.type] || '•' : '•';
+
+    // Show in scrollback
+    screen.appendScroll(COLORS.warning(`  [${icon}] ? ${data.label}: ${data.question.slice(0, 120)}\n`));
+
+    // Inject as system message so parent LLM can see and answer
+    const llm = agent.getLLM();
+    if (llm) {
+      llm.addMessage({
+        role: 'system',
+        content: `[SUBAGENT QUESTION - ${data.label}]\nTask ID: ${data.id}\nQuestion: ${data.question}\n\nReply with the reply_subagent tool: reply_subagent(task_id="${data.id}", answer="...")`,
+      });
     }
 
-    if (allAgentsFinished()) {
-      closeSubAgentOverlay();
+    // Update status bar
+    if (model) {
+      screen.setStatus(buildStatusText(agent, model));
+    }
+
+    // If parent is idle, notify user to continue
+    if (!getRuntimeState().isProcessing()) {
+      screen.appendScroll(COLORS.muted('  (use reply_subagent to answer, or press Enter)\n'));
     }
   });
 

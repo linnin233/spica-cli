@@ -81,10 +81,10 @@ export class ProgressTracker {
     const lines = recent.map(e => {
       const icon =
         e.type === 'file_written' ? '📝' :
-        e.type === 'file_edited' ? '✏️' :
-        e.type === 'decision_made' ? '💡' :
-        e.type === 'error_hit' ? '⚠️' :
-        '✅'; // milestone
+        e.type === 'file_edited' ? '[edit]' :
+        e.type === 'decision_made' ? '[decide]' :
+        e.type === 'error_hit' ? '[ERR]' :
+        '[OK]'; // milestone
       return `${icon} ${e.description}`;
     });
 

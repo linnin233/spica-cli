@@ -10,6 +10,7 @@ import {
   linkAbortSignals,
 } from '../helpers';
 import type { ToolResult, ToolEventCallback } from '../helpers';
+import { stopBackgroundTask, getBackgroundTaskIds } from './task';
 
 // 跨平台进程树杀死: Windows taskkill /F /T, Unix SIGKILL to process group
 async function killProcessTree(pid: number): Promise<void> {
@@ -453,10 +454,17 @@ export async function executeTaskStop(args: Record<string, any>): Promise<ToolRe
   const safeArgs = args;
   const taskId = safeArgs.task_id as string;
 
+  // Check background subagents first
+  if (stopBackgroundTask(taskId)) {
+    return { success: true, output: `Background subagent stopped: ${taskId}` };
+  }
+
   if (!activeMonitors.has(taskId)) {
+    const bgIds = getBackgroundTaskIds();
+    const allIds = [...Array.from(activeMonitors.keys()), ...bgIds];
     return {
       success: false,
-      error: `Task not found: ${taskId}. Active tasks: ${Array.from(activeMonitors.keys()).join(', ') || 'none'}`,
+      error: `Task not found: ${taskId}. Active tasks: ${allIds.join(', ') || 'none'}`,
     };
   }
 

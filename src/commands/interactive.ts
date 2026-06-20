@@ -7,6 +7,8 @@ import { shutdownMCP } from "../mcp/client";
 import { COLORS, BG } from "../cli/ui/colors";
 import { getInputQueue } from "../cli/ui/queue";
 import { autoDrainQueue } from "../cli/queueDrain";
+import { addIdea, getAllIdeas, markDone, deleteIdea } from "../storage/ideaStore";
+import { renderIdeaOverlay } from "../cli/ui/ideaOverlay";
 import { dispatchSlash } from "./slash";
 import { TUIInputHandler } from "../cli/ui/tuiInput";
 import { setupAgentEvents, formatRunStats } from "../cli/events";
@@ -103,6 +105,10 @@ export async function runInteractiveMode(
           "/init",
           "/rename",
           "/delete",
+          "/idea",
+          "/ideas",
+          "/idea-done",
+          "/idea-delete",
         ];
         const getCommands = () => {
           const skills = listSkills(agent.getWorkspacePath());
@@ -152,12 +158,22 @@ export async function runInteractiveMode(
             }
           }
 
+          const wsLabel = screen.isInIdeaWorkspace() ? 'Idea | ' : '';
           screen.setStatus(
-            `${statusText} | ${providerConfig!.model}${branchInfo} | ${displayPath}`,
+            `${wsLabel}${statusText} | ${providerConfig!.model}${branchInfo} | ${displayPath}`,
           );
         };
         setUpdateStatusBarFn(updateStatusBarLocal);
         updateStatusBarLocal();
+
+        // Set idea overlay render function — called when entering idea workspace
+        screen.setIdeaOverlayRenderFn(() => {
+          const ideas = getAllIdeas(agent.getWorkspacePath());
+          return renderIdeaOverlay(ideas);
+        });
+
+        // Set workspace change callback for status bar refresh
+        screen.state.onWorkspaceChange = () => updateStatusBarLocal();
 
         // TokenCounter 用于结束统计显示
         const provider = agent.getLLM()?.getProvider();
@@ -260,6 +276,98 @@ export async function runInteractiveMode(
             console.log(COLORS.muted(`Session saved (${messages.length} messages)`));
             console.log(COLORS.muted("Goodbye!"));
             process.exit(0);
+            return;
+          }
+
+          // Idea workspace input handling
+          if (screen.isInIdeaWorkspace()) {
+            const wsp = agent.getWorkspacePath();
+
+            // Empty input → exit to main workspace
+            if (!trimmed) {
+              screen.exitIdeaWorkspace();
+              return;
+            }
+
+            // Slash commands work in idea workspace too
+            if (trimmed.startsWith('/')) {
+              const handled = await dispatchSlash(trimmed, {
+                agent, screen, state, tokenCounter,
+                isProcessing,
+                setProcessing: (v: boolean) => { isProcessing = v; state.setProcessing(v); },
+                providerConfig: providerConfig!,
+                updateStatusBar: updateStatusBarLocal,
+                handleInput,
+              });
+              if (handled) return;
+              return;
+            }
+
+            // d<N> — mark done
+            const doneMatch = trimmed.match(/^d(\d+)$/i);
+            if (doneMatch) {
+              const id = parseInt(doneMatch[1], 10);
+              markDone(wsp, id);
+              const ideas = getAllIdeas(wsp);
+              screen.writeOverlay(renderIdeaOverlay(ideas));
+              screen.clearInput();
+              screen.refreshInput();
+              screen.restoreCursor();
+              return;
+            }
+
+            // x<N> — delete
+            const delMatch = trimmed.match(/^x(\d+)$/i);
+            if (delMatch) {
+              const id = parseInt(delMatch[1], 10);
+              deleteIdea(wsp, id);
+              const ideas = getAllIdeas(wsp);
+              screen.writeOverlay(renderIdeaOverlay(ideas));
+              screen.clearInput();
+              screen.refreshInput();
+              screen.restoreCursor();
+              return;
+            }
+
+            // b<N> — fill with brainstorm prefix, switch to main
+            const brainstormMatch = trimmed.match(/^b(\d+)$/i);
+            if (brainstormMatch) {
+              const id = parseInt(brainstormMatch[1], 10);
+              const ideas = getAllIdeas(wsp);
+              const idea = ideas.find(i => i.id === id);
+              if (idea) {
+                screen.exitIdeaWorkspace();
+                screen.setInput(`Let's brainstorm: ${idea.text}`);
+                screen.refreshInput();
+                screen.restoreCursor();
+              }
+              return;
+            }
+
+            // <N> — fill idea into input, switch to main
+            const fillMatch = trimmed.match(/^(\d+)$/);
+            if (fillMatch) {
+              const id = parseInt(fillMatch[1], 10);
+              const ideas = getAllIdeas(wsp);
+              const idea = ideas.find(i => i.id === id);
+              if (idea) {
+                screen.exitIdeaWorkspace();
+                screen.setInput(idea.text);
+                screen.refreshInput();
+                screen.restoreCursor();
+              }
+              return;
+            }
+
+            // Plain text — create new idea
+            const idea = addIdea(wsp, trimmed);
+            if (idea) {
+              const ideas = getAllIdeas(wsp);
+              screen.writeOverlay(renderIdeaOverlay(ideas));
+              screen.clearInput();
+              screen.refreshInput();
+              screen.restoreCursor();
+            }
             return;
           }
 

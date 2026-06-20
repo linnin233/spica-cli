@@ -2,8 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   subAgentState,
   getSortedAgents,
-  renderOverlay,
-  nextSpinnerFrame,
+  getRunningCount,
   SUBAGENT_TYPE_ICONS,
 } from '../subagentPanel';
 
@@ -92,66 +91,53 @@ describe('SUBAGENT_TYPE_ICONS', () => {
   });
 });
 
-describe('nextSpinnerFrame', () => {
-  it('cycles through all 10 frames', () => {
-    const frames = new Set<string>();
-    for (let i = 0; i < 10; i++) frames.add(nextSpinnerFrame());
-    expect(frames.size).toBe(10);
-  });
-});
-
-describe('renderOverlay', () => {
+describe('getRunningCount', () => {
   beforeEach(() => {
     subAgentState.clear();
   });
 
-  it('returns empty array when no agents', () => {
-    expect(renderOverlay()).toEqual([]);
+  it('returns 0 when no agents', () => {
+    expect(getRunningCount()).toBe(0);
   });
 
-  it('returns 7 lines (top border + title + 4 content + bottom) when agents exist', () => {
-    subAgentState.add('id-1', {
+  it('returns count of running agents only', () => {
+    subAgentState.add('r1', {
       type: 'explore',
       description: 'test',
       status: 'running',
       startTime: Date.now(),
       toolCount: 0,
-      label: '[#1 explore]',
+      label: '[#1]',
       priority: 1,
     });
-    const lines = renderOverlay();
-    // 1 top border + 1 title + 1 status + 1 tool/empty + 2 empty fill + 1 bottom = 7
-    expect(lines.length).toBe(7);
-  });
-
-  it('shows done agent without spinner', () => {
-    subAgentState.add('id-1', {
-      type: 'explore',
+    subAgentState.add('r2', {
+      type: 'fix',
+      description: 'test',
+      status: 'running',
+      startTime: Date.now(),
+      toolCount: 0,
+      label: '[#2]',
+      priority: 1,
+    });
+    subAgentState.add('d1', {
+      type: 'build',
       description: 'test',
       status: 'done',
       startTime: Date.now(),
       toolCount: 0,
-      label: '[#1 explore]',
+      label: '[#3]',
       priority: 2,
-      summary: 'all good',
     });
-    const lines = renderOverlay();
-    const statusLine = lines[2]; // Skip top border and title
-    expect(statusLine).toContain('✓');
-  });
-
-  it('shows error agent with error detail', () => {
-    subAgentState.add('id-1', {
-      type: 'fix',
+    subAgentState.add('e1', {
+      type: 'review',
       description: 'test',
       status: 'error',
       startTime: Date.now(),
       toolCount: 0,
-      label: '[#1 fix]',
+      label: '[#4]',
       priority: 0,
-      error: 'ENOENT: no such file',
+      error: 'fail',
     });
-    const lines = renderOverlay();
-    expect(lines.some(l => l.includes('ENOENT'))).toBe(true);
+    expect(getRunningCount()).toBe(2);
   });
 });

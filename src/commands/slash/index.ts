@@ -7,6 +7,7 @@ import { compactHandler, summaryHandler } from './compact';
 import { statusHandler } from './status';
 import { helpHandler, initHandler, historyMsgHandler } from './help';
 import { subagentsHandler } from './subagents';
+import { ideaHandler } from './idea';
 import { getSkill } from '../../skills';
 
 /**
@@ -106,6 +107,12 @@ export async function dispatchSlash(trimmed: string, ctx: SlashContext): Promise
   // /subagents
   if (cmd === 'subagents') {
     await subagentsHandler('', ctx);
+    return true;
+  }
+
+  // /idea, /ideas, /idea-done, /idea-delete, /idea-open
+  if (cmd === 'idea' || cmd === 'ideas' || cmd === 'idea-done' || cmd === 'idea-delete' || cmd === 'idea-open') {
+    await ideaHandler(parts.slice(1).join(' '), ctx);
     return true;
   }
 

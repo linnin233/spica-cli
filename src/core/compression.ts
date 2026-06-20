@@ -608,7 +608,7 @@ export function buildSummaryPrompt(messages: ChatMessage[]): string {
         const err = /error|Error|FAILED|denied|refused|stack trace|fatal/i.test(
           (m.content || '').slice(0, 200)
         );
-        const errorTag = err ? ' ⚠️ERROR' : '';
+        const errorTag = err ? ' [ERR]' : '';
         return `tool_result (${toolName})${errorTag}: ${tc}`;
       }
 

@@ -4,6 +4,7 @@ import { execa } from 'execa';
 import { resolve as pathResolve, isAbsolute, dirname, join, basename } from 'path';
 import fastGlob from 'fast-glob';
 import { executeTask } from './impl/task';
+import { executeReplySubagent } from './impl/replySubagent';
 import { computeDiff, formatDiff, generateEditDiff } from '../cli/ui/diff';
 import { getMCPManager } from '../mcp/client';
 import type { Todo } from '../agent';
@@ -488,6 +489,9 @@ export async function executeTool(
 
       case 'task_stop':
         return await executeTaskStop(safeArgs);
+
+      case 'reply_subagent':
+        return await executeReplySubagent(safeArgs);
 
       case 'git':
         return await executeGit(safeArgs);

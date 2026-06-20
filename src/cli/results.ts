@@ -94,7 +94,7 @@ export function markInterruptShown(cancelSeq: number): void {
 
 export function displayToolResult(record: ToolCallRecord, data: ToolResultData): void {
   const elapsed = formatElapsed(calcElapsedMs(record.startTime));
-  const icon = data.success ? COLORS.success('✓') : COLORS.error('✗');
+  const icon = data.success ? COLORS.success('OK') : COLORS.error('ERR');
   const summary = formatToolSummary(data);
 
   if (state.isVerboseMode()) {

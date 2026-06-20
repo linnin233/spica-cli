@@ -3,7 +3,7 @@ import { LLMClient } from '../llm/LLMClient';
 import { initMCP } from '../mcp/client';
 import { initSkills, listSkills } from '../skills/index';
 import { getProviderConfig, resolveModel } from '../utils/settings';
-import { getSystemPromptStable, getSystemPromptVariable } from '../prompts/system';
+import { getSystemPromptStable, getSystemPromptVariable, SUB_AGENT_SYSTEM_PROMPT } from '../prompts/system';
 import {
   loadProjectConfig as loadAgentsConfig,
   autoDetectProject,
@@ -57,14 +57,12 @@ export async function initAgentAsSubAgent(
   });
   agent.setLLM(newLlm);
 
-  // Inherit system prompt from parent
-  const parentMessages = parentAgent.getLLM()?.getMessages() || [];
-  const parentSystemMsg = parentMessages.find(m => m.role === 'system');
-  if (parentSystemMsg?.content) {
-    newLlm.setSystemPrompt(parentSystemMsg.content);
-  }
+  // Minimal subagent system prompt — ~500 tokens vs ~5000+ for full prompt.
+  // Subagent doesn't need CLAUDE.md, CLI commands, skills metadata, etc.
+  newLlm.setSystemPrompt(SUB_AGENT_SYSTEM_PROMPT);
 
   // Inject recent context summary — so sub-agent knows what's happening
+  const parentMessages = parentAgent.getLLM()?.getMessages() || [];
   const recentUserMessages = parentMessages
     .filter(m => m.role === 'user')
     .slice(-5)

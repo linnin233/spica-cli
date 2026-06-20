@@ -71,13 +71,6 @@ export function summarizeResult(result: string, maxLength: number = 400): string
 
   // Signal words that indicate important lines (case-insensitive)
   const signalPatterns = [
-    /✓/,
-    /✗/,
-    /✅/,
-    /❌/,
-    /⚠️/,
-    /🔴/,
-    /🟢/,
     /error/i,
     /fail/i,
     /success/i,

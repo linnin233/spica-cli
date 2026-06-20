@@ -290,13 +290,26 @@ export const TOOLS_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'task_stop',
     batchHint: 'neutral' as const,
-    description: 'Stop a running background task (monitor or detached bash).',
+    description: 'Stop a running background task (subagent, monitor, or detached bash).',
     parameters: {
       type: 'object' as const,
       properties: {
-        task_id: { type: 'string', description: 'Task ID from monitor or bash (detached mode)' },
+        task_id: { type: 'string', description: 'Task ID from task (non-blocking), monitor, or bash (detached mode)' },
       },
       required: ['task_id'],
+    },
+  },
+  {
+    name: 'reply_subagent',
+    batchHint: 'neutral' as const,
+    description: 'Reply to a background subagent that asked a question mid-execution. The subagent will continue with your answer injected into its context.',
+    parameters: {
+      type: 'object' as const,
+      properties: {
+        task_id: { type: 'string', description: 'Task ID from the subagent question event' },
+        answer: { type: 'string', description: 'Answer to the subagent\'s question. Be specific and concise.' },
+      },
+      required: ['task_id', 'answer'],
     },
   },
   {
@@ -527,9 +540,19 @@ export const TOOLS_DEFINITIONS: ToolDefinition[] = [
                 description:
                   'Subagent type: explore(read-only), review(+lint), fix(+edit), build(full)',
               },
+              skill: {
+                type: 'string',
+                description:
+                  'Skill name to auto-load into subagent context (e.g., "test-driven-development", "systematic-debugging"). Injects the skill prompt as a system message before the task prompt.',
+              },
             },
             required: ['description', 'prompt'],
           },
+        },
+        blocking: {
+          type: 'boolean',
+          description:
+            'Wait for subagents to complete before returning (default: true). Set false to run subagents in background — results arrive as system messages.',
         },
       },
       required: ['tasks'],
@@ -665,6 +688,7 @@ const LAZY_TOOL_NAMES: ReadonlySet<string> = new Set([
   'directory_list',
   'monitor',
   'task_stop',
+  'reply_subagent',
   'workspace',
   'question',
   'gh',
