@@ -30,7 +30,7 @@ Spica is a terminal-native AI coding agent. It maintains a persistent session ac
 graph TB
     subgraph PRESENTATION["Presentation"]
         TUI["TUI / Simple Mode"]
-        CMD["16 Slash Commands"]
+        CMD["17 Slash Commands"]
         IQ["Input Queue (max 50)"]
     end
 
@@ -43,9 +43,9 @@ graph TB
 
     subgraph DOMAIN["Domain"]
         LLM["LLMClient — Streaming + Rate Limiter"]
-        TOOLS["33 Tools + MCP"]
+        TOOLS["34 Tools + MCP"]
         HOOKS["Hooks System"]
-        SKILLS["14 Built-in Skills"]
+        SKILLS["15 Built-in Skills"]
     end
 
     subgraph INFRA["Infrastructure"]
@@ -362,10 +362,11 @@ After `setMessages()`, the cache prefix resets to -1. Compression restores it to
 |----------|-------|
 | **File (11)** | `read` `write` `edit` `file_multi_edit` `file_replace` `file_insert` `file_delete` `file_copy` `file_move` `file_exists` `file_patch` |
 | **Search (4)** | `glob` `grep` `directory_list` `directory_create` |
-| **Shell (5)** | `bash` `monitor` `task_stop` `git` `workspace` |
+| **Shell (6)** | `bash` `monitor` `task_stop` `reply_subagent` `git` `workspace` |
 | **Quality (5)** | `lint` `test` `format` `code_health` `test_quality_check` |
 | **Web (3)** | `web_search` `web_fetch` `gh` |
 | **Task (5)** | `todo_write` `todo_read` `task` `skill` `question` |
+| **Subagent (1)** | `reply_subagent` |
 
 Auto-features: syntax check on write/edit, lazy tool loading (16 tools withheld until first use, saves ~1,500 tok/call), 30s tool result cache, 8K output cap.
 
@@ -465,9 +466,10 @@ flowchart TD
         TUI_MODE["TUI Mode (default)<br/>Full-screen · status bar<br/>thinking animation · resize"]
         SIMPLE["Simple Mode (--no-tui)<br/>Readline · plain text<br/>Non-TTY fallback"]
     end
-    subgraph CMDS["Commands (16)"]
+    subgraph CMDS["Commands (17)"]
         SES["session: /archive /history /view<br/>/rename /delete /clear /reset /new"]
-        CTX["context: /compact /summary<br/>/status /checkpoint"]
+        CTX["context: /compact /summary /status"]
+        IDEAS["ideas: /idea /ideas /subagents"]
         META["meta: /help /init /skill /mcp<br/>/queue /undo"]
     end
     subgraph EVT["Agent Events → UI"]
@@ -498,7 +500,7 @@ Input Queue: during agent processing, new user input buffers into a queue (max 5
 ├── state.json                     # Project state (todos, decisions, phase)
 ├── tasks.json                     # Persisted task list
 ├── tool-usage.json                # Per-tool analytics → feeds lazy loading
-├── snapshots/                     # Checkpoint file backups (auto-pruned: 20)
+├── ideas.json                     # Captured ideas (/idea command)
 ├── backups/                       # Auto-backup before every write/edit
 ├── hooks.json                     # Project-level tool hooks (strictness ≥ global)
 └── skills.json                    # Project-level skill overrides
@@ -535,7 +537,8 @@ Supports any OpenAI-compatible API (OpenAI, Anthropic via proxy, DeepSeek, Gemin
 | `/compact` | Manually compress context |
 | `/summary` | Session progress summary |
 | `/status` | Token usage, model, branch |
-| `/checkpoint` | Manage file snapshots |
+| `/idea` | Capture ideas during coding |
+| `/subagents` | View subagent history |
 | `/skill` | Manage skills |
 | `/mcp` | Manage MCP connections |
 | `/queue` / `/q` | Show or undo queued inputs |
@@ -545,7 +548,7 @@ Supports any OpenAI-compatible API (OpenAI, Anthropic via proxy, DeepSeek, Gemin
 ```bash
 npm run dev          # dev mode (tsx)
 npm run build        # build executable
-npm test             # tests (vitest, 701 tests)
+npm test             # tests (vitest, 750+ tests)
 npm run test:run     # run once
 npm run lint:strict  # CI-ready lint
 npx tsc --noEmit     # type check

@@ -30,7 +30,7 @@ Spica 是一个终端原生的 AI 编程助手。它维护跨轮次的持久会�
 graph TB
     subgraph PRESENTATION["表现层"]
         TUI["TUI / Simple 模式"]
-        CMD["16 个 Slash 命令"]
+        CMD["17 个 Slash 命令"]
         IQ["输入队列 (max 50)"]
     end
 
@@ -43,9 +43,9 @@ graph TB
 
     subgraph DOMAIN["领域层"]
         LLM["LLMClient — 流式 + 速率限制"]
-        TOOLS["33 工具 + MCP"]
+        TOOLS["34 工具 + MCP"]
         HOOKS["Hooks 系统"]
-        SKILLS["14 内置 Skills"]
+        SKILLS["15 内置 Skills"]
     end
 
     subgraph INFRA["基础设施层"]
@@ -210,10 +210,11 @@ flowchart TD
 |------|------|
 | 文件 (11) | `read` `write` `edit` `file_multi_edit` `file_replace` `file_insert` `file_delete` `file_copy` `file_move` `file_exists` `file_patch` |
 | 搜索 (4) | `glob` `grep` `directory_list` `directory_create` |
-| Shell (5) | `bash` `monitor` `task_stop` `git` `workspace` |
+| Shell (6) | `bash` `monitor` `task_stop` `reply_subagent` `git` `workspace` |
 | 质量 (5) | `lint` `test` `format` `code_health` `test_quality_check` |
 | Web (3) | `web_search` `web_fetch` `gh` |
 | 任务 (5) | `todo_write` `todo_read` `task` `skill` `question` |
+| 子代理 (1) | `reply_subagent` |
 
 **工具冲突检测**: 同文件写入 → 顺序执行; 不同文件 → 并行; git → 单一资源锁。
 
@@ -261,7 +262,7 @@ ESC ESC (200ms 防抖)
 ├── state.json               # 项目状态
 ├── tasks.json               # 持久化任务列表
 ├── tool-usage.json          # 工具使用分析
-├── snapshots/               # Checkpoint 快照
+├── ideas.json               # 捕获的灵感 (/idea 命令)
 ├── backups/                 # 写入前自动备份
 └── hooks.json               # 项目 hooks
 ```
@@ -293,7 +294,8 @@ spica run "fix the bug"                          # 单次任务
 | `/compact` | 手动压缩上下文 |
 | `/summary` | 会话进度摘要 |
 | `/status` | Token 用量、模型、分支 |
-| `/checkpoint` | 文件快照管理 |
+| `/idea` | 捕获编程过程中的灵感 |
+| `/subagents` | 查看子代理历史 |
 | `/skill` / `/mcp` | Skills / MCP 管理 |
 | `/queue` | 显示或撤销排队输入 |
 
@@ -302,7 +304,7 @@ spica run "fix the bug"                          # 单次任务
 ```bash
 npm run dev          # 开发模式 (tsx)
 npm run build        # 构建
-npm test             # 测试 (vitest, 701 测试)
+npm test             # 测试 (vitest, 750+ 测试)
 npm run lint:strict  # CI 级 lint
 npx tsc --noEmit     # 类型检查
 ```

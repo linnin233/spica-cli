@@ -17,17 +17,17 @@ spica-cli is an AI coding agent CLI with interactive and single-task modes. It s
 
 **Key directories:**
 - `src/commands/` — CLI mode modules (`interactive.ts`, `simpleMode.ts`, `providers.ts`) and slash command subsystem
-- `src/commands/slash/` — Slash command handlers (10 modules + dispatch `index.ts` + `types.ts`)
+- `src/commands/slash/` — Slash command handlers (11 modules + dispatch `index.ts` + `types.ts`)
 - `src/llm/` — LLM client, providers (BaseProvider, OpenAICompatible), rate limiter, token counter
 - `src/tools/` — Tool definitions (`registry.ts`), execution (`execute.ts`), helpers (`helpers.ts`), subagents (`subAgent.ts`), and type-specific impls (`impl/`)
 - `src/skills/` — Skill loading and invocation
 - `src/cli/` — TUI (`ui/`), events, input handling, diff rendering, skill gate
 - `src/core/` — RuntimeState (singleton), EventBus (pub/sub), ProcessMonitor
-- `src/storage/` — Checkpoint manager, project state persistence, task persistence
+- `src/storage/` — Idea store, project state persistence, task persistence
 - `src/mcp/` — MCP client (`client.ts`)
 - `src/hooks/` — Pre/post hook execution
 - `src/utils/` — Settings, project config, session, history, platform, message cleaner, logger, bell
-- `src/builtin-skills/superpowers/` — 14 built-in skills
+- `src/builtin-skills/superpowers/` — 15 built-in skills
 
 **Stats:** 99 source files, 68 test files (168 git tracked `.ts` files)
 
@@ -169,7 +169,8 @@ src/commands/
     ├── types.ts      # SlashContext, SlashHandler type definitions
     ├── help.ts       # /help, /init, /history (message history)
     ├── session.ts    # /history(sessions), /view, /rename, /delete, /archive, /clear, /reset, /new
-    ├── checkpoint.ts # /checkpoint list|show|restore|clean
+    ├── subagents.ts  # /subagents — view subagent dispatch history
+    ├── idea.ts       # /idea, /ideas, /idea-done, /idea-delete, /idea-open
     ├── skill.ts      # /skill list|install|uninstall|add|remove|edit, /<skill_name> (invoke)
     ├── mcp.ts        # /mcp status|init|tools|disconnect
     ├── compact.ts    # /summary, /compact
@@ -211,12 +212,11 @@ src/commands/
 ### Git Safety
 - `checkout` checks for uncommitted changes before switching, suggests stash workflow
 - `reset` (hard/mixed) checks for uncommitted changes, requires user confirmation
-- `checkpoint_restore` finds `[SPICA-CHECKPOINT]` commits and restores safely
 
 ## Skills System
 
-**Built-in skills (14):**
-`brainstorming`, `systematic-debugging`, `test-driven-development`, `verification-before-completion`, `requesting-code-review`, `receiving-code-review`, `executing-plans`, `writing-plans`, `subagent-driven-development`, `dispatching-parallel-agents`, `finishing-a-development-branch`, `using-git-worktrees`, `writing-skills`, `using-superpowers`
+**Built-in skills (15):**
+`brainstorming`, `systematic-debugging`, `test-driven-development`, `verification-before-completion`, `requesting-code-review`, `receiving-code-review`, `executing-plans`, `writing-plans`, `subagent-driven-development`, `dispatching-parallel-agents`, `finishing-a-development-branch`, `using-git-worktrees`, `writing-skills`, `using-superpowers`, `frontend-design`
 
 **Skill locations:**
 - Built-in: `src/builtin-skills/superpowers/` (each skill is a subdirectory with `SKILL.md`)
@@ -232,30 +232,27 @@ spica skill list
 
 ```
 ~/.spica/settings.json  # Global config (providers, mcp, skills, hooks)
-<project>/.spica/       # Project session (checkpoints, history, learnings, tasks)
+<project>/.spica/       # Project session (ideas, history, learnings, tasks)
 ```
 
-## Checkpoint System
+## Idea System
 
-**File-based, no git pollution:**
+**Lightweight idea capture during coding sessions:**
 
 ```
 .spica/
-├── checkpoints.json       # Checkpoint metadata list
-├── snapshots/
-│   ├── <timestamp>/       # File snapshots
-│   │   ├── src/...
-│   │   └── metadata.json
-│   └── ...
-└── backups/               # Single file backups (auto-created by write tool)
+├── ideas.json         # Idea store (open/done, auto-increment IDs)
+└── backups/           # Single file backups (auto-created by write tool)
 ```
 
 **Commands:**
-```bash
-spica checkpoint list              # List all checkpoints
-spica checkpoint show <id>         # Show checkpoint details
-spica checkpoint restore <id>      # Restore files from checkpoint
-spica checkpoint clean             # Clean old checkpoints (keep 20)
+```
+/idea              # Enter idea capture workspace
+/idea <text>       # Quick add an idea
+/ideas             # List all ideas
+/idea-done <id>    # Mark idea as done
+/idea-delete <id>  # Delete an idea
+/idea-open <id>    # Re-open a done idea
 ```
 
 ## Learnings System

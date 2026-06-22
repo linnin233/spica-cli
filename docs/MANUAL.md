@@ -105,14 +105,17 @@ spica -p <name>    # Use specific provider
 | `/mcp tools` | List available MCP tools |
 | `/mcp disconnect` | Disconnect all MCP servers |
 
-### Checkpoint Management
+### Ideas & Subagents
 
 | Command | Description |
 |---------|-------------|
-| `/checkpoint` or `/checkpoint list` | List checkpoints |
-| `/checkpoint show <id>` | Show checkpoint details |
-| `/checkpoint restore <id>` | Restore files from checkpoint |
-| `/checkpoint clean` | Clean old checkpoints |
+| `/idea` | Enter idea capture workspace |
+| `/idea <text>` | Quick add an idea |
+| `/ideas` | List all ideas |
+| `/idea-done <id>` | Mark idea as done |
+| `/idea-delete <id>` | Delete an idea |
+| `/idea-open <id>` | Re-open a done idea |
+| `/subagents` | View subagent dispatch history |
 
 ### Project
 
@@ -149,13 +152,14 @@ spica -p <name>    # Use specific provider
 | `glob` | Pattern match files | pattern, path, ignore, maxFiles |
 | `grep` | Search file contents | pattern, path, include, maxLines |
 
-### Shell & Git (5 tools)
+### Shell & Git (6 tools)
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
 | `bash` | Execute shell command | command, timeout, detached, interactive, maxOutputLength, sandbox |
 | `monitor` | Background monitor task | command, description, timeout, persistent |
 | `task_stop` | Stop background task | task_id |
+| `reply_subagent` | Reply to subagent question | task_id, answer |
 | `git` | Git operations | action, args |
 | `workspace` | Change working directory | path |
 
@@ -179,7 +183,7 @@ spica -p <name>    # Use specific provider
 | `test` | Run tests | filter, coverage |
 | `format` | Format code | path |
 
-### Other (3 tools)
+### Other (4 tools)
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
@@ -271,8 +275,7 @@ Monitor events are streamed via `monitor_event`:
 ├── sessions/         # Archived sessions
 ├── state.json        # Project state
 ├── tasks.json        # Task persistence
-├── checkpoints.json  # Checkpoint metadata
-├── snapshots/        # Checkpoint file snapshots
+├── ideas.json        # Captured ideas
 ├── backups/          # Auto-backups on write/edit
 ├── hooks.json        # Project-level hook overrides
 ├── skills.json       # Project-level skill config
