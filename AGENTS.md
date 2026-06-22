@@ -17,7 +17,7 @@ spica-cli is an AI coding agent CLI with interactive and single-task modes. It s
 
 **Key directories:**
 - `src/commands/` — CLI mode modules (`interactive.ts`, `simpleMode.ts`, `providers.ts`) and slash command subsystem
-- `src/commands/slash/` — Slash command handlers (11 modules + dispatch `index.ts` + `types.ts`)
+- `src/commands/slash/` — Slash command handlers (9 modules + dispatch `index.ts` + `types.ts`)
 - `src/llm/` — LLM client, providers (BaseProvider, OpenAICompatible), rate limiter, token counter
 - `src/tools/` — Tool definitions (`registry.ts`), execution (`execute.ts`), helpers (`helpers.ts`), subagents (`subAgent.ts`), and type-specific impls (`impl/`)
 - `src/skills/` — Skill loading and invocation
@@ -29,7 +29,7 @@ spica-cli is an AI coding agent CLI with interactive and single-task modes. It s
 - `src/utils/` — Settings, project config, session, history, platform, message cleaner, logger, bell
 - `src/builtin-skills/superpowers/` — 15 built-in skills
 
-**Stats:** 99 source files, 68 test files (168 git tracked `.ts` files)
+**Stats:** 99 source files, 69 test files (168 git tracked `.ts` files)
 
 ## Existing Instruction Files
 
@@ -190,7 +190,7 @@ src/commands/
 - **Definitions:** `src/tools/registry.ts` — all tool schemas (`TOOLS_DEFINITIONS` array)
 - **Execution:** `src/tools/execute.ts` — giant switch statement dispatching to impl modules
 - **Barrel:** `src/tools/index.ts` — re-exports (12 lines only)
-- **Impl modules (11):** `src/tools/impl/` — `file_read.ts`, `file_manage.ts`, `glob.ts`, `grep.ts`, `directory.ts`, `workspace.ts`, `todo.ts`, `question.ts`, `skill.ts`, `web.ts`, `lint_test.ts`
+- **Impl modules (16):** `src/tools/impl/` — `bash.ts`, `directory.ts`, `file_manage.ts`, `file_read.ts`, `gh.ts`, `git.ts`, `glob.ts`, `grep.ts`, `lint_test.ts`, `question.ts`, `replySubagent.ts`, `skill.ts`, `task.ts`, `todo.ts`, `web.ts`, `workspace.ts`
 - **Specialized tools:** `codeHealth.ts`, `testQuality.ts`, `subAgent.ts`
 
 ### Subagent Types

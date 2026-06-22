@@ -674,7 +674,7 @@ export function getAllToolDefinitions(): ToolDefinition[] {
  * Their definitions are withheld from the API `tools` parameter until the
  * tool is actually called, at which point it's promoted to the active set.
  *
- * This saves ~1,500 tokens per API call for most sessions (18 lazy tools ×
+ * This saves ~1,500 tokens per API call for most sessions (17 lazy tools ×
  * ~85 tokens each, compressed against the prompt cache).
  */
 const LAZY_TOOL_NAMES: ReadonlySet<string> = new Set([

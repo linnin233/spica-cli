@@ -30,7 +30,7 @@ Spica 是一个终端原生的 AI 编程助手。它维护跨轮次的持久会�
 graph TB
     subgraph PRESENTATION["表现层"]
         TUI["TUI / Simple 模式"]
-        CMD["17 个 Slash 命令"]
+        CMD["Slash 命令"]
         IQ["输入队列 (max 50)"]
     end
 
@@ -210,7 +210,7 @@ flowchart TD
 |------|------|
 | 文件 (11) | `read` `write` `edit` `file_multi_edit` `file_replace` `file_insert` `file_delete` `file_copy` `file_move` `file_exists` `file_patch` |
 | 搜索 (4) | `glob` `grep` `directory_list` `directory_create` |
-| Shell (6) | `bash` `monitor` `task_stop` `reply_subagent` `git` `workspace` |
+| Shell (5) | `bash` `monitor` `task_stop` `git` `workspace` |
 | 质量 (5) | `lint` `test` `format` `code_health` `test_quality_check` |
 | Web (3) | `web_search` `web_fetch` `gh` |
 | 任务 (5) | `todo_write` `todo_read` `task` `skill` `question` |
@@ -254,6 +254,7 @@ ESC ESC (200ms 防抖)
 ~/.spica/                    # 全局配置
 ├── settings.json            # Providers, MCP, hooks, skills
 ├── skills/                  # 自定义 skill 包
+├── sessions/                # 归档会话
 └── learnings/               # 全局纠正
 
 <project>/.spica/            # 项目级
@@ -264,7 +265,8 @@ ESC ESC (200ms 防抖)
 ├── tool-usage.json          # 工具使用分析
 ├── ideas.json               # 捕获的灵感 (/idea 命令)
 ├── backups/                 # 写入前自动备份
-└── hooks.json               # 项目 hooks
+├── hooks.json               # 项目 hooks
+└── skills.json              # 项目级 skill 覆盖
 ```
 
 ---

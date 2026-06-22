@@ -70,7 +70,7 @@ spica -p <name>    # Use specific provider
 | Command | Description |
 |---------|-------------|
 | `/archive` or `/new` or `/clear` | Archive current & start new |
-| `/history` or `/h` or `/sessions` | Browse archived chats (read-only) |
+| `/history` or `/sessions` | Browse archived chats (read-only) |
 | `/view <id>` | Read specific archived chat |
 | `/summary` | Summarize current session |
 | `/compact` | Compress context to reduce token usage |

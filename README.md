@@ -30,7 +30,7 @@ Spica is a terminal-native AI coding agent. It maintains a persistent session ac
 graph TB
     subgraph PRESENTATION["Presentation"]
         TUI["TUI / Simple Mode"]
-        CMD["17 Slash Commands"]
+        CMD["Slash Commands"]
         IQ["Input Queue (max 50)"]
     end
 
@@ -134,8 +134,8 @@ Replaces the old 50-round hard cap. A round counts as "progress" if it includes:
 
 | Rounds without progress | Action |
 |------------------------|--------|
-| 8 | Warning emitted |
-| 16 | Loop stopped |
+| 16 | Warning emitted |
+| 32 | Loop stopped |
 
 Progress is auto-saved to `session.json` every 5 tool rounds for crash resilience.
 
@@ -362,13 +362,13 @@ After `setMessages()`, the cache prefix resets to -1. Compression restores it to
 |----------|-------|
 | **File (11)** | `read` `write` `edit` `file_multi_edit` `file_replace` `file_insert` `file_delete` `file_copy` `file_move` `file_exists` `file_patch` |
 | **Search (4)** | `glob` `grep` `directory_list` `directory_create` |
-| **Shell (6)** | `bash` `monitor` `task_stop` `reply_subagent` `git` `workspace` |
+| **Shell (5)** | `bash` `monitor` `task_stop` `git` `workspace` |
 | **Quality (5)** | `lint` `test` `format` `code_health` `test_quality_check` |
 | **Web (3)** | `web_search` `web_fetch` `gh` |
 | **Task (5)** | `todo_write` `todo_read` `task` `skill` `question` |
 | **Subagent (1)** | `reply_subagent` |
 
-Auto-features: syntax check on write/edit, lazy tool loading (16 tools withheld until first use, saves ~1,500 tok/call), 30s tool result cache, 8K output cap.
+Auto-features: syntax check on write/edit, lazy tool loading (17 tools withheld until first use, saves ~1,500 tok/call), 30s tool result cache, 8K output cap.
 
 ### 5.2 Tool Conflict Detection
 
@@ -466,7 +466,7 @@ flowchart TD
         TUI_MODE["TUI Mode (default)<br/>Full-screen · status bar<br/>thinking animation · resize"]
         SIMPLE["Simple Mode (--no-tui)<br/>Readline · plain text<br/>Non-TTY fallback"]
     end
-    subgraph CMDS["Commands (17)"]
+    subgraph CMDS["Commands"]
         SES["session: /archive /history /view<br/>/rename /delete /clear /reset /new"]
         CTX["context: /compact /summary /status"]
         IDEAS["ideas: /idea /ideas /subagents"]
