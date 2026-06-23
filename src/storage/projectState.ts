@@ -18,8 +18,6 @@ export interface ProjectState {
 }
 
 const STATE_FILE = '.spica/state.json';
-const CONTEXT_FILE = '.spica/context.json';
-const MAX_CONTEXT_MESSAGES = 20;
 
 export function ensureProjectDir(workspacePath: string): void {
   const spicaDir = path.join(workspacePath, '.spica');
@@ -35,7 +33,7 @@ export function loadProjectState(workspacePath: string): ProjectState | null {
       const data = fs.readFileSync(statePath, 'utf-8');
       return JSON.parse(data);
     }
-  } catch (error) {
+  } catch {
     // Failed to load project state - returning null is expected behavior
   }
   return null;
@@ -47,7 +45,7 @@ export function saveProjectState(workspacePath: string, state: ProjectState): vo
     const statePath = path.join(workspacePath, STATE_FILE);
     state.lastActivity = new Date().toISOString();
     fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
-  } catch (error) {
+  } catch {
     // Failed to save project state - non-critical error
   }
 }
@@ -92,27 +90,3 @@ export function setProjectPhase(workspacePath: string, phase: ProjectState['phas
   saveProjectState(workspacePath, state);
 }
 
-export function loadProjectContext(workspacePath: string): any[] {
-  try {
-    const contextPath = path.join(workspacePath, CONTEXT_FILE);
-    if (fs.existsSync(contextPath)) {
-      const data = fs.readFileSync(contextPath, 'utf-8');
-      const messages = JSON.parse(data);
-      return messages;
-    }
-  } catch (error) {
-    // Failed to load project context - returning empty array is expected
-  }
-  return [];
-}
-
-export function saveProjectContext(workspacePath: string, messages: any[]): void {
-  try {
-    ensureProjectDir(workspacePath);
-    const contextPath = path.join(workspacePath, CONTEXT_FILE);
-    const trimmed = messages.slice(-MAX_CONTEXT_MESSAGES);
-    fs.writeFileSync(contextPath, JSON.stringify(trimmed, null, 2));
-  } catch (error) {
-    // Failed to save project context - non-critical error
-  }
-}

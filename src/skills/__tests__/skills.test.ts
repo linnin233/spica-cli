@@ -63,7 +63,7 @@ describe('Skills System - All 14 Superpowers', () => {
       const brainstorming = getSkill('brainstorming');
       expect(brainstorming).toBeDefined();
       expect(brainstorming!.promptTemplate).toContain('brainstorm');
-      expect(brainstorming!.promptTemplate).not.toContain('---');  // Frontmatter stripped
+      expect(brainstorming!.promptTemplate).not.toContain('---'); // Frontmatter stripped
     });
   });
 

@@ -48,9 +48,7 @@ describe('ProcessMonitor', () => {
     });
 
     it('throws if process fails to start', async () => {
-      await expect(
-        monitor.start('nonexistent-command-xyz', [])
-      ).rejects.toThrow();
+      await expect(monitor.start('nonexistent-command-xyz', [])).rejects.toThrow();
     });
   });
 
@@ -72,9 +70,9 @@ describe('ProcessMonitor', () => {
     it('detects when process exits', async () => {
       const { command, args } = echoCmd('quick');
       await monitor.start(command, args, 'quick-process');
-      
+
       await new Promise(resolve => setTimeout(resolve, 200));
-      
+
       const info = await monitor.monitor('quick-process');
       expect(info?.status).toBe(ProcessStatus.EXITED);
     });
@@ -84,9 +82,9 @@ describe('ProcessMonitor', () => {
     it('kills a running process', async () => {
       const { command, args } = sleepCmd(2);
       await monitor.start(command, args, 'long-sleep');
-      
+
       await new Promise(resolve => setTimeout(resolve, 50));
-      
+
       const killed = await monitor.kill('long-sleep');
       expect(killed).toBe(true);
 
@@ -104,18 +102,18 @@ describe('ProcessMonitor', () => {
     it('captures stdout', async () => {
       const { command, args } = echoCmd('output');
       await monitor.start(command, args, 'logger');
-      
+
       await new Promise(resolve => setTimeout(resolve, 200));
-      
+
       const logs = await monitor.getLogs('logger');
       expect(logs.stdout).toContain('output');
     });
 
     it('captures stderr', async () => {
       await monitor.start('node', ['-e', 'console.error("error output")'], 'stderr-test');
-      
+
       await new Promise(resolve => setTimeout(resolve, 200));
-      
+
       const logs = await monitor.getLogs('stderr-test');
       expect(logs.stderr).toContain('error output');
     });
@@ -123,9 +121,9 @@ describe('ProcessMonitor', () => {
     it('persists logs to file', async () => {
       const { command, args } = echoCmd('persisted');
       await monitor.start(command, args, 'persist-test');
-      
+
       await new Promise(resolve => setTimeout(resolve, 200));
-      
+
       const logPath = path.join(TEST_PROCESS_DIR, 'persist-test.log');
       const exists = await fs.pathExists(logPath);
       expect(exists).toBe(true);

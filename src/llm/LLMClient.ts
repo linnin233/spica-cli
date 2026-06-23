@@ -2,7 +2,6 @@ import { EventEmitter } from 'events';
 import { OpenAICompatibleProvider } from './providers/OpenAICompatible';
 import { TokenCounter } from './TokenCounter';
 import { RateLimiter } from './RateLimiter';
-import { FunctionCaller, ToolExecutor } from './FunctionCaller';
 import type { ToolDefinition, LLMResponse, ChatMessage } from './providers/BaseProvider';
 
 export interface LLMClientConfig {
@@ -14,14 +13,29 @@ export interface LLMClientConfig {
   rateLimit?: { requestsPerMinute?: number; tokensPerMinute?: number };
 }
 
+/**
+ * LLMClient - LLM API client with streaming and rate limiting
+ *
+ * Features:
+ * - OpenAI-compatible API support
+ * - Streaming response handling
+ * - Rate limiting (requests/tokens per minute)
+ * - Token counting and context management
+ * - Interrupt support
+ *
+ * @extends EventEmitter
+ * @example
+ * ```ts
+ * const client = new LLMClient(config);
+ * const response = await client.generate('Hello');
+ * ```
+ */
 export class LLMClient extends EventEmitter {
   private provider: OpenAICompatibleProvider;
   private tokenCounter: TokenCounter;
   private rateLimiter: RateLimiter;
-  private functionCaller: FunctionCaller;
   private tools: ToolDefinition[] = [];
   private abortController: AbortController | null = null;
-  private pendingInterrupt = false;  // 中断标记（用于rate limiter等待期间）
 
   constructor(config: LLMClientConfig) {
     super();
@@ -40,13 +54,139 @@ export class LLMClient extends EventEmitter {
       this.emit('reasoning', content);
     });
 
-    this.tokenCounter = new TokenCounter();
+    this.provider.on('llm_usage', (usage) => {
+      this.emit('llm_usage', usage);
+    });
+
+    this.tokenCounter = new TokenCounter(config.model);
     this.rateLimiter = new RateLimiter(config.rateLimit || {});
-    this.functionCaller = new FunctionCaller();
   }
 
-  // 检查API连接（支持中断）
-  async checkConnection(signal?: AbortSignal): Promise<{ success: boolean; type?: string; error?: string; hint?: string }> {
+  // ── AbortController management ──────────────────────────────────────────
+
+  // Track external-signal abort handlers so we can remove stale listeners.
+  // The same externalSignal (agent.currentAbortController.signal) is reused
+  // across all LLM calls within a single tool loop. Each addEventListener
+  // call accumulates listeners on that signal, exceeding Node's default
+  // MaxListeners (10) after ~8 tool-loop iterations.
+  //
+  // createRequestController is serialized (one streaming call at a time),
+  // so a single tracked handler is sufficient. createStandaloneController
+  // runs concurrently (compression summary), tracked separately.
+
+  /**
+   * Link an external AbortSignal (from the agent's interrupt controller)
+   * to an internal AbortController. Cleans up the previously-tracked handler
+   * for the same slot to prevent listener accumulation on the reused signal.
+   */
+  private linkExternalSignal(
+    controller: AbortController,
+    externalSignal: AbortSignal,
+    handlerRef: { handler: (() => void) | null },
+  ): void {
+    if (externalSignal.aborted) {
+      controller.abort();
+      return;
+    }
+
+    // Remove previous listener — the same externalSignal is reused across
+    // multiple LLM calls within a single runLoop / tool loop.
+    if (handlerRef.handler) {
+      externalSignal.removeEventListener('abort', handlerRef.handler);
+      handlerRef.handler = null;
+    }
+
+    const onAbort = () => {
+      externalSignal.removeEventListener('abort', onAbort);
+      handlerRef.handler = null;
+      controller.abort();
+    };
+
+    externalSignal.addEventListener('abort', onAbort);
+    handlerRef.handler = onAbort;
+  }
+
+  /** Reusable handler-ref objects (avoids allocation on each call). */
+  private _reqHandlerRef = { handler: null as (() => void) | null };
+  private _standaloneHandlerRef = { handler: null as (() => void) | null };
+
+  /**
+   * Create a fresh AbortController for a new request, aborting any previous one.
+   * Links the provided external signal so the controller aborts when the external
+   * signal fires (e.g. agent interrupt).
+   *
+   * Returns the new controller — the caller MUST pass it to completeRequest()
+   * or manually clean up in a finally block.
+   */
+  private createRequestController(externalSignal?: AbortSignal): AbortController {
+    // Abort previous controller — only one streaming request at a time
+    if (this.abortController) {
+      this.abortController.abort();
+    }
+    const controller = new AbortController();
+    this.abortController = controller;
+
+    if (externalSignal) {
+      this.linkExternalSignal(controller, externalSignal, this._reqHandlerRef);
+    }
+
+    return controller;
+  }
+
+  /**
+   * Create a controller that does NOT touch this.abortController.
+   * Used by generateForCompression — runs concurrently with streaming requests.
+   * Uses a separate handler slot to avoid clobbering the streaming request's
+   * abort handler.
+   */
+  private createStandaloneController(externalSignal?: AbortSignal): AbortController {
+    const controller = new AbortController();
+
+    if (externalSignal) {
+      this.linkExternalSignal(controller, externalSignal, this._standaloneHandlerRef);
+    }
+
+    return controller;
+  }
+
+  /**
+   * Clean up the request controller after completion.
+   * Only clears `this.abortController` if it's still the same controller —
+   * prevents a concurrent call's controller from being cleared.
+   */
+  private completeRequest(controller: AbortController): void {
+    if (this.abortController === controller) {
+      this.abortController = null;
+    }
+  }
+
+  /**
+   * Wait for rate limiter, respecting abort signal.
+   */
+  private async waitForRateLimit(signal: AbortSignal): Promise<void> {
+    await this.rateLimiter.waitForAvailability(signal);
+    if (signal.aborted) {
+      throw new Error('Interrupted during rate limit wait');
+    }
+  }
+
+  /**
+   * Record request and token usage for rate limiting.
+   */
+  private recordUsage(response: LLMResponse): void {
+    this.rateLimiter.recordRequest();
+    if (response.content) {
+      const tokens = this.tokenCounter.estimateTokens(response.content);
+      this.rateLimiter.recordTokenUsage(tokens);
+    }
+  }
+
+  // ── API methods ─────────────────────────────────────────────────────────
+
+  /** Check API connection (supports interrupt). */
+  async checkConnection(
+    signal?: AbortSignal
+  ): Promise<{ success: boolean; type?: string; error?: string; hint?: string }> {
     return this.provider.checkConnection(signal);
   }
 
@@ -54,191 +194,133 @@ export class LLMClient extends EventEmitter {
     this.provider.setSystemPrompt(prompt);
   }
 
-  registerTool(name: string, executor: ToolExecutor): void {
-    this.functionCaller.RegisterTool(name, executor);
-  }
-
-  registerTools(tools: Record<string, ToolExecutor>): void {
-    this.functionCaller.RegisterMultiple(tools);
+  setSystemPromptSplit(stable: string, variable?: string): void {
+    this.provider.setSystemPromptSplit(stable, variable);
   }
 
   setToolDefinitions(tools: ToolDefinition[]): void {
     this.tools = tools;
   }
 
-  async generate(prompt: string, tools?: ToolDefinition[]): Promise<LLMResponse> {
-    // 提前创建AbortController，支持中断rate limiter等待
-    // 如果有旧的 controller，先 abort 避免竞态
-    if (this.abortController) {
-      this.abortController.abort();
-    }
-    this.abortController = new AbortController();
-    const toolsToUse = tools || this.tools;
-
-    try {
-      // 等待rate limiter（可被中断）
-      await this.rateLimiter.waitForAvailability(this.abortController.signal);
-
-      if (this.abortController.signal.aborted) {
-        throw new Error('Interrupted during rate limit wait');
-      }
-
-      this.rateLimiter.recordRequest();
-      const response = await this.provider.generate(prompt, toolsToUse, this.abortController.signal);
-
-      if (response.content) {
-        const tokens = this.tokenCounter.estimateTokens(response.content);
-        this.rateLimiter.recordTokenUsage(tokens);
-      }
-
-      return response;
-    } finally {
-      this.abortController = null;
-    }
-  }
-
-  interrupt() {
-    this.rateLimiter.interrupt();  // 中断rate limiter等待
-    if (this.abortController) {
-      this.abortController.abort();
-    }
-  }
-
-  // 直接生成（不使用历史消息，用于摘要等）
-  async generateDirect(prompt: string): Promise<LLMResponse> {
-    if (this.abortController) {
-      this.abortController.abort();
-    }
-    this.abortController = new AbortController();
-
-    try {
-      await this.rateLimiter.waitForAvailability(this.abortController.signal);
-
-      if (this.abortController.signal.aborted) {
-        throw new Error('Interrupted during rate limit wait');
-      }
-
-      this.rateLimiter.recordRequest();
-      // 使用 provider 的 generateDirect 方法（不添加到历史）
-      const response = await this.provider.generateDirect(prompt, this.abortController.signal);
-
-      if (response.content) {
-        const tokens = this.tokenCounter.estimateTokens(response.content);
-        this.rateLimiter.recordTokenUsage(tokens);
-      }
-
-      return response;
-    } finally {
-      this.abortController = null;
-    }
-  }
-
-  async continueWithToolResult(toolCallName: string, result: string, tools?: ToolDefinition[]): Promise<LLMResponse> {
-    const toolsToUse = tools || this.tools;
-
-    const lastMessage = this.provider.getMessages()[this.provider.getMessages().length - 1];
-    const toolCallId = lastMessage.toolCalls?.find(tc => tc.name === toolCallName)?.id || '';
-
-    // 添加tool结果消息
-    this.provider.addToolMessage(toolCallId, result);
-
-    // 提前创建AbortController
-    this.abortController = new AbortController();
-
-    try {
-      await this.rateLimiter.waitForAvailability(this.abortController.signal);
-
-      if (this.abortController.signal.aborted) {
-        throw new Error('Interrupted during rate limit wait');
-      }
-
-      this.rateLimiter.recordRequest();
-      const response = await this.provider.generateFromHistory(toolsToUse, this.abortController.signal);
-
-      if (response.content) {
-        const tokens = this.tokenCounter.estimateTokens(response.content);
-        this.rateLimiter.recordTokenUsage(tokens);
-      }
-
-      return response;
-    } finally {
-      this.abortController = null;
-    }
-  }
-
-  async continueWithAllToolResults(
-    toolResults: Array<{ name: string; result: string; id?: string }>,
+  /** Main generate: adds user message to history, then streams. */
+  async generate(
+    prompt: string,
     tools?: ToolDefinition[],
-    postToolMessages?: ChatMessage[]
+    externalSignal?: AbortSignal
+  ): Promise<LLMResponse> {
+    const controller = this.createRequestController(externalSignal);
+    try {
+      await this.waitForRateLimit(controller.signal);
+      const toolsToUse = tools || this.tools;
+      const response = await this.provider.generate(prompt, toolsToUse, controller.signal);
+      this.recordUsage(response);
+      return response;
+    } finally {
+      this.completeRequest(controller);
+    }
+  }
+
+  /** Generate without adding to history — for summaries, etc. */
+  async generateDirect(prompt: string, externalSignal?: AbortSignal): Promise<LLMResponse> {
+    const controller = this.createRequestController(externalSignal);
+    try {
+      await this.waitForRateLimit(controller.signal);
+      const response = await this.provider.generateDirect(prompt, controller.signal);
+      this.recordUsage(response);
+      return response;
+    } finally {
+      this.completeRequest(controller);
+    }
+  }
+
+  /**
+   * Generate a summary for context compression.
+   * Independent of the main request — uses a standalone controller so it can
+   * run concurrently with a streaming generate() call.
+   */
+  async generateForCompression(prompt: string, externalSignal?: AbortSignal): Promise<LLMResponse> {
+    const controller = this.createStandaloneController(externalSignal);
+
+    await this.rateLimiter.waitForAvailability(controller.signal);
+
+    if (controller.signal.aborted) {
+      return { content: '', finished: true };
+    }
+
+    this.rateLimiter.recordRequest();
+    const response = await this.provider.generateDirect(prompt, controller.signal);
+
+    if (response.content) {
+      const tokens = this.tokenCounter.estimateTokens(response.content);
+      this.rateLimiter.recordTokenUsage(tokens);
+    }
+
+    return response;
+  }
+
+  /**
+   * Continue after all tool results have been collected.
+   * Adds tool messages + optional post-tool messages, then streams from history.
+   */
+  async continueWithAllToolResults(
+    toolResults: Array<{ name: string; result: string; id?: string; noTruncate?: boolean }>,
+    tools?: ToolDefinition[],
+    postToolMessages?: ChatMessage[],
+    externalSignal?: AbortSignal
   ): Promise<LLMResponse> {
     const toolsToUse = tools || this.tools;
     const lastMessage = this.provider.getMessages()[this.provider.getMessages().length - 1];
 
-    // 1. 先添加所有 tool 结果消息（确保紧跟在 assistant tool_calls 后）
-    for (const { name, result, id } of toolResults) {
+    // 1. Add all tool result messages (must follow assistant tool_calls)
+    for (const { name, result, id, noTruncate } of toolResults) {
       const toolCallId = id || lastMessage.toolCalls?.find(tc => tc.name === name)?.id || '';
-      this.provider.addToolMessage(toolCallId, result);
+      // Skill tools must not be truncated — incomplete instructions break agent behavior
+      const skipTruncate = noTruncate || name === 'skill';
+      this.provider.addToolMessage(toolCallId, result, skipTruncate);
     }
 
-    // 2. 再添加 post-tool 消息（如 REQUIRED_SKILL）
+    // 2. Add post-tool messages (e.g. REQUIRED_SKILL)
     if (postToolMessages && postToolMessages.length > 0) {
       for (const msg of postToolMessages) {
         this.provider.addMessage(msg);
       }
     }
 
-    // 提前创建AbortController
-    this.abortController = new AbortController();
-
+    const controller = this.createRequestController(externalSignal);
     try {
-      await this.rateLimiter.waitForAvailability(this.abortController.signal);
-
-      if (this.abortController.signal.aborted) {
-        throw new Error('Interrupted during rate limit wait');
-      }
-
-      this.rateLimiter.recordRequest();
-      const response = await this.provider.generateFromHistory(toolsToUse, this.abortController.signal);
-
-      if (response.content) {
-        const tokens = this.tokenCounter.estimateTokens(response.content);
-        this.rateLimiter.recordTokenUsage(tokens);
-      }
-
+      await this.waitForRateLimit(controller.signal);
+      const response = await this.provider.generateFromHistory(toolsToUse, controller.signal);
+      this.recordUsage(response);
       return response;
     } finally {
-      this.abortController = null;
+      this.completeRequest(controller);
     }
   }
 
-  async executeWithTools(prompt: string, maxIterations: number = 10): Promise<string> {
-    let response = await this.generate(prompt);
-    let iterations = 0;
-
-    while (!response.finished && iterations < maxIterations) {
-      if (response.toolCalls) {
-        for (const tc of response.toolCalls) {
-          const result = await this.functionCaller.Execute(tc);
-
-          if (!result.success) {
-            // Tool execution failed - error will be returned to caller
-          }
-
-          await this.rateLimiter.waitForAvailability();
-          this.rateLimiter.recordRequest();
-
-          response = await this.provider.continueWithToolResult(tc.id, result.content || result.output || result.error || '', this.tools);
-
-          if (response.content) {
-            const tokens = this.tokenCounter.estimateTokens(response.content);
-            this.rateLimiter.recordTokenUsage(tokens);
-          }
-        }
-      }
-      iterations++;
+  /** Continue from history without adding a new user message. */
+  async generateFromHistory(
+    tools?: ToolDefinition[],
+    externalSignal?: AbortSignal
+  ): Promise<LLMResponse> {
+    const controller = this.createRequestController(externalSignal);
+    try {
+      await this.waitForRateLimit(controller.signal);
+      const toolsToUse = tools || this.tools;
+      const response = await this.provider.generateFromHistory(toolsToUse, controller.signal);
+      this.recordUsage(response);
+      return response;
+    } finally {
+      this.completeRequest(controller);
     }
+  }
 
-    return response.content || '';
+  // ── Message helpers ─────────────────────────────────────────────────────
+
+  /** Batch-add tool messages (used for preserving results on interrupt). */
+  addToolMessages(toolResults: Array<{ id: string; result: string }>): void {
+    for (const { id, result } of toolResults) {
+      this.provider.addToolMessage(id, result);
+    }
   }
 
   clearHistory(): void {
@@ -265,34 +347,24 @@ export class LLMClient extends EventEmitter {
     return this.provider;
   }
 
-  // 添加用户消息（不立即生成）
+  getTokenCounter(): TokenCounter {
+    return this.tokenCounter;
+  }
+
   addUserMessage(content: string): void {
     this.provider.addUserMessage(content);
   }
 
-  // 从历史消息继续生成（不添加新的user消息）
-  async generateFromHistory(tools?: ToolDefinition[]): Promise<LLMResponse> {
-    const toolsToUse = tools || this.tools;
-    this.abortController = new AbortController();
+  setToolResultMaxChars(maxChars: number): void {
+    this.provider.setToolResultMaxChars(maxChars);
+  }
 
-    try {
-      await this.rateLimiter.waitForAvailability(this.abortController.signal);
+  // ── Interrupt ────────────────────────────────────────────────────────────
 
-      if (this.abortController.signal.aborted) {
-        throw new Error('Interrupted during rate limit wait');
-      }
-
-      this.rateLimiter.recordRequest();
-      const response = await this.provider.generateFromHistory(toolsToUse, this.abortController.signal);
-
-      if (response.content) {
-        const tokens = this.tokenCounter.estimateTokens(response.content);
-        this.rateLimiter.recordTokenUsage(tokens);
-      }
-
-      return response;
-    } finally {
-      this.abortController = null;
+  interrupt() {
+    this.rateLimiter.interrupt();
+    if (this.abortController) {
+      this.abortController.abort();
     }
   }
 }

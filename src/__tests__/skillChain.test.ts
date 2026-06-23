@@ -21,11 +21,19 @@ function findSkillReferences(content: string, skillNames: string[], excludeName:
 }
 
 describe('Skill Chain Enforcement', () => {
-  const allSkills = ['brainstorming', 'systematic-debugging', 'test-driven-development', 'writing-plans', 'verification-before-completion', 'finishing-a-development-branch'];
+  const allSkills = [
+    'brainstorming',
+    'systematic-debugging',
+    'test-driven-development',
+    'writing-plans',
+    'verification-before-completion',
+    'finishing-a-development-branch',
+  ];
 
   describe('findSkillReferences', () => {
     it('finds superpowers:xxx references', () => {
-      const content = 'Use the superpowers:test-driven-development skill for writing proper failing tests';
+      const content =
+        'Use the superpowers:test-driven-development skill for writing proper failing tests';
       const refs = findSkillReferences(content, allSkills, 'systematic-debugging');
       expect(refs).toContain('test-driven-development');
     });
@@ -60,13 +68,17 @@ describe('Skill Chain Enforcement', () => {
     it('should maintain correct message sequence: assistant(tool_calls) -> tool -> system(REQUIRED_SKILL)', () => {
       const messages: ChatMessage[] = [
         { role: 'user', content: 'test' },
-        { role: 'assistant', content: '', toolCalls: [{ id: 'call_1', name: 'skill', arguments: {} }] },
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [{ id: 'call_1', name: 'skill', arguments: {} }],
+        },
         { role: 'tool', content: 'skill result', toolCallId: 'call_1' },
         { role: 'system', content: 'REQUIRED_SKILL: next-skill' },
       ];
 
-      const assistantWithToolCalls = messages.findIndex(m => 
-        m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0
+      const assistantWithToolCalls = messages.findIndex(
+        m => m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0
       );
       expect(assistantWithToolCalls).toBe(1);
 
@@ -82,15 +94,19 @@ describe('Skill Chain Enforcement', () => {
     it('should NOT have REQUIRED_SKILL between assistant(tool_calls) and tool', () => {
       const messages: ChatMessage[] = [
         { role: 'user', content: 'test' },
-        { role: 'assistant', content: '', toolCalls: [{ id: 'call_1', name: 'skill', arguments: {} }] },
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [{ id: 'call_1', name: 'skill', arguments: {} }],
+        },
         { role: 'tool', content: 'skill result', toolCallId: 'call_1' },
         { role: 'system', content: 'REQUIRED_SKILL: next-skill' },
       ];
 
-      const assistantWithToolCalls = messages.findIndex(m => 
-        m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0
+      const assistantWithToolCalls = messages.findIndex(
+        m => m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0
       );
-      
+
       const nextMsg = messages[assistantWithToolCalls + 1];
       expect(nextMsg.role).not.toBe('system');
       expect(nextMsg.content || '').not.toContain('REQUIRED_SKILL');

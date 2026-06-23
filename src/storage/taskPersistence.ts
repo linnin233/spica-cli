@@ -32,7 +32,7 @@ export function loadPersistedTasks(workspacePath: string): PersistedTask[] {
       const state: TasksState = fs.readJsonSync(tasksPath);
       return state.tasks.filter(t => t.status !== 'deleted');
     }
-  } catch (error) {
+  } catch {
     // Failed to load - return empty
   }
   return [];
@@ -50,7 +50,7 @@ export function savePersistedTasks(workspacePath: string, tasks: PersistedTask[]
     };
 
     fs.writeJsonSync(join(spicaDir, 'tasks.json'), state, { spaces: 2 });
-  } catch (error) {
+  } catch {
     // Failed to save - non-critical
   }
 }
@@ -86,7 +86,7 @@ export function clearPersistedTasks(workspacePath: string): void {
     if (fs.existsSync(tasksPath)) {
       fs.removeSync(tasksPath);
     }
-  } catch (error) {}
+  } catch {}
 }
 
 // Get task statistics

@@ -33,7 +33,7 @@ describe('EventBus', () => {
     it('does not call unsubscribed handlers', () => {
       const handler = vi.fn();
       const unsubscribe = eventBus.subscribe('test-event', handler);
-      
+
       unsubscribe();
       eventBus.emit('test-event', 'test');
 

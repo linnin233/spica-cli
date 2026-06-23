@@ -23,10 +23,19 @@ export function displayStatusLine(): void {
     parts.push(COLORS.primary(`queue: ${queueStatus.pending}`));
   }
 
-  parts.push(state.isBypassMode()
-    ? COLORS.bypass('bypass')
-    : COLORS.success('strict'));
-
   const statusLine = parts.join(' | ');
   console.log(COLORS.muted(statusLine));
+}
+
+// 全局状态栏更新函数（用于 TUI 模式）
+let _updateStatusBarFn: (() => void) | null = null;
+
+export function setUpdateStatusBarFn(fn: (() => void) | null): void {
+  _updateStatusBarFn = fn;
+}
+
+export function updateStatusBar(): void {
+  if (_updateStatusBarFn) {
+    _updateStatusBarFn();
+  }
 }

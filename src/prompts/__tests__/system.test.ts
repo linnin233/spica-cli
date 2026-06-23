@@ -16,20 +16,23 @@ describe('getSystemPrompt learnings', () => {
   });
 
   it('returns prompt without learnings section when no .spica/learnings dir', () => {
-    const prompt = getSystemPrompt(undefined, undefined, undefined, tmpDir);
+    const prompt = getSystemPrompt(undefined, undefined, tmpDir);
     expect(prompt).not.toContain('Project Learnings');
   });
 
   it('returns prompt without learnings section when learnings dir is empty', () => {
     fs.mkdirpSync(path.join(tmpDir, '.spica', 'learnings'));
-    const prompt = getSystemPrompt(undefined, undefined, undefined, tmpDir);
+    const prompt = getSystemPrompt(undefined, undefined, tmpDir);
     expect(prompt).not.toContain('Project Learnings');
   });
 
   it('includes learnings content when .md files exist', () => {
     fs.mkdirpSync(path.join(tmpDir, '.spica', 'learnings'));
-    fs.writeFileSync(path.join(tmpDir, '.spica', 'learnings', '2026-01-01-test.md'), '# Test Learning\nAlways use fs-extra.');
-    const prompt = getSystemPrompt(undefined, undefined, undefined, tmpDir);
+    fs.writeFileSync(
+      path.join(tmpDir, '.spica', 'learnings', '2026-01-01-test.md'),
+      '# Test Learning\nAlways use fs-extra.'
+    );
+    const prompt = getSystemPrompt(undefined, undefined, tmpDir);
     expect(prompt).toContain('Project Learnings');
     expect(prompt).toContain('# Test Learning');
     expect(prompt).toContain('Always use fs-extra.');
@@ -39,7 +42,7 @@ describe('getSystemPrompt learnings', () => {
     fs.mkdirpSync(path.join(tmpDir, '.spica', 'learnings'));
     fs.writeFileSync(path.join(tmpDir, '.spica', 'learnings', '2026-01-02-second.md'), 'Second');
     fs.writeFileSync(path.join(tmpDir, '.spica', 'learnings', '2026-01-01-first.md'), 'First');
-    const prompt = getSystemPrompt(undefined, undefined, undefined, tmpDir);
+    const prompt = getSystemPrompt(undefined, undefined, tmpDir);
     const idxFirst = prompt.indexOf('First');
     const idxSecond = prompt.indexOf('Second');
     expect(idxFirst).toBeLessThan(idxSecond);
@@ -48,12 +51,12 @@ describe('getSystemPrompt learnings', () => {
   it('skips non-.md files', () => {
     fs.mkdirpSync(path.join(tmpDir, '.spica', 'learnings'));
     fs.writeFileSync(path.join(tmpDir, '.spica', 'learnings', 'readme.txt'), 'not markdown');
-    const prompt = getSystemPrompt(undefined, undefined, undefined, tmpDir);
+    const prompt = getSystemPrompt(undefined, undefined, tmpDir);
     expect(prompt).not.toContain('Project Learnings');
   });
 
   it('returns no learnings when workspacePath is undefined', () => {
-    const prompt = getSystemPrompt(undefined, undefined, undefined, undefined);
+    const prompt = getSystemPrompt(undefined, undefined, undefined);
     expect(prompt).not.toContain('Project Learnings');
   });
 
@@ -67,7 +70,7 @@ describe('getSystemPrompt learnings', () => {
     // Make the dir unreadable
     fs.chmodSync(path.join(tmpDir, '.spica', 'learnings'), 0o000);
     try {
-      const prompt = getSystemPrompt(undefined, undefined, undefined, tmpDir);
+      const prompt = getSystemPrompt(undefined, undefined, tmpDir);
       // Should not crash, just skip learnings
       expect(prompt).not.toContain('Project Learnings');
     } finally {

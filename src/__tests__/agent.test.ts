@@ -9,7 +9,9 @@ vi.mock('../llm/LLMClient', () => ({
     setMessages: vi.fn(),
     getMessages: vi.fn().mockReturnValue([]),
     on: vi.fn(),
-    generate: vi.fn().mockResolvedValue({ content: 'test response', finished: true, toolCalls: [] }),
+    generate: vi
+      .fn()
+      .mockResolvedValue({ content: 'test response', finished: true, toolCalls: [] }),
     continueWithAllToolResults: vi.fn(),
     generateDirect: vi.fn().mockResolvedValue({ content: 'summary' }),
     checkConnection: vi.fn().mockResolvedValue({ success: true }),
@@ -95,107 +97,7 @@ describe('SpicaAgent', () => {
     it('should set interrupt flag', () => {
       agent.interrupt();
       // Interrupt flag is private, we can verify through behavior
-      expect(agent.isPermissionPending).toBe(false);
-    });
-
-    it('should clear permission queue on interrupt', () => {
-      // The interrupt method clears the permission queue
-      agent.interrupt();
-      
-      // After interrupt, no pending permissions
-      expect(agent.isPermissionPending).toBe(false);
-    });
-  });
-
-  describe('permission system', () => {
-    describe('checkNeedsPermission', () => {
-      it('should detect dangerous file_delete', () => {
-        // Access private method through any
-        const reason = (agent as any).checkNeedsPermission('file_delete', { path: '/important/file' });
-        expect(reason).toContain('Delete');
-      });
-
-      it('should detect dangerous bash commands', () => {
-        const reason = (agent as any).checkNeedsPermission('bash', { command: 'rm -rf /data' });
-        expect(reason).toContain('删除');
-      });
-
-      it('should detect sudo commands', () => {
-        const reason = (agent as any).checkNeedsPermission('bash', { command: 'sudo apt install' });
-        expect(reason).toContain('sudo');
-      });
-
-      it('should detect git push --force', () => {
-        const reason = (agent as any).checkNeedsPermission('bash', { command: 'git push --force origin main' });
-        expect(reason).toContain('强制推送');
-      });
-
-      it('should return null for safe commands', () => {
-        const reason = (agent as any).checkNeedsPermission('bash', { command: 'ls -la' });
-        expect(reason).toBeNull();
-      });
-
-      it('should return null for safe tools', () => {
-        const reason = (agent as any).checkNeedsPermission('file_read', { path: '/safe/file' });
-        expect(reason).toBeNull();
-      });
-    });
-
-    describe('waitForPermission', () => {
-      it('should auto-approve in bypass mode', async () => {
-        agent.setBypassPermissions(true);
-        const result = await agent.waitForPermission('test reason');
-        expect(result).toBe(true);
-      });
-
-      it('should emit permission_request event', async () => {
-        const eventSpy = vi.fn();
-        agent.on('permission_request', eventSpy);
-        
-        // Start permission request (will hang without approval)
-        const promise = agent.waitForPermission('test');
-        
-        // Should have emitted event
-        expect(eventSpy).toHaveBeenCalled();
-        
-        // Clean up: deny permission
-        agent.denyPermission();
-        await promise;
-      });
-    });
-
-    describe('approvePermission/denyPermission', () => {
-      it('should approve pending permission', async () => {
-        const promise = agent.waitForPermission('test');
-        agent.approvePermission();
-        const result = await promise;
-        expect(result).toBe(true);
-      });
-
-      it('should deny pending permission', async () => {
-        const promise = agent.waitForPermission('test');
-        agent.denyPermission();
-        const result = await promise;
-        expect(result).toBe(false);
-      });
-    });
-
-    describe('bypass mode', () => {
-      it('should toggle bypass mode', () => {
-        agent.setBypassPermissions(true);
-        expect(agent.isBypassPermissions).toBe(true);
-
-        agent.setBypassPermissions(false);
-        expect(agent.isBypassPermissions).toBe(false);
-      });
-
-      it('should emit bypass_changed event', () => {
-        const eventSpy = vi.fn();
-        agent.on('bypass_changed', eventSpy);
-
-        agent.setBypassPermissions(true);
-        expect(eventSpy).toHaveBeenCalledWith({ enabled: true });
-      });
+      expect(agent).toBeDefined();
     });
   });
 
@@ -209,7 +111,7 @@ describe('SpicaAgent', () => {
     it('should emit todos_set event', () => {
       const eventSpy = vi.fn();
       agent.on('todos_set', eventSpy);
-      
+
       agent.setTodos(['task 1']);
       expect(eventSpy).toHaveBeenCalled();
     });
@@ -217,7 +119,7 @@ describe('SpicaAgent', () => {
     it('should update todo status', () => {
       agent.setTodos(['task 1', 'task 2']);
       agent.updateTodo(0, 'in_progress');
-      
+
       expect(agent.todos[0].status).toBe('in_progress');
       expect(agent.todos[1].status).toBe('pending');
     });
@@ -225,7 +127,7 @@ describe('SpicaAgent', () => {
     it('should emit todo_update event', () => {
       const eventSpy = vi.fn();
       agent.on('todo_update', eventSpy);
-      
+
       agent.setTodos(['task']);
       agent.updateTodo(0, 'completed');
       expect(eventSpy).toHaveBeenCalled();
@@ -234,15 +136,15 @@ describe('SpicaAgent', () => {
     it('should ignore invalid todo index', () => {
       agent.setTodos(['task']);
       agent.updateTodo(10, 'completed'); // Invalid index
-      
+
       expect(agent.todos[0].status).toBe('pending');
     });
   });
 
   describe('generateErrorSuggestion', () => {
-it('should suggest for ENOENT error', () => {
+    it('should suggest for ENOENT error', () => {
       const suggestion = (agent as any).generateErrorSuggestion(
-        'file_read',
+        'read',
         'ENOENT: no such file',
         { path: '/missing/file' }
       );
@@ -251,7 +153,7 @@ it('should suggest for ENOENT error', () => {
 
     it('should suggest for EACCES error', () => {
       const suggestion = (agent as any).generateErrorSuggestion(
-        'file_read',
+        'read',
         'EACCES: permission denied',
         { path: '/protected/file' }
       );
@@ -259,26 +161,20 @@ it('should suggest for ENOENT error', () => {
     });
 
     it('should suggest for command not found', () => {
-      const suggestion = (agent as any).generateErrorSuggestion(
-        'bash',
-        'command not found: xyz',
-        { command: 'xyz' }
-      );
+      const suggestion = (agent as any).generateErrorSuggestion('bash', 'command not found: xyz', {
+        command: 'xyz',
+      });
       expect(suggestion).toContain('not found');
     });
 
     it('should provide generic suggestion for unknown errors', () => {
-      const suggestion = (agent as any).generateErrorSuggestion(
-        'unknown_tool',
-        'some error',
-        {}
-      );
+      const suggestion = (agent as any).generateErrorSuggestion('unknown_tool', 'some error', {});
       expect(suggestion).toContain('failed');
     });
 
     it('should suggest for EACCES error', () => {
       const suggestion = (agent as any).generateErrorSuggestion(
-        'file_write',
+        'write',
         'EACCES: permission denied',
         { path: '/protected/file' }
       );
@@ -286,20 +182,14 @@ it('should suggest for ENOENT error', () => {
     });
 
     it('should suggest for command not found', () => {
-      const suggestion = (agent as any).generateErrorSuggestion(
-        'bash',
-        'command not found: xyz',
-        { command: 'xyz' }
-      );
+      const suggestion = (agent as any).generateErrorSuggestion('bash', 'command not found: xyz', {
+        command: 'xyz',
+      });
       expect(suggestion).toContain('not found');
     });
 
     it('should provide generic suggestion for unknown errors', () => {
-      const suggestion = (agent as any).generateErrorSuggestion(
-        'unknown_tool',
-        'some error',
-        {}
-      );
+      const suggestion = (agent as any).generateErrorSuggestion('unknown_tool', 'some error', {});
       expect(suggestion).toContain('failed');
     });
   });
@@ -327,6 +217,108 @@ it('should suggest for ENOENT error', () => {
     });
   });
 
+  describe('setMessages preserves system prompt', () => {
+    it('should preserve system prompt when clearing messages', () => {
+      // Create a mock LLM with system prompt in messages
+      const mockLLMWithSystem = {
+        setSystemPrompt: vi.fn(),
+        setMessages: vi.fn(),
+        getMessages: vi.fn().mockReturnValue([
+          { role: 'system', content: 'You are spica, a coding agent CLI.' },
+          { role: 'user', content: 'Previous user message' },
+          { role: 'assistant', content: 'Previous assistant response' },
+        ]),
+        on: vi.fn(),
+        generate: vi.fn(),
+        continueWithAllToolResults: vi.fn(),
+        generateDirect: vi.fn(),
+        checkConnection: vi.fn().mockResolvedValue({ success: true }),
+        getProvider: vi.fn().mockReturnValue({ getContextWindow: vi.fn().mockReturnValue(128000) }),
+        interrupt: vi.fn(),
+      };
+
+      // Inject mock
+      Object.defineProperty(agent, 'llm', { value: mockLLMWithSystem, writable: true });
+
+      // Call setMessages with empty array (simulating /clear)
+      agent.setMessages([]);
+
+      // Verify setMessages was called with system prompt preserved
+      expect(mockLLMWithSystem.setMessages).toHaveBeenCalled();
+      const finalMessages = mockLLMWithSystem.setMessages.mock.calls[0][0];
+
+      // System prompt should be preserved
+      expect(finalMessages[0].role).toBe('system');
+      expect(finalMessages[0].content).toContain('spica');
+    });
+
+    it('should preserve system prompt when setting new messages', () => {
+      const mockLLMWithSystem = {
+        setSystemPrompt: vi.fn(),
+        setMessages: vi.fn(),
+        getMessages: vi.fn().mockReturnValue([
+          { role: 'system', content: 'You are spica, a coding agent CLI.' },
+          { role: 'user', content: 'Old message 1' },
+          { role: 'assistant', content: 'Old response 1' },
+        ]),
+        on: vi.fn(),
+        generate: vi.fn(),
+        continueWithAllToolResults: vi.fn(),
+        generateDirect: vi.fn(),
+        checkConnection: vi.fn().mockResolvedValue({ success: true }),
+        getProvider: vi.fn().mockReturnValue({ getContextWindow: vi.fn().mockReturnValue(128000) }),
+        interrupt: vi.fn(),
+      };
+
+      Object.defineProperty(agent, 'llm', { value: mockLLMWithSystem, writable: true });
+
+      // Set new messages (simulating session switch)
+      agent.setMessages([
+        { role: 'user', content: 'New message 1' },
+        { role: 'assistant', content: 'New response 1' },
+      ]);
+
+      expect(mockLLMWithSystem.setMessages).toHaveBeenCalled();
+      const finalMessages = mockLLMWithSystem.setMessages.mock.calls[0][0];
+
+      // System prompt should be preserved at index 0
+      expect(finalMessages[0].role).toBe('system');
+      expect(finalMessages.length).toBe(3); // system + 2 new messages
+    });
+
+    it('should not duplicate system prompt if new messages contain system', () => {
+      const mockLLMWithSystem = {
+        setSystemPrompt: vi.fn(),
+        setMessages: vi.fn(),
+        getMessages: vi
+          .fn()
+          .mockReturnValue([{ role: 'system', content: 'You are spica, a coding agent CLI.' }]),
+        on: vi.fn(),
+        generate: vi.fn(),
+        continueWithAllToolResults: vi.fn(),
+        generateDirect: vi.fn(),
+        checkConnection: vi.fn().mockResolvedValue({ success: true }),
+        getProvider: vi.fn().mockReturnValue({ getContextWindow: vi.fn().mockReturnValue(128000) }),
+        interrupt: vi.fn(),
+      };
+
+      Object.defineProperty(agent, 'llm', { value: mockLLMWithSystem, writable: true });
+
+      // Set messages that include a system prompt (should be filtered out)
+      agent.setMessages([
+        { role: 'system', content: 'Different system prompt' },
+        { role: 'user', content: 'User message' },
+      ]);
+
+      const finalMessages = mockLLMWithSystem.setMessages.mock.calls[0][0];
+
+      // Should only have one system prompt (the original one)
+      const systemMessages = finalMessages.filter(m => m.role === 'system');
+      expect(systemMessages.length).toBe(1);
+      expect(systemMessages[0].content).toContain('spica'); // Original preserved
+    });
+  });
+
   describe('events', () => {
     it('should be an EventEmitter', () => {
       expect(agent).toBeInstanceOf(EventEmitter);
@@ -337,31 +329,6 @@ it('should suggest for ENOENT error', () => {
       agent.on('test_event', handler);
       agent.emit('test_event', { data: 'test' });
       expect(handler).toHaveBeenCalledWith({ data: 'test' });
-    });
-  });
-
-  describe('abortTool', () => {
-    it('should abort registered tool', () => {
-      const controller = new AbortController();
-      agent.registerToolAbortController('test_tool', controller);
-      
-      const eventSpy = vi.fn();
-      agent.on('tool_aborted', eventSpy);
-      
-      agent.abortTool('test_tool');
-      
-      expect(controller.signal.aborted).toBe(true);
-      expect(eventSpy).toHaveBeenCalledWith({ tool: 'test_tool' });
-    });
-
-    it('should clear tool abort controller after abort', () => {
-      const controller = new AbortController();
-      agent.registerToolAbortController('test_tool', controller);
-      
-      agent.abortTool('test_tool');
-      
-      // Controller should be removed
-      agent.abortTool('test_tool'); // Should not throw
     });
   });
 });

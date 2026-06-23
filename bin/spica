@@ -1,2 +1,22 @@
-#!/usr/bin/env -S npx tsx
-import('../src/index.ts');
+#!/usr/bin/env node
+import { existsSync } from 'fs';
+import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const projectDir = resolve(__dirname, '..');
+
+let tsconfig = resolve(projectDir, 'tsconfig.json');
+let src = resolve(projectDir, 'src', 'index.ts');
+
+// Check if running from global npm install/link
+const globalPath = resolve(projectDir, 'node_modules', 'spica-cli', 'tsconfig.json');
+if (existsSync(globalPath)) {
+  tsconfig = globalPath;
+  src = resolve(projectDir, 'node_modules', 'spica-cli', 'src', 'index.ts');
+}
+
+const tsxPath = resolve(projectDir, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+const { spawn } = await import('child_process');
+const proc = spawn(process.execPath, [tsxPath, '--tsconfig', tsconfig, src, ...process.argv.slice(2)], { stdio: 'inherit' });
+proc.on('exit', (code) => process.exit(code ?? 1));

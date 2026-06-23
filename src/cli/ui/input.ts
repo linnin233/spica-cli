@@ -1,8 +1,6 @@
 // 稳定的输入处理 - 解决粘贴、Unicode、Ctrl+C 问题
 // 使用 Bracketed Paste Mode 确保粘贴内容作为整体到达
 
-import readline from 'readline';
-
 const ESC = '\x1b';
 
 // Bracketed Paste Mode 控制
@@ -46,10 +44,7 @@ interface InputState {
 }
 
 // 创建稳定的输入处理器
-export function createInputHandler(
-  onSubmit: (text: string) => void,
-  onInterrupt: () => void
-) {
+export function createInputHandler(onSubmit: (text: string) => void, onInterrupt: () => void) {
   const state: InputState = {
     buffer: '',
     cursorPos: 0,
@@ -139,8 +134,13 @@ export function createInputHandler(
   const handlePaste = (text: string) => {
     // 规范化换行符
     const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-    // 直接提交，不进入 buffer
-    onSubmit(normalized);
+    // Insert into buffer instead of immediate submit — lets user review/edit
+    // before pressing Enter. Multi-line content is preserved with \n chars.
+    const before = [...state.buffer].slice(0, state.cursorPos).join('');
+    const after = [...state.buffer].slice(state.cursorPos).join('');
+    state.buffer = before + normalized + after;
+    state.cursorPos += [...normalized].length;
+    render();
   };
 
   // 处理单个按键
@@ -192,10 +192,11 @@ export function createInputHandler(
 
     // 普通字符 - 插入
     if (str.length > 0 && !str.startsWith(ESC)) {
+      const graphemes = [...str]; // grapheme clusters for correct cursor advance
       const chars = [...state.buffer];
-      chars.splice(state.cursorPos, 0, str);
+      chars.splice(state.cursorPos, 0, ...graphemes);
       state.buffer = chars.join('');
-      state.cursorPos += str.length;
+      state.cursorPos += graphemes.length;
       render();
     }
   };
@@ -257,8 +258,9 @@ export function createStableREPL(onSubmit: (text: string) => Promise<void>) {
       isProcessing = true;
       try {
         await onSubmit(trimmed);
-      } catch (error: any) {
-        console.log(`Error: ${error.message}`);
+      } catch (error: unknown) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        console.log(`Error: ${errorMsg}`);
       }
       isProcessing = false;
       handler.render();

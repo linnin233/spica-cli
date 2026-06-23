@@ -13,7 +13,7 @@ function getTerminalWidth(): number {
 }
 
 // 输入框高度（底部保留行数）
-const INPUT_BOX_HEIGHT = 3;  // 状态行 + 分隔线 + 输入行
+const INPUT_BOX_HEIGHT = 3; // 状态行 + 分隔线 + 输入行
 
 // 启用 scroll region（顶部可滚动，底部固定）
 export function enableScrollRegion(): void {
@@ -96,9 +96,8 @@ export function showStatus(status: {
   }
 
   if (status.mode) {
-    const modeColor = status.mode === 'bypass'
-      ? `${ESC}[38;2;255;100;100m`
-      : `${ESC}[38;2;100;255;100m`;
+    const modeColor =
+      status.mode === 'bypass' ? `${ESC}[38;2;255;100;100m` : `${ESC}[38;2;100;255;100m`;
     parts.push(`${modeColor}${status.mode}${ESC}[0m`);
   }
 
@@ -177,13 +176,21 @@ export function initFixedInputBox(initialStatus?: {
   showPrompt();
 }
 
+interface Status {
+  model?: string;
+  mode?: 'bypass' | 'strict';
+  processing?: boolean;
+  queue?: number;
+  message?: string;
+}
+
 // 处理终端 resize
-export function handleResize(status?: any): void {
+export function handleResize(status?: Status): void {
   initFixedInputBox(status);
 }
 
 // 监听 resize 事件
-export function watchResize(getStatus: () => any): void {
+export function watchResize(getStatus: () => Status): void {
   process.stdout.on('resize', () => {
     handleResize(getStatus());
   });

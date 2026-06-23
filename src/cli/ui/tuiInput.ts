@@ -14,10 +14,16 @@ export class TUIInputHandler {
   private lastEscTime: number = 0;
   private interruptCount: number = 0;
 
-  getScreen() { return this.screen; }
+  getScreen() {
+    return this.screen;
+  }
 
-  start(): void { this.screen.start(); }
-  end(): void { this.screen.end(); }
+  start(): void {
+    this.screen.start();
+  }
+  end(): void {
+    this.screen.end();
+  }
 
   handleStdin(data: string, permissionDialogActive: boolean): TUIInputResult {
     if (permissionDialogActive) {

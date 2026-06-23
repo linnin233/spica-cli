@@ -60,17 +60,6 @@ describe('TUI Interaction Tests', () => {
       expect(state.isProcessing()).toBe(false);
     });
 
-    it('should track bypass mode', () => {
-      const state = getRuntimeState();
-      expect(state.isBypassMode()).toBe(false);
-
-      state.setBypassMode(true);
-      expect(state.isBypassMode()).toBe(true);
-
-      state.setBypassMode(false);
-      expect(state.isBypassMode()).toBe(false);
-    });
-
     it('should track streaming state', () => {
       const state = getRuntimeState();
       expect(state.isStreamingOutput()).toBe(false);

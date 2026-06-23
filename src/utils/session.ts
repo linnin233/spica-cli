@@ -5,9 +5,6 @@ import { join } from 'path';
 import type { ChatMessage } from '../llm/providers/BaseProvider';
 import { cleanMessages } from './messageCleaner';
 
-// Session size limits (prevent huge session files that cause API timeouts)
-const MAX_SESSION_MESSAGES = 50;  // 最多保存50条消息
-const MAX_MESSAGE_LENGTH = 2000;  // 每条消息最多2000字符
 const SESSIONS_DIR = '.spica/sessions';
 
 export interface SessionMeta {
@@ -27,6 +24,8 @@ export interface SessionState {
   id: string;
   name: string;
   createdAt: string;
+  summary?: string; // 归档时的摘要
+  progress?: { entries: Array<{ type: string; description: string; at: string }>; maxEntries: number };
 }
 
 // Generate unique session ID
@@ -48,62 +47,30 @@ export function loadSession(workspacePath: string): SessionState | null {
       }
       return session;
     }
-  } catch {
-    // 忽略读取错误
+  } catch (e) {
+    console.error(`[session] loadSession failed for ${workspacePath}:`, e instanceof Error ? e.message : String(e));
   }
 
   return null;
 }
 
-function truncateContent(content: string | undefined): string {
-  if (!content) return '';
-  if (content.length <= MAX_MESSAGE_LENGTH) return content;
-  return content.slice(0, MAX_MESSAGE_LENGTH) + '...[truncated]';
-}
-
-function truncateMessages(messages: ChatMessage[]): ChatMessage[] {
-  const recent = messages.slice(-MAX_SESSION_MESSAGES);
-
-  const result: ChatMessage[] = [];
-  for (let i = 0; i < recent.length; i++) {
-    const m = recent[i];
-
-    if (m.role === 'tool') {
-      result.push({
-        role: m.role,
-        content: truncateContent(m.content),
-        toolCallId: m.toolCallId,
-      });
-    } else if (m.role === 'assistant') {
-      const msg: ChatMessage = {
-        role: m.role,
-        content: truncateContent(m.content),
-      };
-      if (m.toolCalls && m.toolCalls.length > 0) {
-        msg.toolCalls = m.toolCalls;
-      }
-      result.push(msg);
-    } else if (m.role === 'user' || m.role === 'system') {
-      result.push({
-        role: m.role,
-        content: truncateContent(m.content),
-      });
-    }
-  }
-
-  return result;
-}
-
 // Save current session
-export function saveSession(workspacePath: string, messages: ChatMessage[], sessionName?: string): void {
+export function saveSession(
+  workspacePath: string,
+  messages: ChatMessage[],
+  sessionName?: string,
+  progress?: SessionState['progress'],
+): void {
   const spicaDir = join(workspacePath, '.spica');
 
   try {
     fs.ensureDirSync(spicaDir);
 
-    const truncated = truncateMessages(messages);
+    // Full history is preserved — context decoupling means LLM compression
+    // never affects session persistence. cleanMessages() still runs to remove
+    // invalid/duplicate messages, but no length/content truncation is applied.
+    const cleaned = cleanMessages(messages);
     const existingSession = loadSession(workspacePath);
-    const cleaned = cleanMessages(truncated);
 
     const session: SessionState = {
       workspacePath,
@@ -112,57 +79,176 @@ export function saveSession(workspacePath: string, messages: ChatMessage[], sess
       id: existingSession?.id || generateSessionId(),
       name: sessionName || existingSession?.name || `Session ${new Date().toLocaleDateString()}`,
       createdAt: existingSession?.createdAt || new Date().toISOString(),
+      progress: progress || existingSession?.progress,
     };
 
     fs.writeJsonSync(join(spicaDir, 'session.json'), session, { spaces: 2 });
-
-    // Also save to sessions history (archive)
-    archiveSession(workspacePath, session);
-  } catch {
-    // 忽略保存错误
+  } catch (e) {
+    console.error(`[session] saveSession failed for ${workspacePath}:`, e instanceof Error ? e.message : String(e));
   }
 }
 
-// Archive session to sessions directory
-function archiveSession(workspacePath: string, session: SessionState): void {
+// Generate simple summary from messages — natural language, one sentence describing
+// what was attempted and what files were changed. Serves as fallback when LLM is unavailable.
+export function generateSessionSummary(messages: ChatMessage[]): string {
+  if (messages.length === 0) return '';
+
+  // Extract the first meaningful user message (the primary task request)
+  const firstUserMsg = messages
+    .filter(m => m.role === 'user')
+    .map(m => (m.content || '').replace(/\n/g, ' ').trim())
+    .find(m => {
+      if (m.length === 0 || m.length > 500) return false;
+      if (m.startsWith('#') || m.startsWith('<') || m.startsWith('[')) return false;
+      if (/\b(Overview|Instructions|Guidelines|Prerequisites|Workflow)\b/i.test(m.slice(0, 100))) return false;
+      return true;
+    });
+
+  // Collect files modified
+  const filePaths = new Set<string>();
+  for (const m of messages) {
+    if (m.toolCalls) {
+      for (const tc of m.toolCalls) {
+        const args = tc.arguments || {};
+        if (['write', 'edit', 'file_multi_edit'].includes(tc.name)) {
+          if (args.path) filePaths.add(args.path as string);
+        }
+      }
+    }
+  }
+
+  // Extract final assistant conclusion
+  const finalMsg = [...messages].reverse().find(
+    m => m.role === 'assistant' && !m.toolCalls && (m.content || '').trim().length > 10
+  );
+
+  // Build summary: what was requested + what was changed + outcome
+  const parts: string[] = [];
+
+  if (firstUserMsg) {
+    parts.push(firstUserMsg.slice(0, 150));
+  }
+
+  if (filePaths.size > 0) {
+    const files = Array.from(filePaths)
+      .slice(0, 5)
+      .map(f => f.replace(/.*\//, ''));
+    parts.push(`modified ${files.join(', ')}`);
+  }
+
+  if (finalMsg) {
+    const firstSentence = (finalMsg.content || '').split(/[.。\n]/)[0].trim();
+    if (firstSentence.length > 10 && firstSentence.length < 200) {
+      parts.push(firstSentence);
+    }
+  }
+
+  if (parts.length === 0) return `${messages.length} messages`;
+  return parts.join(' — ').slice(0, 300);
+}
+
+// Archive session — moves active session to historical, generating a summary.
+// Uses LLM summary when an agent is provided; falls back to local extraction.
+export async function archiveSession(
+  workspacePath: string,
+  session: SessionState,
+  agent?: { generateDirect: (prompt: string) => Promise<{ content?: string }> }
+): Promise<string> {
   try {
     const sessionsDir = join(workspacePath, SESSIONS_DIR);
     fs.ensureDirSync(sessionsDir);
+
+    // Generate summary
+    let summary = '';
+
+    if (agent && session.messages.length > 0) {
+      // Try LLM summary first
+      try {
+        // Build a rich but compact prompt: user intents + key actions + files changed
+        const parts: string[] = [];
+
+        // User messages (the actual requests, filtered)
+        const userMsgs = session.messages
+          .filter(m => m.role === 'user')
+          .map(m => (m.content || '').replace(/\n/g, ' ').trim())
+          .filter(m => m.length > 0 && m.length < 500)
+          .slice(0, 3);
+        if (userMsgs.length > 0) {
+          parts.push(`User requests: ${userMsgs.map(m => m.slice(0, 200)).join(' | ')}`);
+        }
+
+        // Key tool actions (write/edit/bash with file paths or commands)
+        const toolActions: string[] = [];
+        for (const m of session.messages) {
+          if (m.toolCalls) {
+            for (const tc of m.toolCalls) {
+              const args = tc.arguments || {};
+              if (['write', 'edit', 'file_multi_edit'].includes(tc.name) && args.path) {
+                toolActions.push(`${tc.name} ${(args.path as string).replace(/.*\//, '')}`);
+              } else if (tc.name === 'bash' && args.command) {
+                const cmd = (args.command as string).slice(0, 60);
+                toolActions.push(`bash ${cmd}`);
+              }
+            }
+          }
+        }
+        // Deduplicate and limit
+        const uniqueActions = [...new Set(toolActions)].slice(0, 8);
+        if (uniqueActions.length > 0) {
+          parts.push(`Key actions: ${uniqueActions.join(', ')}`);
+        }
+
+        // Final outcome — last assistant message without tool calls
+        const finalMsg = [...session.messages].reverse().find(
+          m => m.role === 'assistant' && !m.toolCalls && (m.content || '').trim().length > 10
+        );
+        if (finalMsg) {
+          const firstLine = (finalMsg.content || '').split('\n')[0].slice(0, 200);
+          parts.push(`Outcome: ${firstLine}`);
+        }
+
+        const prompt = `Summarize this coding session in 1-2 sentences (max 120 words). Include:
+- What the user wanted to accomplish
+- What was actually done (key files modified/created)
+- Whether the task was completed or still in progress
+- Any errors or blockers encountered
+
+Session data:
+${parts.join('\n')}`;
+
+        const response = await agent.generateDirect(prompt);
+        if (response.content && response.content.trim() && response.content.length > 10) {
+          // Filter out useless LLM responses
+          const text = response.content.trim();
+          if (!text.includes("don't have") && !text.includes('no information') && !text.includes('Could you please')) {
+            summary = text.slice(0, 300);
+          }
+        }
+      } catch (e) {
+        // Expected: LLM may be unavailable; fall back to local summary
+        console.error(`[session] archiveSession LLM summary failed, using local fallback:`, e instanceof Error ? e.message : String(e));
+        summary = generateSessionSummary(session.messages);
+      }
+
+      // If LLM produced nothing useful, use local fallback
+      if (!summary || summary.length < 15) {
+        summary = generateSessionSummary(session.messages);
+      }
+    } else {
+      summary = generateSessionSummary(session.messages);
+    }
+
+    session.summary = summary;
 
     // Save with session ID as filename
     const sessionPath = join(sessionsDir, `${session.id}.json`);
     fs.writeJsonSync(sessionPath, session, { spaces: 2 });
 
-    // Clean up old sessions (keep max 10)
-    cleanupOldSessions(sessionsDir, 10);
-  } catch {
-    // 忽略归档错误
+    return summary;
+  } catch (e) {
+    console.error(`[session] archiveSession failed for ${workspacePath}:`, e instanceof Error ? e.message : String(e));
+    return '';
   }
-}
-
-// Clean up old sessions
-function cleanupOldSessions(sessionsDir: string, maxKeep: number): void {
-  try {
-    const files = fs.readdirSync(sessionsDir)
-      .filter(f => f.endsWith('.json') && f.startsWith('sess_'))
-      .map(f => ({
-        name: f,
-        path: join(sessionsDir, f),
-        time: fs.statSync(join(sessionsDir, f)).mtime.getTime(),
-      }))
-      .sort((a, b) => b.time - a.time);
-
-    // Remove oldest sessions beyond maxKeep
-    if (files.length > maxKeep) {
-      files.slice(maxKeep).forEach(f => {
-        try {
-          fs.removeSync(f.path);
-        } catch {}
-      });
-    }
-} catch {
-      // 忽略清理错误
-    }
 }
 
 // List all archived sessions
@@ -174,10 +260,26 @@ export function listSessions(workspacePath: string): SessionMeta[] {
       return [];
     }
 
-    const files = fs.readdirSync(sessionsDir)
+    const files = fs
+      .readdirSync(sessionsDir)
       .filter(f => f.endsWith('.json') && f.startsWith('sess_'))
       .map(f => {
         const session = fs.readJsonSync(join(sessionsDir, f));
+        let summary = session.summary;
+        // Regenerate if missing or old template format ("Tasks:", "Key outputs:")
+        const isOldFormat = summary && /^(Tasks|Key outputs|Files|Tools):/.test(summary);
+        if ((!summary || isOldFormat) && session.messages?.length > 0) {
+          summary = generateSessionSummary(session.messages);
+          // Persist the generated summary so we don't regenerate every time
+          if (summary) {
+            session.summary = summary;
+            try {
+              fs.writeJsonSync(join(sessionsDir, f), session, { spaces: 2 });
+            } catch (e) {
+              console.error(`[session] listSessions failed to persist summary for ${f}:`, e instanceof Error ? e.message : String(e));
+            }
+          }
+        }
         return {
           id: session.id,
           name: session.name,
@@ -185,30 +287,53 @@ export function listSessions(workspacePath: string): SessionMeta[] {
           messageCount: session.messages?.length || 0,
           lastActivity: session.lastActivity,
           createdAt: session.createdAt,
-          summary: session.summary,
+          summary,
         };
       })
       .sort((a, b) => new Date(b.lastActivity).getTime() - new Date(a.lastActivity).getTime());
 
     return files;
-  } catch {
+  } catch (e) {
+    console.error(`[session] listSessions failed for ${workspacePath}:`, e instanceof Error ? e.message : String(e));
     return [];
   }
 }
 
-// Load specific session by ID
+// Load specific session by ID (supports partial ID matching)
 export function loadSessionById(workspacePath: string, sessionId: string): SessionState | null {
-  const sessionPath = join(workspacePath, SESSIONS_DIR, `${sessionId}.json`);
+  const sessionsDir = join(workspacePath, SESSIONS_DIR);
 
   try {
-    if (fs.existsSync(sessionPath)) {
-      const session = fs.readJsonSync(sessionPath);
+    // Exact match first
+    const exactPath = join(sessionsDir, `${sessionId}.json`);
+    if (fs.existsSync(exactPath)) {
+      const session = fs.readJsonSync(exactPath);
       if (session.messages) {
         session.messages = cleanMessages(session.messages);
       }
       return session;
     }
-  } catch {}
+
+    // Partial match: find file ending with the given ID
+    if (fs.existsSync(sessionsDir)) {
+      const files = fs
+        .readdirSync(sessionsDir)
+        .filter(f => f.endsWith('.json') && f.startsWith('sess_'));
+      const match = files.find(f => f.replace('.json', '').endsWith(sessionId));
+      if (match) {
+        const session = fs.readJsonSync(join(sessionsDir, match));
+        if (session.messages) {
+          session.messages = cleanMessages(session.messages);
+        }
+        return session;
+      }
+    }
+  } catch (e) {
+    console.error(
+      `[session] loadSessionById failed: id="${sessionId}" dir="${sessionsDir}"`,
+      e instanceof Error ? e.message : String(e),
+    );
+  }
 
   return null;
 }
@@ -222,7 +347,8 @@ export function switchSession(workspacePath: string, sessionId: string): boolean
     const spicaDir = join(workspacePath, '.spica');
     fs.writeJsonSync(join(spicaDir, 'session.json'), session, { spaces: 2 });
     return true;
-  } catch {
+  } catch (e) {
+    console.error(`[session] switchSession failed for ${sessionId}:`, e instanceof Error ? e.message : String(e));
     return false;
   }
 }
@@ -235,8 +361,8 @@ export function clearSession(workspacePath: string): void {
     if (fs.existsSync(sessionPath)) {
       fs.removeSync(sessionPath);
     }
-  } catch {
-    // 忽略清除错误
+  } catch (e) {
+    console.error(`[session] clearSession failed for ${workspacePath}:`, e instanceof Error ? e.message : String(e));
   }
 }
 
@@ -249,7 +375,9 @@ export function deleteSession(workspacePath: string, sessionId: string): boolean
       fs.removeSync(sessionPath);
       return true;
     }
-  } catch {}
+  } catch (e) {
+    console.error(`[session] deleteSession failed: id="${sessionId}"`, e instanceof Error ? e.message : String(e));
+  }
 
   return false;
 }
@@ -261,17 +389,23 @@ export function renameSession(workspacePath: string, sessionId: string, newName:
     const currentSession = loadSession(workspacePath);
     if (currentSession?.id === sessionId) {
       currentSession.name = newName;
-      fs.writeJsonSync(join(workspacePath, '.spica', 'session.json'), currentSession, { spaces: 2 });
+      fs.writeJsonSync(join(workspacePath, '.spica', 'session.json'), currentSession, {
+        spaces: 2,
+      });
     }
 
     // Update archived session
     const session = loadSessionById(workspacePath, sessionId);
     if (session) {
       session.name = newName;
-      fs.writeJsonSync(join(workspacePath, SESSIONS_DIR, `${sessionId}.json`), session, { spaces: 2 });
+      fs.writeJsonSync(join(workspacePath, SESSIONS_DIR, `${sessionId}.json`), session, {
+        spaces: 2,
+      });
       return true;
     }
-  } catch {}
+  } catch (e) {
+    console.error(`[session] renameSession failed: id="${sessionId}"`, e instanceof Error ? e.message : String(e));
+  }
 
   return false;
 }

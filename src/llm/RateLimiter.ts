@@ -93,26 +93,42 @@ export class RateLimiter {
 
   // 可中断的sleep
   private interruptibleSleep(ms: number, signal?: AbortSignal): Promise<void> {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve, _reject) => {
       if (signal?.aborted || this.pendingInterrupt) {
         resolve();
         return;
       }
 
-      const timer = setTimeout(() => {
+      let timer: NodeJS.Timeout | null = null;
+      let checkInterval: NodeJS.Timeout | null = null;
+
+      const cleanup = () => {
+        if (timer) clearTimeout(timer);
+        if (checkInterval) clearInterval(checkInterval);
+      };
+
+      timer = setTimeout(() => {
+        cleanup();
         resolve();
       }, ms);
 
-      signal?.addEventListener('abort', () => {
-        clearTimeout(timer);
-        resolve();
-      });
+      if (signal) {
+        const onAbort = () => {
+          signal.removeEventListener('abort', onAbort);
+          cleanup();
+          resolve();
+        };
+        if (signal.aborted) {
+          onAbort();
+        } else {
+          signal.addEventListener('abort', onAbort);
+        }
+      }
 
       // 也检查pendingInterrupt
-      const checkInterval = setInterval(() => {
+      checkInterval = setInterval(() => {
         if (this.pendingInterrupt) {
-          clearTimeout(timer);
-          clearInterval(checkInterval);
+          cleanup();
           resolve();
         }
       }, 100);

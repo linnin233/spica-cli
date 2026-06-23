@@ -3,7 +3,7 @@
 import chalk from 'chalk';
 
 // 配色
-const DIFF_ADD = chalk.hex('#00FA9A');   // 春绿 - 新增
+const DIFF_ADD = chalk.hex('#00FA9A'); // 春绿 - 新增
 const DIFF_REMOVE = chalk.hex('#FF6B6B'); // 淡红 - 删除
 const DIFF_CONTEXT = chalk.hex('#696969'); // 暗灰 - 上下文
 const DIFF_HEADER = chalk.hex('#87CEEB'); // 天蓝 - 头部
@@ -21,8 +21,6 @@ export function computeDiff(oldContent: string, newContent: string): DiffLine[] 
   const oldLines = oldContent === '' ? [] : oldContent.split('\n');
   const newLines = newContent === '' ? [] : newContent.split('\n');
   const diff: DiffLine[] = [];
-
-  const maxLen = Math.max(oldLines.length, newLines.length);
 
   let oldIdx = 0;
   let newIdx = 0;
@@ -171,7 +169,7 @@ export function formatDiffSummary(diff: DiffLine[]): string {
   return summary || 'no changes';
 }
 
-// 从oldString/newString生成diff（用于file_edit）
+// Generate diff from oldString/newString (for edit tool)
 export function generateEditDiff(oldString: string, newString: string): string {
   const diff = computeDiff(oldString, newString);
   return formatDiff(diff, 1);

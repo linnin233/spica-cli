@@ -2,10 +2,11 @@
   "name": "spica-cli",
   "version": "1.0.0",
   "type": "module",
-  "description": "AI coding agent CLI with three-step workflow",
+  "description": "AI coding agent CLI - Intelligent tool orchestration, auto-retry, code quality analysis",
   "main": "dist/index.js",
   "bin": {
-    "spica": "bin/spica"
+    "spica": "bin/spica",
+    "spica.cmd": "bin/spica.cmd"
   },
   "scripts": {
     "dev": "tsx src/index.ts",
@@ -20,11 +21,28 @@
   "keywords": [
     "ai",
     "cli",
-    "agent",
-    "mvp"
+    "coding-agent",
+    "llm",
+    "openai",
+    "assistant",
+    "developer-tools",
+    "automation",
+    "code-generation",
+    "code-review",
+    "typescript",
+    "mcp",
+    "model-context-protocol"
   ],
-  "author": "",
+  "author": "zison",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zison/spica-cli"
+  },
+  "homepage": "https://github.com/zison/spica-cli#readme",
+  "bugs": {
+    "url": "https://github.com/zison/spica-cli/issues"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "axios": "^1.16.0",
@@ -38,7 +56,8 @@
     "openai": "^4.52.0",
     "ora": "^8.0.1",
     "prompts": "^2.4.2",
-    "simple-git": "^3.25.0"
+    "simple-git": "^3.25.0",
+    "tiktoken": "^1.0.22"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",

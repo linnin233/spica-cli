@@ -37,11 +37,7 @@ export class ProcessMonitor {
     this.processDir = processDir;
   }
 
-  async start(
-    command: string,
-    args: string[],
-    id?: string
-  ): Promise<ProcessInfo> {
+  async start(command: string, args: string[], id?: string): Promise<ProcessInfo> {
     const processId = id || randomUUID();
 
     return new Promise((resolve, reject) => {
@@ -71,7 +67,7 @@ export class ProcessMonitor {
       childProcess.stdout?.on('data', logHandler('stdout'));
       childProcess.stderr?.on('data', logHandler('stderr'));
 
-      childProcess.on('error', (err) => {
+      childProcess.on('error', err => {
         const stored = this.processes.get(processId);
         if (stored) {
           stored.info.status = ProcessStatus.FAILED;
@@ -86,7 +82,7 @@ export class ProcessMonitor {
         resolve(info);
       });
 
-      childProcess.on('close', (code) => {
+      childProcess.on('close', code => {
         const stored = this.processes.get(processId);
         if (stored) {
           stored.info.status = ProcessStatus.EXITED;
@@ -94,6 +90,8 @@ export class ProcessMonitor {
           stored.info.exitCode = code ?? 0;
         }
         this.persistLogs(processId);
+        // Schedule cleanup: remove from memory after logs persisted
+        setTimeout(() => this.cleanup(processId), 60000);
       });
     });
   }
@@ -107,9 +105,9 @@ export class ProcessMonitor {
     const stored = this.processes.get(id);
     if (!stored?.process) return false;
 
-    return new Promise((resolve) => {
+    return new Promise(resolve => {
       const process = stored.process!;
-      
+
       process.on('close', () => {
         resolve(true);
       });
@@ -128,14 +126,22 @@ export class ProcessMonitor {
           } catch {}
         }
       } else {
-        // Unix: 先 SIGTERM，5秒后 SIGKILL
+        // Unix: 先 SIGTERM，5秒后 SIGKILL 若进程仍在运行
         process.kill('SIGTERM');
 
-        setTimeout(() => {
+        const sigkillTimer = setTimeout(() => {
           if (stored.info.status === ProcessStatus.KILLED) {
-            process.kill('SIGKILL');
+            // 进程未被 SIGTERM 终止，强制 SIGKILL
+            try {
+              process.kill('SIGKILL');
+            } catch {
+              /* 进程可能已退出 */
+            }
           }
         }, 5000);
+
+        // 若进程在 5 秒内退出，清除 SIGKILL 定时器
+        process.once('close', () => clearTimeout(sigkillTimer));
       }
     });
   }
@@ -160,10 +166,25 @@ export class ProcessMonitor {
     await Promise.all(killPromises);
   }
 
+  // 清理已退出/已终止的进程条目（释放内存）
+  cleanup(id: string): void {
+    const stored = this.processes.get(id);
+    if (stored && stored.info.status !== ProcessStatus.RUNNING) {
+      stored.process?.removeAllListeners();
+      this.processes.delete(id);
+      this.logs.delete(id);
+    }
+  }
+
+  // 获取当前内存中追踪的进程数量
+  get trackedCount(): number {
+    return this.processes.size;
+  }
+
   private async persistLogs(id: string): Promise<void> {
     const logs = this.logs.get(id);
     if (!logs) return;
-    
+
     try {
       await fs.ensureDir(this.processDir);
       const logPath = path.join(this.processDir, `${id}.log`);

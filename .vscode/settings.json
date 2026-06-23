@@ -1,0 +1,40 @@
+{
+  // VS Code 项目配置
+  "editor.formatOnSave": true,
+  "editor.tabSize": 2,
+  "editor.insertSpaces": true,
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "explicit"
+  },
+
+  // TypeScript 配置
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "typescript.preferences.importModuleSpecifier": "relative",
+  "typescript.suggest.autoImports": true,
+
+  // ESLint 配置
+  "eslint.validate": [
+    "typescript",
+    "javascript"
+  ],
+
+  // 文件排除
+  "files.exclude": {
+    "**/.git": true,
+    "**/.DS_Store": true,
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/.spica": true
+  },
+
+  // 搜索排除
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/.spica": true,
+    "**/coverage": true
+  },
+
+  // 推荐使用 EditorConfig
+  "editorconfig.generateAuto": false
+}

@@ -2,7 +2,6 @@
 // 使用终端标准颜色，跟随用户的终端配色设置
 
 import chalk from 'chalk';
-import readline from 'readline';
 import { padRight, getStringWidth } from './stringWidth';
 
 // 终端标准配色（跟随终端设置）
@@ -66,7 +65,7 @@ export const BG = {
 
     BG._bannerStopSignal = false;
 
-    return new Promise<void>((resolve) => {
+    return new Promise<void>(resolve => {
       // Use chalk colors to follow terminal theme
       const bright = chalk.cyanBright;
       const normal = chalk.cyan;
@@ -104,7 +103,7 @@ export const BG = {
 
     BG._compressStopSignal = false;
 
-    return new Promise<void>((resolve) => {
+    return new Promise<void>(resolve => {
       let frameIndex = 0;
 
       const spin = async () => {
@@ -138,13 +137,13 @@ export const format = {
   success: (text: string) => COLORS.success(text),
   error: (text: string) => COLORS.error(text),
   warning: (text: string) => COLORS.warning(text),
-  toolCall: (name: string) => COLORS.tool(`→ ${name}`),
+  toolCall: (name: string) => COLORS.tool(`- ${name}`),
   toolResult: (name: string, success: boolean, output: string) => {
-    const icon = success ? COLORS.success('✓') : COLORS.error('✗');
+    const icon = success ? COLORS.success('OK') : COLORS.error('FAIL');
     return `${icon} ${name}: ${output}`;
   },
   reasoning: (content: string) => COLORS.reasoning(content),
-  diffFile: (path: string) => COLORS.file(`📄 ${path}`),
+  diffFile: (path: string) => COLORS.file(`file: ${path}`),
   diffAdd: (line: string) => COLORS.diffAdd(`+ ${line}`),
   diffRemove: (line: string) => COLORS.diffRemove(`- ${line}`),
   permissionBox: (reason: string) => {
@@ -154,7 +153,7 @@ export const format = {
     const dimBorder = COLORS.muted('─'.repeat(50));
     return `
 ${border('═'.repeat(50))}
-${title('  ⚠  PERMISSION REQUIRED')}
+${title('  [!] PERMISSION REQUIRED')}
 ${border('═'.repeat(50))}
 ${text(`  Action: ${reason}`)}
 ${dimBorder}
@@ -173,17 +172,21 @@ ${COLORS.primary.bold('Current Status:')}
   dim: (text: string) => COLORS.dim(text),
   // 表格格式化（支持中英文对齐）
   tableRow: (columns: string[], widths: number[]) => {
-    return columns.map((col, i) => {
-      const padded = padRight(col, widths[i] || 10);
-      return COLORS.muted(padded);
-    }).join(' | ');
+    return columns
+      .map((col, i) => {
+        const padded = padRight(col, widths[i] || 10);
+        return COLORS.muted(padded);
+      })
+      .join(' | ');
   },
   // 状态表格
   statusTable: (items: Array<{ label: string; value: string }>) => {
     const maxLabelWidth = Math.max(...items.map(i => getStringWidth(i.label))) + 2;
-    return items.map(i => {
-      const label = padRight(i.label + ':', maxLabelWidth);
-      return `  ${COLORS.muted(label)} ${COLORS.primary(i.value)}`;
-    }).join('\n');
+    return items
+      .map(i => {
+        const label = padRight(i.label + ':', maxLabelWidth);
+        return `  ${COLORS.muted(label)} ${COLORS.primary(i.value)}`;
+      })
+      .join('\n');
   },
 };

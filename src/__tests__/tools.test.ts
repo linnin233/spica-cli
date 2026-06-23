@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { executeTool, setWorkspace, getWorkspace, getAllToolDefinitions, TOOLS_DEFINITIONS } from '../tools/index';
+import {
+  executeTool,
+  setWorkspace,
+  getWorkspace,
+  getAllToolDefinitions,
+  TOOLS_DEFINITIONS,
+} from '../tools/index';
 
 // We'll test the tool definitions and basic functionality
 // For actual file operations, we rely on integration tests
@@ -17,17 +23,17 @@ describe('Tools Definitions', () => {
     it('should include core file tools', () => {
       const definitions = getAllToolDefinitions();
       const toolNames = definitions.map(d => d.name);
-      
-      expect(toolNames).toContain('file_read');
-      expect(toolNames).toContain('file_write');
-      expect(toolNames).toContain('file_edit');
+
+      expect(toolNames).toContain('read');
+      expect(toolNames).toContain('write');
+      expect(toolNames).toContain('edit');
       expect(toolNames).toContain('file_delete');
     });
 
     it('should include shell tools', () => {
       const definitions = getAllToolDefinitions();
       const toolNames = definitions.map(d => d.name);
-      
+
       expect(toolNames).toContain('bash');
       expect(toolNames).toContain('git');
     });
@@ -35,7 +41,7 @@ describe('Tools Definitions', () => {
     it('should include utility tools', () => {
       const definitions = getAllToolDefinitions();
       const toolNames = definitions.map(d => d.name);
-      
+
       expect(toolNames).toContain('glob');
       expect(toolNames).toContain('grep');
       expect(toolNames).toContain('workspace');
@@ -44,7 +50,7 @@ describe('Tools Definitions', () => {
     it('should include lint and test tools', () => {
       const definitions = getAllToolDefinitions();
       const toolNames = definitions.map(d => d.name);
-      
+
       expect(toolNames).toContain('lint');
       expect(toolNames).toContain('test');
     });
@@ -101,19 +107,29 @@ describe('Tool Result Structure', () => {
 });
 
 describe('Tool Descriptions', () => {
-  it('should mention syntax check for file_write', () => {
-    const writeTool = TOOLS_DEFINITIONS.find(t => t.name === 'file_write');
+  it('should mention syntax check for write', () => {
+    const writeTool = TOOLS_DEFINITIONS.find(t => t.name === 'write');
     expect(writeTool?.description).toContain('syntax');
   });
 
   it('should mention syntax check for file_edit', () => {
-    const editTool = TOOLS_DEFINITIONS.find(t => t.name === 'file_edit');
+    const editTool = TOOLS_DEFINITIONS.find(t => t.name === 'edit');
     expect(editTool?.description).toContain('syntax');
   });
 
   it('should mention syntax check for file_multi_edit', () => {
     const multiEditTool = TOOLS_DEFINITIONS.find(t => t.name === 'file_multi_edit');
     expect(multiEditTool?.description).toContain('syntax');
+  });
+
+  it('should mention regex for file_replace', () => {
+    const replaceTool = TOOLS_DEFINITIONS.find(t => t.name === 'file_replace');
+    expect(replaceTool?.description).toContain('regex');
+  });
+
+  it('should mention insert for file_insert', () => {
+    const insertTool = TOOLS_DEFINITIONS.find(t => t.name === 'file_insert');
+    expect(insertTool?.description).toContain('Insert');
   });
 
   it('should mention auto-detect for lint tool', () => {
@@ -129,18 +145,18 @@ describe('Tool Descriptions', () => {
 
 describe('Tool Parameters', () => {
   it('should have required path for file_read', () => {
-    const readTool = TOOLS_DEFINITIONS.find(t => t.name === 'file_read');
+    const readTool = TOOLS_DEFINITIONS.find(t => t.name === 'read');
     expect(readTool?.parameters.required).toContain('path');
   });
 
   it('should have required path and content for file_write', () => {
-    const writeTool = TOOLS_DEFINITIONS.find(t => t.name === 'file_write');
+    const writeTool = TOOLS_DEFINITIONS.find(t => t.name === 'write');
     expect(writeTool?.parameters.required).toContain('path');
     expect(writeTool?.parameters.required).toContain('content');
   });
 
   it('should have required parameters for file_edit', () => {
-    const editTool = TOOLS_DEFINITIONS.find(t => t.name === 'file_edit');
+    const editTool = TOOLS_DEFINITIONS.find(t => t.name === 'edit');
     expect(editTool?.parameters.required).toContain('path');
     expect(editTool?.parameters.required).toContain('oldString');
     expect(editTool?.parameters.required).toContain('newString');
@@ -149,5 +165,20 @@ describe('Tool Parameters', () => {
   it('should have optional parameters for bash', () => {
     const bashTool = TOOLS_DEFINITIONS.find(t => t.name === 'bash');
     expect(bashTool?.parameters.required).toContain('command');
+  });
+
+  it('should have required parameters for file_replace', () => {
+    const replaceTool = TOOLS_DEFINITIONS.find(t => t.name === 'file_replace');
+    expect(replaceTool?.parameters.required).toContain('path');
+    expect(replaceTool?.parameters.required).toContain('pattern');
+    expect(replaceTool?.parameters.required).toContain('replacement');
+  });
+
+  it('should have optional parameters for file_insert', () => {
+    const insertTool = TOOLS_DEFINITIONS.find(t => t.name === 'file_insert');
+    expect(insertTool?.parameters.required).toBeUndefined();
+    expect(insertTool?.parameters.properties.line).toBeDefined();
+    expect(insertTool?.parameters.properties.after).toBeDefined();
+    expect(insertTool?.parameters.properties.before).toBeDefined();
   });
 });

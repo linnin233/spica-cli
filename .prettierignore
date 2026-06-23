@@ -1,0 +1,24 @@
+# Prettier 忽略文件
+# 不格式化的文件/目录
+
+# 依赖
+node_modules/
+
+# 构建产物
+dist/
+build/
+
+# 测试覆盖率
+coverage/
+
+# 日志和临时文件
+*.log
+*.tmp
+
+# Markdown（保持原格式）
+*.md
+
+# 数据文件
+*.json
+!package.json
+!.prettierrc

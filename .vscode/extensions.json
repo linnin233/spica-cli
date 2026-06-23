@@ -1,0 +1,13 @@
+{
+  // 推荐安装的扩展
+  "recommendations": [
+    // ESLint - 代码检查
+    "dbaeumer.vscode-eslint",
+
+    // EditorConfig - 统一格式化规则
+    "editorconfig.editorconfig",
+
+    // Prettier - 代码格式化（可选）
+    "esbenp.prettier-vscode"
+  ]
+}

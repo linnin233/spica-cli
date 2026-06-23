@@ -8,13 +8,12 @@ import { InputQueue } from './ui/queue';
  */
 export async function autoDrainQueue(
   queue: InputQueue,
-  handler: (mergedInput: string) => Promise<void>,
+  handler: (mergedInput: string) => Promise<void>
 ): Promise<boolean> {
   if (!queue.hasPending()) {
     return false;
   }
 
-  const pendingCount = queue.getPending().length;
   const merged = queue.mergePending();
 
   await handler(merged);

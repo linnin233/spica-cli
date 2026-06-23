@@ -41,7 +41,7 @@ describe('autoDrainQueue', () => {
 
     expect(result).toBe(true);
     expect(handler).toHaveBeenCalledTimes(1);
-    expect(handler).toHaveBeenCalledWith('task one\ntask two\ntask three');
+    expect(handler).toHaveBeenCalledWith('task one\n\n---\n\ntask two\n\n---\n\ntask three');
     expect(queue.hasPending()).toBe(false);
   });
 
@@ -64,14 +64,15 @@ describe('autoDrainQueue', () => {
     // Second call processes 'second\nthird'
     expect(handler).toHaveBeenCalledTimes(2);
     expect(handler).toHaveBeenNthCalledWith(1, 'first');
-    expect(handler).toHaveBeenNthCalledWith(2, 'second\nthird');
+    expect(handler).toHaveBeenNthCalledWith(2, 'second\n\n---\n\nthird');
     expect(queue.hasPending()).toBe(false);
   });
 
   it('handles handler rejection without blocking subsequent drains', async () => {
     queue.add('before-error');
     queue.add('after-error');
-    const handler = vi.fn()
+    const handler = vi
+      .fn()
       .mockRejectedValueOnce(new Error('fail'))
       .mockResolvedValueOnce(undefined);
 

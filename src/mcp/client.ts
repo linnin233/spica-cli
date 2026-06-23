@@ -5,13 +5,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { EventEmitter } from 'events';
-import fs from 'fs-extra';
-import { join } from 'path';
-import {
-  GLOBAL_DIR,
-  MCPServerConfig,
-  loadGlobalSettings,
-} from '../utils/settings';
+import { MCPServerConfig, loadGlobalSettings } from '../utils/settings';
 
 // MCPTool 定义（仅在本模块使用）
 export interface MCPTool {
@@ -19,7 +13,7 @@ export interface MCPTool {
   description: string;
   inputSchema: {
     type: 'object';
-    properties: Record<string, any>;
+    properties: Record<string, unknown>;
     required?: string[];
   };
 }
@@ -61,7 +55,7 @@ export class MCPManager extends EventEmitter {
 
   // 连接单个服务器
   async connectServer(config: MCPServerConfig): Promise<void> {
-    let transport: any;
+    let transport: StdioClientTransport | SSEClientTransport;
 
     if (config.command) {
       // Stdio模式 - StdioClientTransport 会自动启动进程
@@ -77,34 +71,42 @@ export class MCPManager extends EventEmitter {
         command: config.command,
         args: config.args || [],
         env: { ...safeEnv, ...config.env } as Record<string, string>,
-        stderr: 'pipe',  // 捕获stderr
+        stderr: 'pipe', // 捕获stderr
       });
-
     } else if (config.url) {
       // SSE模式 - HTTP连接，支持自定义 headers (OAuth token 等)
-      const sseOptions: any = {};
+      const sseOptions: { requestInit?: { headers: Record<string, string> } } = {};
       if (config.headers) {
         sseOptions.requestInit = { headers: config.headers };
       }
       transport = new SSEClientTransport(new URL(config.url), sseOptions);
-
     } else {
       throw new Error(`MCP server ${config.name} needs either command or url`);
     }
 
-    const client = new Client(
-      { name: 'spica-mcp-client', version: '1.0.0' },
-      { capabilities: {} }
-    );
+    const client = new Client({ name: 'spica-mcp-client', version: '1.0.0' }, { capabilities: {} });
 
     await client.connect(transport);
     this.clients.set(config.name, client);
 
-    // 监听stderr日志（通过transport.stderr获取）
-    if (config.command && transport.stderr) {
-      transport.stderr.on('data', (data: Buffer) => {
-        this.emit('server_log', { name: config.name, log: data.toString() });
-      });
+    // 监听stderr日志（通过transport.stderr获取，仅 Stdio 模式）
+    if (transport instanceof StdioClientTransport) {
+      const stdioTransport = transport as StdioClientTransport;
+      if (
+        (
+          stdioTransport as unknown as {
+            stderr?: { on?: (event: string, cb: (data: Buffer) => void) => void };
+          }
+        ).stderr
+      ) {
+        (
+          stdioTransport as unknown as {
+            stderr: { on: (event: string, cb: (data: Buffer) => void) => void };
+          }
+        ).stderr.on('data', (data: Buffer) => {
+          this.emit('server_log', { name: config.name, log: data.toString() });
+        });
+      }
     }
 
     // 获取工具列表
@@ -118,7 +120,7 @@ export class MCPManager extends EventEmitter {
           tool: {
             name: fullName,
             description: tool.description || '',
-            inputSchema: tool.inputSchema as any,
+            inputSchema: tool.inputSchema as MCPTool['inputSchema'],
           },
         });
       }
@@ -131,7 +133,10 @@ export class MCPManager extends EventEmitter {
   }
 
   // 调用MCP工具
-  async callTool(fullName: string, args: Record<string, any>): Promise<{ success: boolean; output: string; error?: string }> {
+  async callTool(
+    fullName: string,
+    args: Record<string, unknown>
+  ): Promise<{ success: boolean; output: string; error?: string }> {
     // 解析服务器名和工具名
     const [serverName, toolName] = fullName.split('/');
     if (!serverName || !toolName) {
@@ -153,21 +158,28 @@ export class MCPManager extends EventEmitter {
       if (result.content) {
         const contentArray = result.content as unknown[];
         const textContent = contentArray
-          .filter((c: any) => c.type === 'text')
-          .map((c: any) => c.text)
+          .filter((c): c is { type: 'text'; text: string } => {
+            if (c && typeof c === 'object' && c !== null && 'type' in c && 'text' in c) {
+              const obj = c as { type: string; text: string };
+              return obj.type === 'text';
+            }
+            return false;
+          })
+          .map(c => c.text)
           .join('\n');
         return { success: !result.isError, output: textContent };
       }
 
       return { success: true, output: 'Tool executed successfully' };
-    } catch (error: any) {
-      return { success: false, output: '', error: error.message };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { success: false, output: '', error: message };
     }
   }
 
   // 断开所有连接
   async disconnectAll(): Promise<void> {
-    for (const [name, client] of this.clients) {
+    for (const [_name, client] of this.clients) {
       try {
         await client.close();
       } catch {
