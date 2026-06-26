@@ -60,7 +60,6 @@ spica-cli/
 │   ├── utils/                # Utilities (session, settings, config)
 │   └── __tests__/            # Tests (mirrors src structure)
 ├── docs/                     # Documentation
-│   ├── architecture.mermaid  # Architecture diagram source
 │   ├── MANUAL.md             # User manual
 │   ├── CONTRIBUTING.md       # This file
 │   └── superpowers/          # Skill specs + design docs
@@ -129,7 +128,7 @@ Reviewers should check:
 
 #### Documentation
 - [ ] MANUAL.md updated if user-facing
-- [ ] README.md + architecture.mermaid updated if structural
+- [ ] README.md + CLAUDE.md updated if structural
 - [ ] Comments for complex code
 
 ## Testing Guidelines
@@ -205,7 +204,7 @@ on('my_event', (data) => {
 });
 ```
 
-3. Document in README.md and docs/architecture.mermaid
+3. Document in README.md and CLAUDE.md
 
 ## Release Process
 
@@ -218,7 +217,7 @@ on('my_event', (data) => {
 ## Questions?
 
 - Check MANUAL.md for usage
-- Check README.md + docs/architecture.mermaid for design
+- Check README.md + CLAUDE.md for design
 - Check ERROR_HANDLING.md for error patterns
 - Open an issue for bugs
 - Discuss major changes before implementing
