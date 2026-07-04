@@ -44,6 +44,8 @@ import {
 } from './impl/file_manage';
 import { executeGlob } from './impl/glob';
 import { executeGrep } from './impl/grep';
+import { executeAstSearch } from './impl/ast_search';
+import { executeAstReplace } from './impl/ast_replace';
 import { executeWebSearch, executeWebFetch } from './impl/web';
 import { executeLint, executeTest } from './impl/lint_test';
 import { executeBash, executeMonitor, executeTaskStop } from './impl/bash';
@@ -480,6 +482,12 @@ export async function executeTool(
 
       case 'grep':
         return await withCache(() => executeGrep(safeArgs));
+
+      case 'ast_search':
+        return await withCache(() => executeAstSearch(safeArgs));
+
+      case 'ast_replace':
+        return await executeAstReplace(safeArgs);
 
       case 'bash':
         return await executeBash(safeArgs, eventCallback);

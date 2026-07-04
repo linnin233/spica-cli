@@ -246,6 +246,70 @@ export const TOOLS_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: 'ast_search',
+    batchHint: 'read' as const,
+    description:
+      'Search code by AST structure (not text). Pattern looks like normal code with $VAR as single-node wildcard and $$ as multi-node wildcard. Example: ast_search(pattern="console.log($$)", lang="ts") finds all console.log calls. Use this instead of grep when searching for code patterns — it understands code structure and won\'t match strings/comments.',
+    parameters: {
+      type: 'object' as const,
+      properties: {
+        pattern: {
+          type: 'string',
+          description:
+            'Code pattern with $VAR (single AST node) and $$ (zero-or-more AST nodes) as wildcards. Example: "function $NAME($$) { $$ }"',
+        },
+        lang: {
+          type: 'string',
+          description:
+            'Language: ts, tsx, js, jsx, py, rs, go, java, c, cpp, cs, rb, php, swift, html, css, json, yaml, bash, sql, etc. Auto-detected from file extension if omitted.',
+        },
+        path: {
+          type: 'string',
+          description: 'Directory or file to search (default: workspace)',
+        },
+        glob: { type: 'string', description: 'File filter (e.g., "*.ts")' },
+        maxResults: { type: 'number', description: 'Max results (default: 50)' },
+      },
+      required: ['pattern'],
+    },
+  },
+  {
+    name: 'ast_replace',
+    batchHint: 'write' as const,
+    description:
+      'Replace code by AST structure — only hits real code nodes, not strings or comments. DRY RUN by default: returns what would change without modifying files. Set confirm:true to actually apply changes. Example: ast_replace(pattern="var $X = $Y", rewrite="const $X = $Y", lang="ts", confirm:true) safely renames var to const.',
+    parameters: {
+      type: 'object' as const,
+      properties: {
+        pattern: {
+          type: 'string',
+          description:
+            'Code pattern to find. Uses $VAR for single-node wildcards, $$ for multi-node wildcards.',
+        },
+        rewrite: {
+          type: 'string',
+          description: 'Replacement code. Use $VAR to reference captured meta variables.',
+        },
+        lang: {
+          type: 'string',
+          description:
+            'Language: ts, tsx, js, jsx, py, rs, go, java, c, cpp, cs, rb, php, swift, html, css, json, yaml, bash, sql, etc. Auto-detected from file extension if omitted.',
+        },
+        path: {
+          type: 'string',
+          description: 'Directory or file to search (default: workspace)',
+        },
+        glob: { type: 'string', description: 'File filter (e.g., "*.ts")' },
+        confirm: {
+          type: 'boolean',
+          description:
+            'MUST be true to actually modify files. Without it, only previews what would change.',
+        },
+      },
+      required: ['pattern', 'rewrite'],
+    },
+  },
+  {
     name: 'bash',
     batchHint: 'write' as const,
     description: 'Run shell command. For dev servers (bun run, npm run dev, python -m http.server) and ANY command expected to run >10s, you MUST set detached:true. Foreground bash blocks the agent — use ONLY for quick commands (<10s expected). Use sandbox:true for untrusted commands (requires bubblewrap).',

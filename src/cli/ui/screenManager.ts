@@ -750,11 +750,12 @@ export class ScreenManager {
   }
 
   handleInput(data: string): boolean {
-    // Workspace toggle: Ctrl+Tab / Ctrl+Shift+Tab
+    // Workspace toggle: Ctrl+Tab / Ctrl+Shift+Tab / Shift+Tab
     const isToggleSeq = (
       data === '\x1b[1;5I' ||
       data === '\x1b[27;5;9~' ||
-      data === '\x1b[27;6;9~'
+      data === '\x1b[27;6;9~' ||
+      data === '\x1b[Z'
     );
     if (isToggleSeq) {
       this.toggleWorkspace();

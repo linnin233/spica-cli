@@ -26,8 +26,8 @@ describe('Tools System Core Tests', () => {
   });
 
   describe('Tools Definitions', () => {
-    it('should have 28+ tools defined', () => {
-      expect(TOOLS_DEFINITIONS.length).toBeGreaterThanOrEqual(28);
+    it('should have 30+ tools defined', () => {
+      expect(TOOLS_DEFINITIONS.length).toBeGreaterThanOrEqual(30);
     });
 
     it('should have all required tools', () => {
@@ -290,6 +290,131 @@ describe('Tools System Core Tests', () => {
 
       expect(result.success).toBe(true);
       expect(result.output).toContain('file1.txt');
+    });
+  });
+
+  describe('AST Search and Replace Tools', () => {
+    it('should search code by AST pattern', async () => {
+      await fs.writeFile(
+        join(TEST_DIR, 'test.ts'),
+        'const x = 1;\nconsole.log("Hello World");\nconst y = 2;\nconsole.log("Another log");\n'
+      );
+
+      const result = await executeTool('ast_search', {
+        pattern: 'console.log($A)',
+        lang: 'ts',
+        path: TEST_DIR,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.output).toContain('console.log("Hello World")');
+      expect(result.output).toContain('console.log("Another log")');
+    });
+
+    it('should capture meta variables in AST search', async () => {
+      await fs.writeFile(
+        join(TEST_DIR, 'test.ts'),
+        'const x = 1;\nconst y = 2;\n'
+      );
+
+      const result = await executeTool('ast_search', {
+        pattern: 'const $VAR = $VALUE',
+        lang: 'ts',
+        path: TEST_DIR,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.output).toContain('x');
+      expect(result.output).toContain('y');
+    });
+
+    it('should report no matches for AST search', async () => {
+      await fs.writeFile(
+        join(TEST_DIR, 'test.ts'),
+        'console.error("test");\n'
+      );
+
+      const result = await executeTool('ast_search', {
+        pattern: 'console.log($A)',
+        lang: 'ts',
+        path: TEST_DIR,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.output).toContain('No matches found');
+    });
+
+    it('should do dry-run replace (no confirm)', async () => {
+      await fs.writeFile(
+        join(TEST_DIR, 'test.ts'),
+        'var a = 1;\nvar b = 2;\n'
+      );
+
+      const result = await executeTool('ast_replace', {
+        pattern: 'var $X = $Y',
+        rewrite: 'const $X = $Y',
+        lang: 'ts',
+        path: TEST_DIR,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.output).toContain('would replace');
+      // 文件不应该被修改
+      const content = await fs.readFile(join(TEST_DIR, 'test.ts'), 'utf-8');
+      expect(content).toContain('var a = 1');
+    });
+
+    it('should replace with confirm:true', async () => {
+      await fs.writeFile(
+        join(TEST_DIR, 'test.ts'),
+        'var a = 1;\nvar b = 2;\n'
+      );
+
+      const result = await executeTool('ast_replace', {
+        pattern: 'var $X = $Y',
+        rewrite: 'const $X = $Y',
+        lang: 'ts',
+        path: TEST_DIR,
+        confirm: true,
+      });
+
+      expect(result.success).toBe(true);
+      const content = await fs.readFile(join(TEST_DIR, 'test.ts'), 'utf-8');
+      expect(content).toContain('const a = 1');
+      expect(content).not.toContain('var a = 1');
+    });
+
+    it('should handle ast_replace with no matches', async () => {
+      await fs.writeFile(
+        join(TEST_DIR, 'test.ts'),
+        'const x = 1;\n'
+      );
+
+      const result = await executeTool('ast_replace', {
+        pattern: 'var $X = $Y',
+        rewrite: 'const $X = $Y',
+        lang: 'ts',
+        path: TEST_DIR,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.output).toContain('No matches');
+    });
+
+    it('should auto-detect language from file extension', async () => {
+      await fs.writeFile(
+        join(TEST_DIR, 'test.ts'),
+        'const x = 1;\nconsole.log("Hello");\n'
+      );
+
+      const result = await executeTool('ast_search', {
+        pattern: 'console.log($A)',
+        path: TEST_DIR,
+        glob: '*.ts',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.output).toContain('console.log');
     });
   });
 
