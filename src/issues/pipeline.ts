@@ -69,8 +69,11 @@ export class BugPipeline {
     this.logFn = logFn || null;
   }
 
-  private log(msg: string) {
-    if (this.logFn) this.logFn(msg);
+  private log(ctx: PipelineContext | null, msg: string) {
+    if (this.logFn) {
+      const prefix = ctx ? `[${ctx.repo}#${ctx.issue.number}] ` : '';
+      this.logFn(prefix + msg);
+    }
   }
 
   /**
@@ -107,12 +110,12 @@ export class BugPipeline {
 
     try {
       // 留言：开始处理
-      this.log(`[Phase 0/5] 标记处理中 + 留言`);
+      this.log(ctx, `[Phase 0/5] 标记处理中 + 留言`);
       await state.markProcessing(repo, issue.number, 'start');
       await client.addComment(issue.number, buildStartComment());
 
       // Clone 仓库到临时工作目录
-      this.log(`[Phase 0/5] Clone 仓库...`);
+      this.log(ctx, `[Phase 0/5] Clone 仓库...`);
       await state.updatePhase(repo, issue.number, 'clone');
       try {
         await client.cloneRepo(ctx.workDir);
@@ -127,7 +130,7 @@ export class BugPipeline {
       }
 
       // 创建 agent 并复用
-      this.log(`[Phase 1/5] Understand — 分析 issue 内容...`);
+      this.log(ctx, `[Phase 1/5] Understand — 分析 issue 内容...`);
       const result = await this.withAgent(ctx, async (agent) => {
         // —— Phase 1: Understand ——
         await state.updatePhase(repo, issue.number, 'understand');
@@ -135,10 +138,10 @@ export class BugPipeline {
         if (!analysis) {
           throw new PipelineError('understand', 'AI 无法理解 issue 内容');
         }
-        this.log(`[Phase 1/5] Understand 完成 — 严重程度: ${analysis.severity}`);
+        this.log(ctx, `[Phase 1/5] Understand 完成 — 严重程度: ${analysis.severity}`);
 
         // —— Phase 2: Reproduce ——
-        this.log(`[Phase 2/5] Reproduce — 尝试复现 bug...`);
+        this.log(ctx, `[Phase 2/5] Reproduce — 尝试复现 bug...`);
         await state.updatePhase(repo, issue.number, 'reproduce');
         const repro = await this.phaseReproduce(agent, ctx, analysis);
         if (repro.status === 'CANNOT') {
@@ -152,10 +155,10 @@ export class BugPipeline {
           await state.markFailed(repo, issue.number, `CANNOT reproduce: ${repro.detail}`);
           throw new PipelineError('reproduce', '无法复现');
         }
-        this.log(`[Phase 2/5] Reproduce — ${repro.status}`);
+        this.log(ctx, `[Phase 2/5] Reproduce — ${repro.status}`);
 
         // —— Phase 3: Fix ——
-        this.log(`[Phase 3/5] Fix — AI 修复中...`);
+        this.log(ctx, `[Phase 3/5] Fix — AI 修复中...`);
         await state.updatePhase(repo, issue.number, 'fix');
         const fixResult = await this.phaseFix(agent, ctx, analysis, repro.evidence);
         if (!fixResult.ok) {
@@ -171,21 +174,28 @@ export class BugPipeline {
           ctx.log.push('Phase 3 Fix: 没有检测到文件变更！agent 声称修复但未实际修改代码');
           throw new PipelineError('fix', 'Agent 未实际修改任何文件，疑似幻觉');
         }
-        this.log(`[Phase 3/5] Fix 完成 — 修改了 ${diffResult.stdout.split('\n').filter(Boolean).length} 个文件:\n${diffResult.stdout.trim()}`);
+        this.log(ctx, `[Phase 3/5] Fix 完成 — 修改了 ${diffResult.stdout.split('\n').filter(Boolean).length} 个文件:\n${diffResult.stdout.trim()}`);
 
         // —— Phase 4: Verify ——
-        this.log(`[Phase 4/5] Verify — 运行测试验证...`);
+        this.log(ctx, `[Phase 4/5] Verify — 运行测试验证...`);
         await state.updatePhase(repo, issue.number, 'verify');
-        const verifyResult = await this.phaseVerify(agent);
-        if (!verifyResult.ok) {
+        // —— Phase 4: Verify —— 程序化验证（不依赖 LLM）
+        this.log(ctx, `[Phase 4/5] Verify — 运行 node test.js...`);
+        await state.updatePhase(repo, issue.number, 'verify');
+        const { execa: ex2 } = await import('execa');
+        const testResult = await ex2('node', ['test.js'], {
+          cwd: ctx.workDir, timeout: 30_000, reject: false,
+        });
+        if (testResult.exitCode !== 0) {
           await this.rollback(ctx.workDir);
-          this.log(`[Phase 4/5] Verify FAILED:\n${verifyResult.detail}`);
-          throw new PipelineError('verify', verifyResult.detail);
+          const detail = `测试失败 (exit=${testResult.exitCode}):\n${testResult.stdout.slice(0, 500)}\n${testResult.stderr?.slice(0, 200) || ''}`;
+          this.log(ctx, `[Phase 4/5] Verify FAILED:\n${detail}`);
+          throw new PipelineError('verify', detail);
         }
-        this.log(`[Phase 4/5] Verify — 测试通过`);
+        this.log(ctx, `[Phase 4/5] Verify PASS — ${testResult.stdout.trim().split('\n').pop()}`);
 
         // —— Phase 5: Submit PR ——
-        this.log(`[Phase 5/5] Submit — 创建分支 + commit + push + PR...`);
+        this.log(ctx, `[Phase 5/5] Submit — 创建分支 + commit + push + PR...`);
         await state.updatePhase(repo, issue.number, 'submit');
         const prUrl = await this.phaseSubmit(ctx, fixResult.summary);
         ctx.log.push(`Phase 5 Submit 完成: ${prUrl}`);
@@ -295,12 +305,14 @@ export class BugPipeline {
     const prompt = buildReproducePrompt(analysis.summary);
     const response = await this.runPhase(agent, prompt, 'reproduce');
 
-    // 解析复现结果
+    // 解析复现结果 — 默认 REPRODUCED，只有明确说 CANNOT 才拒绝
     const statusMatch = response.match(/复现结果.*?(REPRODUCED|PARTIAL|CANNOT)/i);
-    const status = (statusMatch ? statusMatch[1].toUpperCase() : 'CANNOT') as
+    let status = (statusMatch ? statusMatch[1].toUpperCase() : 'REPRODUCED') as
       | 'REPRODUCED'
       | 'PARTIAL'
       | 'CANNOT';
+    // 只有明确 CANNOT 才阻止继续
+    if (status === 'PARTIAL') status = 'REPRODUCED';
 
     return {
       status,

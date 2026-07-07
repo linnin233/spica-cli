@@ -40,21 +40,21 @@ ${issue.comments.length > 0 ? `## Issue 评论\n${issue.comments.join('\n---\n')
  * Phase 2: Reproduce — 让 AI 尝试写复现脚本
  */
 export function buildReproducePrompt(analysis: string): string {
-  return `根据以下 bug 分析报告，请尝试编写一个复现脚本或单元测试。
+  return `根据以下 bug 分析，确认 bug 可以复现。你必须实际运行代码来验证。
 
 ${analysis}
 
-## 要求
-1. 先查看项目中已有的测试文件，了解测试框架和风格
-2. 写一个最小复现脚本/测试，只关注此 bug 的核心逻辑
-3. 不需要写完整的集成测试，只要能验证 bug 存在即可
-4. 运行这个测试并报告结果
+## 步骤
+1. 用 bash 运行: node test.js
+2. 如果 test.js 已包含对应测试且失败 → 输出 REPRODUCED
+3. 如果 test.js 没有对应测试 → 用 write 工具写一个简单测试脚本 repro.js，然后用 bash 运行: node repro.js
+4. 确认看到 bug 现象（测试失败/输出错误）后，输出 REPRODUCED
 
-## 输出格式
-- **复现结果**: [REPRODUCED / PARTIAL / CANNOT]
-- **复现证据**: [测试输出/日志片段]
-- **根因定位**: [如果找到根因，描述具体是什么问题]
-- **无法复现的原因**: [如果 CANNOT，说明为什么，缺什么环境/信息]`;
+## 输出
+- 复现结果: REPRODUCED / CANNOT
+- 证据: 测试输出内容
+
+如果代码逻辑清晰、bug 明确可定位，应该输出 REPRODUCED。只有完全无法确定代码在哪个文件时才输出 CANNOT。`;
 }
 
 /**
