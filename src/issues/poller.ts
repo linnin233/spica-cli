@@ -111,10 +111,12 @@ export class IssuePoller extends EventEmitter {
 
     for (const issue of issues) {
       // 去重：跳过 state 中已处理或正在处理的
-      if (
-        this.state.isProcessed(repo, issue.number) ||
-        this.state.isProcessing(repo, issue.number)
-      ) {
+      if (this.state.isProcessed(repo, issue.number)) {
+        console.log(`  [跳过] #${issue.number} — state 中已标记 processed`);
+        continue;
+      }
+      if (this.state.isProcessing(repo, issue.number)) {
+        console.log(`  [跳过] #${issue.number} — state 中正在 processing`);
         continue;
       }
 
@@ -126,6 +128,7 @@ export class IssuePoller extends EventEmitter {
           c.body.includes('Pull Request:')
         );
         if (hasSuccessComment) {
+          console.log(`  [跳过] #${issue.number} — 已有成功 PR 评论`);
           await this.state.markProcessed(repo, issue.number);
           continue;
         }
