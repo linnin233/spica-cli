@@ -48,6 +48,16 @@ export interface PipelineContext {
   log: string[];
 }
 
+// Pipeline 内部错误（用于阶段间控制流）
+class PipelineError extends Error {
+  phase: string;
+  constructor(phase: string, message: string) {
+    super(message);
+    this.phase = phase;
+    this.name = 'PipelineError';
+  }
+}
+
 // —— Pipeline ——
 
 export class BugPipeline {
@@ -95,80 +105,86 @@ export class BugPipeline {
       await client.addComment(issue.number, buildStartComment());
       ctx.log.push('已留言 "开始处理"');
 
-      // —— Phase 1: Understand ——
-      await state.updatePhase(repo, issue.number, 'understand');
-      const analysis = await this.phaseUnderstand(ctx);
-      if (!analysis) {
-        return await this.handleFail(ctx, 'understand', 'AI 无法理解 issue 内容');
+      // Clone 仓库到临时工作目录
+      await state.updatePhase(repo, issue.number, 'clone');
+      try {
+        await client.cloneRepo(ctx.workDir);
+        // 配置 git 身份（后续 commit 需要）
+        const { execa } = await import('execa');
+        await execa('git', ['config', 'user.email', 'spica-bot@linnin.cn'], { cwd: ctx.workDir });
+        await execa('git', ['config', 'user.name', 'spica-cli[bot]'], { cwd: ctx.workDir });
+        ctx.log.push('仓库 clone 完成');
+      } catch (err) {
+        return await this.handleFail(ctx, 'clone',
+          `Clone 仓库失败: ${err instanceof Error ? err.message : String(err)}`);
       }
-      ctx.log.push(`Phase 1 Understand 完成: 严重程度=${analysis.severity}`);
 
-      // —— Phase 2: Reproduce ——
-      await state.updatePhase(repo, issue.number, 'reproduce');
-      const repro = await this.phaseReproduce(ctx, analysis);
-      if (repro.status === 'CANNOT') {
-        await client.addComment(
-          issue.number,
-          buildCannotReproduceComment(repro.detail),
-        );
-        ctx.log.push('Phase 2 Reproduce: CANNOT — 已留言请求更多信息');
+      // 创建 agent 并复用（避免每个 phase 重复 init MCP/skills）
+      const result = await this.withAgent(ctx, async (agent) => {
+        // —— Phase 1: Understand ——
+        await state.updatePhase(repo, issue.number, 'understand');
+        const analysis = await this.phaseUnderstand(agent, ctx);
+        if (!analysis) {
+          throw new PipelineError('understand', 'AI 无法理解 issue 内容');
+        }
+        ctx.log.push(`Phase 1 Understand 完成: 严重程度=${analysis.severity}`);
+
+        // —— Phase 2: Reproduce ——
+        await state.updatePhase(repo, issue.number, 'reproduce');
+        const repro = await this.phaseReproduce(agent, ctx, analysis);
+        if (repro.status === 'CANNOT') {
+          await client.addComment(issue.number, buildCannotReproduceComment(repro.detail));
+          ctx.log.push('Phase 2 Reproduce: CANNOT');
+          await notifier?.notify({
+            type: 'fix_blocked', repo,
+            issue: { number: issue.number, title: issue.title, html_url: issue.html_url },
+            error: repro.detail,
+          });
+          await state.markFailed(repo, issue.number, `CANNOT reproduce: ${repro.detail}`);
+          throw new PipelineError('reproduce', '无法复现');
+        }
+        ctx.log.push(`Phase 2 Reproduce 完成: ${repro.status}`);
+
+        // —— Phase 3: Fix ——
+        await state.updatePhase(repo, issue.number, 'fix');
+        const fixResult = await this.phaseFix(agent, ctx, analysis, repro.evidence);
+        if (!fixResult.ok) {
+          throw new PipelineError('fix', fixResult.error || '修复失败');
+        }
+        ctx.log.push('Phase 3 Fix 完成');
+
+        // —— Phase 4: Verify ——
+        await state.updatePhase(repo, issue.number, 'verify');
+        const verifyOk = await this.phaseVerify(agent);
+        if (!verifyOk) {
+          await this.rollback(ctx.workDir);
+          ctx.log.push('Phase 4 Verify 失败，代码已回退');
+          throw new PipelineError('verify', '测试未通过，已回退所有修改');
+        }
+        ctx.log.push('Phase 4 Verify 完成: 测试通过');
+
+        // —— Phase 5: Submit PR ——
+        await state.updatePhase(repo, issue.number, 'submit');
+        const prUrl = await this.phaseSubmit(ctx, fixResult.summary);
+        ctx.log.push(`Phase 5 Submit 完成: ${prUrl}`);
+
+        // 成功！
+        await client.addComment(issue.number, buildSuccessComment(prUrl, fixResult.summary));
         await notifier?.notify({
-          type: 'fix_blocked',
-          repo,
+          type: 'fix_success', repo,
           issue: { number: issue.number, title: issue.title, html_url: issue.html_url },
-          error: repro.detail,
+          prUrl, summary: fixResult.summary,
         });
-        await state.markFailed(repo, issue.number, `CANNOT reproduce: ${repro.detail}`);
-        return this.makeResult(ctx, false, 'reproduce', '无法复现');
-      }
-      ctx.log.push(`Phase 2 Reproduce 完成: ${repro.status}`);
+        await state.markProcessed(repo, issue.number);
 
-      // —— Phase 3: Fix ——
-      await state.updatePhase(repo, issue.number, 'fix');
-      const fixResult = await this.phaseFix(ctx, analysis, repro.evidence);
-      if (!fixResult.ok) {
-        return await this.handleFail(ctx, 'fix', fixResult.error || '修复失败');
-      }
-      ctx.log.push('Phase 3 Fix 完成');
-
-      // —— Phase 4: Verify ——
-      await state.updatePhase(repo, issue.number, 'verify');
-      const verifyOk = await this.phaseVerify(ctx);
-      if (!verifyOk) {
-        // 回退修改
-        await this.rollback(ctx.workDir);
-        ctx.log.push('Phase 4 Verify 失败 — 回退修改');
-        return await this.handleFail(ctx, 'verify', '验证失败：测试未通过，已回退所有修改');
-      }
-      ctx.log.push('Phase 4 Verify 完成: 所有测试通过');
-
-      // —— Phase 5: Submit PR ——
-      await state.updatePhase(repo, issue.number, 'submit');
-      const prUrl = await this.phaseSubmit(ctx, fixResult.summary);
-      ctx.log.push(`Phase 5 Submit 完成: ${prUrl}`);
-
-      // 成功！
-      await client.addComment(
-        issue.number,
-        buildSuccessComment(prUrl, fixResult.summary),
-      );
-      await notifier?.notify({
-        type: 'fix_success',
-        repo,
-        issue: { number: issue.number, title: issue.title, html_url: issue.html_url },
-        prUrl,
-        summary: fixResult.summary,
+        return { success: true, phase: 'submit' as const, issueNumber: issue.number, prUrl, log: ctx.log };
       });
-      await state.markProcessed(repo, issue.number);
 
-      return {
-        success: true,
-        phase: 'submit',
-        issueNumber: issue.number,
-        prUrl,
-        log: ctx.log,
-      };
+      return result;
     } catch (err) {
+      if (err instanceof PipelineError) {
+        return await this.handleFail(ctx, err.phase, err.message);
+      }
       const errorMsg = err instanceof Error ? err.message : String(err);
       return await this.handleFail(ctx, 'execute', `异常: ${errorMsg}`);
     } finally {
@@ -177,9 +193,49 @@ export class BugPipeline {
     }
   }
 
+  // —— Shared agent（整个流水线复用，避免重复 init）——
+
+  private async withAgent<T>(
+    ctx: PipelineContext,
+    fn: (agent: SpicaAgent) => Promise<T>,
+  ): Promise<T> {
+    const agent = new SpicaAgent(ctx.providerName, ctx.workDir);
+    try {
+      // 轻量初始化：跳过 MCP/skills，只需要 LLM + tools
+      await agent.initLightweight(ctx.providerName);
+      return await fn(agent);
+    } finally {
+      agent.dispose();
+    }
+  }
+
+  /** 调用 agent.runLoop 执行一次 LLM 任务 */
+  private async runPhase(
+    agent: SpicaAgent,
+    prompt: string,
+    phase: string,
+    timeoutMs = 120_000,   // 默认 2 分钟，测试用
+  ): Promise<string> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      controller.abort();
+      agent.interrupt();
+    }, timeoutMs);
+
+    try {
+      const result = await agent.runLoop(prompt);
+      clearTimeout(timer);
+      return result || '';
+    } catch (err) {
+      clearTimeout(timer);
+      throw err;
+    }
+  }
+
   // —— Phase 1: Understand ——
 
   private async phaseUnderstand(
+    agent: SpicaAgent,
     ctx: PipelineContext,
   ): Promise<{ severity: string; summary: string } | null> {
     const { issue } = ctx;
@@ -198,7 +254,7 @@ export class BugPipeline {
       comments: comments.map(c => `@${c.user.login}: ${c.body}`),
     });
 
-    const response = await this.callAgent(ctx, prompt, 'understand');
+    const response = await this.runPhase(agent, prompt, 'understand');
 
     // 解析 AI 输出获取 severity
     const sevMatch = response.match(/严重程度.*?\[(critical|major|minor)\]/i);
@@ -210,11 +266,12 @@ export class BugPipeline {
   // —— Phase 2: Reproduce ——
 
   private async phaseReproduce(
+    agent: SpicaAgent,
     ctx: PipelineContext,
     analysis: { severity: string; summary: string },
   ): Promise<{ status: 'REPRODUCED' | 'PARTIAL' | 'CANNOT'; evidence: string; detail: string }> {
     const prompt = buildReproducePrompt(analysis.summary);
-    const response = await this.callAgent(ctx, prompt, 'reproduce');
+    const response = await this.runPhase(agent, prompt, 'reproduce');
 
     // 解析复现结果
     const statusMatch = response.match(/复现结果.*?(REPRODUCED|PARTIAL|CANNOT)/i);
@@ -235,6 +292,7 @@ export class BugPipeline {
   // —— Phase 3: Fix ——
 
   private async phaseFix(
+    agent: SpicaAgent,
     ctx: PipelineContext,
     analysis: { severity: string; summary: string },
     reproEvidence: string,
@@ -249,7 +307,7 @@ export class BugPipeline {
       reproEvidence,
     );
 
-    const response = await this.callAgent(ctx, prompt, 'fix', 1_800_000); // 30 min timeout
+    const response = await this.runPhase(agent, prompt, 'fix', 300_000); // 5 min timeout
 
     // 检查是否修复成功（不含 failure indicators）
     const failureIndicators = [
@@ -269,15 +327,15 @@ export class BugPipeline {
 
     return {
       ok: true,
-      summary: response.slice(0, 3000), // PR 摘要
+      summary: response.slice(0, 3000),
     };
   }
 
   // —— Phase 4: Verify ——
 
-  private async phaseVerify(ctx: PipelineContext): Promise<boolean> {
+  private async phaseVerify(agent: SpicaAgent): Promise<boolean> {
     const prompt = buildVerifyPrompt();
-    const response = await this.callAgent(ctx, prompt, 'verify', 600_000); // 10 min timeout
+    const response = await this.runPhase(agent, prompt, 'verify', 120_000); // 2 min timeout
 
     return response.toUpperCase().includes('VERIFIED') &&
       !response.toUpperCase().includes('FAILED');
@@ -334,39 +392,6 @@ export class BugPipeline {
   }
 
   // —— Helper ——
-
-  /** 调用 SpicaAgent 执行 AI 任务 */
-  private async callAgent(
-    ctx: PipelineContext,
-    prompt: string,
-    phase: string,
-    timeoutMs = 300_000, // default 5 min
-  ): Promise<string> {
-    return new Promise<string>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        agent.interrupt();
-        reject(new Error(`Phase ${phase} 超时 (${timeoutMs / 1000}s)`));
-      }, timeoutMs);
-
-      const agent = new SpicaAgent(ctx.providerName, ctx.workDir);
-
-      const initAndRun = async () => {
-        try {
-          await agent.init();
-          const result = await agent.runLoop(prompt);
-          clearTimeout(timer);
-          resolve(result || '');
-        } catch (err) {
-          clearTimeout(timer);
-          reject(err);
-        } finally {
-          agent.dispose();
-        }
-      };
-
-      initAndRun();
-    });
-  }
 
   /** 处理失败：留言 + 邮件 + 标记 */
   private async handleFail(

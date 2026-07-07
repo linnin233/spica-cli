@@ -37,6 +37,7 @@ import { recordToolUsage } from './tools/analytics';
 import {
   initAgent,
   initAgentAsSubAgent,
+  initAgentLightweight,
   doInit,
   loadProjectConfig as _loadProjectConfig,
 } from './core/init';
@@ -715,6 +716,11 @@ export class SpicaAgent extends EventEmitter {
    */
   async initAsSubAgent(parentAgent: SpicaAgent, modelOverride?: string): Promise<void> {
     return initAgentAsSubAgent(this, parentAgent, modelOverride);
+  }
+
+  /** 轻量初始化：仅创建 LLM 客户端，跳过 MCP/skills/session */
+  async initLightweight(providerName?: string, modelOverride?: string): Promise<void> {
+    return initAgentLightweight(this, providerName, modelOverride);
   }
 
   private async _doInit(): Promise<void> {

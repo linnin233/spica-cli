@@ -123,6 +123,39 @@ export async function initAgentAsSubAgent(
   agent.stateMachine.transition('idle');
 }
 
+/**
+ * 轻量初始化：仅创建 LLM 客户端，跳过 MCP/skills/session 加载
+ * 适用于 pipeline 等不需要完整 agent 功能的场景
+ */
+export async function initAgentLightweight(
+  agent: SpicaAgent,
+  providerName?: string,
+  modelOverride?: string,
+): Promise<void> {
+  if (agent.isInitialized()) return;
+
+  agent.stateMachine.transition('initializing');
+
+  const name = providerName || agent.getProviderName();
+  const config = await getProviderConfig(name);
+  const resolvedModel = resolveModel(config, modelOverride);
+
+  const newLlm = new LLMClient({
+    provider: name || 'openai',
+    apiKey: config.apiKey,
+    baseUrl: config.baseUrl,
+    model: resolvedModel,
+    name: config.name,
+  });
+  agent.setLLM(newLlm);
+
+  // 使用精简系统提示（不含 CLI 命令、skills 列表等）
+  newLlm.setSystemPrompt(SUB_AGENT_SYSTEM_PROMPT);
+
+  agent.setInitialized(true);
+  agent.stateMachine.transition('idle');
+}
+
 export async function doInit(agent: SpicaAgent): Promise<void> {
   // 初始化Skills（首次运行时复制默认包）
   await initSkills();

@@ -28,9 +28,16 @@ function getStateFile(): string {
 export function registerIssueCommands(program: Command): void {
   const issueCmd = program
     .command('issue')
-    .description('Auto issue handler — 自动处理 GitHub issues');
+    .description('Auto issue handler -- 自动处理 GitHub issues');
 
-  // spica issue daemon — 后台守护轮询
+  // 辅助函数：解析 provider name（优先 CLI 参数，然后 settings 默认值，最后 "openai"）
+  async function resolveProvider(cliProvider?: string): Promise<string> {
+    if (cliProvider) return cliProvider;
+    const settings = await loadGlobalSettings();
+    return settings.defaultProvider || 'openai';
+  }
+
+  // spica issue daemon -- 后台守护轮询
   issueCmd
     .command('daemon')
     .description('启动后台轮询，持续处理 issues')
@@ -62,9 +69,9 @@ export function registerIssueCommands(program: Command): void {
       await state.save();
 
       // 创建流水线
-      const pipeline = new BugPipeline(options.provider);
+      const pipeline = new BugPipeline(await resolveProvider(options.provider));
 
-      // 创建轮询器
+      // 创建轮询器（daemon）
       const poller = new IssuePoller(github.token, {
         repos: github.repos,
         labels: github.labels,
@@ -137,7 +144,7 @@ export function registerIssueCommands(program: Command): void {
       const state = new IssueStateManager(getStateFile());
       await state.load();
 
-      const pipeline = new BugPipeline(options.provider);
+      const pipeline = new BugPipeline(await resolveProvider(options.provider));
       const poller = new IssuePoller(github.token, {
         repos,
         labels: github.labels,
@@ -209,7 +216,7 @@ export function registerIssueCommands(program: Command): void {
         return;
       }
 
-      const pipeline = new BugPipeline(options.provider);
+      const pipeline = new BugPipeline(await resolveProvider(options.provider));
       const result = await pipeline.execute(client, repo, issue, notifier, state);
 
       if (result.success) {
