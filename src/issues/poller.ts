@@ -58,11 +58,16 @@ export class IssuePoller extends EventEmitter {
     console.log('[IssuePoller] 已停止');
   }
 
+  /** 标记每个仓库是否已完成首次扫描 */
+  private firstScanDone: Map<string, boolean> = new Map();
+
   /** 为单个仓库安排定时轮询 */
   private scheduleRepo(repo: string): void {
+    this.firstScanDone.set(repo, false);
+
     const poll = async () => {
       try {
-        await this.pollRepo(repo);
+        await this.pollRepo(repo, !this.firstScanDone.get(repo));
       } catch (err) {
         this.emit('poll_error', {
           repo,
@@ -71,7 +76,7 @@ export class IssuePoller extends EventEmitter {
       }
     };
 
-    // 启动时立刻执行一次
+    // 启动时立刻执行一次（首次扫描不传 since，获取所有历史 issues）
     poll();
 
     // 然后定时执行
@@ -80,14 +85,15 @@ export class IssuePoller extends EventEmitter {
   }
 
   /** 对单个仓库执行一次轮询 */
-  private async pollRepo(repo: string): Promise<void> {
+  private async pollRepo(repo: string, isFirstScan = false): Promise<void> {
     const client = new GitHubClient(this.token, repo);
-    const lastCheck = this.state.getLastCheck(repo);
 
-    // 拉取 issues
+    // 首次扫描不传 since，获取所有未处理的 issues
+    const since = isFirstScan ? undefined : this.state.getLastCheck(repo);
+
     let issues: GitHubIssue[];
     try {
-      issues = await client.listIssues(this.config.labels, lastCheck);
+      issues = await client.listIssues(this.config.labels, since);
     } catch (err) {
       this.emit('poll_error', {
         repo,
@@ -109,8 +115,11 @@ export class IssuePoller extends EventEmitter {
       newIssues.push(issue);
     }
 
-    // 更新最后检查时间
+    // 更新最后检查时间，首次扫描完成后标记
     await this.state.setLastCheck(repo, new Date().toISOString());
+    if (isFirstScan) {
+      this.firstScanDone.set(repo, true);
+    }
 
     if (newIssues.length > 0) {
       console.log(`[IssuePoller] ${repo}: 发现 ${newIssues.length} 个新 issues`);
