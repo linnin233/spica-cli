@@ -176,11 +176,11 @@ export class BugPipeline {
         // —— Phase 4: Verify ——
         this.log(`[Phase 4/5] Verify — 运行测试验证...`);
         await state.updatePhase(repo, issue.number, 'verify');
-        const verifyOk = await this.phaseVerify(agent);
-        if (!verifyOk) {
+        const verifyResult = await this.phaseVerify(agent);
+        if (!verifyResult.ok) {
           await this.rollback(ctx.workDir);
-          ctx.log.push('Phase 4 Verify 失败，代码已回退');
-          throw new PipelineError('verify', '测试未通过，已回退所有修改');
+          this.log(`[Phase 4/5] Verify FAILED:\n${verifyResult.detail}`);
+          throw new PipelineError('verify', verifyResult.detail);
         }
         this.log(`[Phase 4/5] Verify — 测试通过`);
 
@@ -355,12 +355,19 @@ export class BugPipeline {
 
   // —— Phase 4: Verify ——
 
-  private async phaseVerify(agent: SpicaAgent): Promise<boolean> {
+  private async phaseVerify(agent: SpicaAgent): Promise<{ ok: boolean; detail: string }> {
     const prompt = buildVerifyPrompt();
-    const response = await this.runPhase(agent, prompt, 'verify', 120_000); // 2 min timeout
+    const response = await this.runPhase(agent, prompt, 'verify', 120_000);
 
-    return response.toUpperCase().includes('VERIFIED') &&
+    const ok = response.toUpperCase().includes('VERIFIED') &&
       !response.toUpperCase().includes('FAILED');
+
+    return {
+      ok,
+      detail: ok
+        ? response.slice(0, 200)
+        : `Agent 验证输出:\n${response.slice(0, 1000)}`,
+    };
   }
 
   // —— Phase 5: Submit PR ——

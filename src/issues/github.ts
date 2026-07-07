@@ -175,13 +175,21 @@ export class GitHubClient {
   async cloneRepo(targetPath: string, branch?: string): Promise<void> {
     const cloneUrl = `https://x-access-token:${this.token}@github.com/${this.repo}.git`;
 
-    const args = ['clone', '--depth', '1'];
+    const args = [
+      '-c', 'credential.helper=',      // 禁止凭据管理器弹窗
+      '-c', 'core.askPass=',
+      'clone', '--depth', '1',
+    ];
     if (branch) {
       args.push('-b', branch);
     }
     args.push(cloneUrl, targetPath);
 
-    const result = await execa('git', args, { timeout: 120_000, reject: false });
+    const result = await execa('git', args, {
+      timeout: 120_000,
+      reject: false,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },  // 禁止终端交互弹窗
+    });
 
     if (result.exitCode !== 0) {
       throw new Error(`git clone 失败: ${result.stderr || result.stdout}`);
