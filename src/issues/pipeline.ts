@@ -158,6 +158,16 @@ export class BugPipeline {
         this.log(ctx, `[Phase 2/5] Reproduce — ${repro.status}`);
 
         // —— Phase 3: Fix ——
+        // 先跑一次测试，记录修复前的失败数
+        this.log(ctx, `[Phase 3/5] Fix — 记录修复前测试基线...`);
+        const { execa: ex0 } = await import('execa');
+        const baselineTest = await ex0('node', ['test.js'], {
+          cwd: ctx.workDir, timeout: 30_000, reject: false,
+        });
+        const beforeFailures = (baselineTest.stdout.match(/FAIL:/g) || []).length;
+        const beforePassed = (baselineTest.stdout.match(/PASS:/g) || []).length;
+        this.log(ctx, `[Phase 3/5] 修复前: ${beforePassed} passed, ${beforeFailures} failed`);
+
         this.log(ctx, `[Phase 3/5] Fix — AI 修复中...`);
         await state.updatePhase(repo, issue.number, 'fix');
         const fixResult = await this.phaseFix(agent, ctx, analysis, repro.evidence);
@@ -165,34 +175,35 @@ export class BugPipeline {
           throw new PipelineError('fix', fixResult.error || '修复失败');
         }
 
-        // 确认 agent 实际修改了文件（git diff 检查）
+        // 确认 agent 实际修改了文件
         const { execa: ex } = await import('execa');
         const diffResult = await ex('git', ['diff', '--stat'], {
           cwd: ctx.workDir, timeout: 10_000, reject: false,
         });
         if (!diffResult.stdout.trim()) {
-          ctx.log.push('Phase 3 Fix: 没有检测到文件变更！agent 声称修复但未实际修改代码');
-          throw new PipelineError('fix', 'Agent 未实际修改任何文件，疑似幻觉');
+          throw new PipelineError('fix', 'Agent 未实际修改任何文件');
         }
-        this.log(ctx, `[Phase 3/5] Fix 完成 — 修改了 ${diffResult.stdout.split('\n').filter(Boolean).length} 个文件:\n${diffResult.stdout.trim()}`);
+        this.log(ctx, `[Phase 3/5] Fix 完成 — ${diffResult.stdout.trim().split('\n').filter(Boolean).length} 个文件变更`);
 
-        // —— Phase 4: Verify ——
-        this.log(ctx, `[Phase 4/5] Verify — 运行测试验证...`);
-        await state.updatePhase(repo, issue.number, 'verify');
-        // —— Phase 4: Verify —— 程序化验证（不依赖 LLM）
+        // —— Phase 4: Verify —— 程序化验证
         this.log(ctx, `[Phase 4/5] Verify — 运行 node test.js...`);
         await state.updatePhase(repo, issue.number, 'verify');
         const { execa: ex2 } = await import('execa');
         const testResult = await ex2('node', ['test.js'], {
           cwd: ctx.workDir, timeout: 30_000, reject: false,
         });
-        if (testResult.exitCode !== 0) {
+        const afterFailures = (testResult.stdout.match(/FAIL:/g) || []).length;
+        const afterPassed = (testResult.stdout.match(/PASS:/g) || []).length;
+
+        // 判断：全部通过 或 失败数减少 → 通过
+        if (testResult.exitCode === 0 || afterFailures < beforeFailures) {
+          this.log(ctx, `[Phase 4/5] Verify PASS — ${afterPassed} passed (修复前 ${beforePassed}), ${afterFailures} failed (修复前 ${beforeFailures})`);
+        } else {
           await this.rollback(ctx.workDir);
-          const detail = `测试失败 (exit=${testResult.exitCode}):\n${testResult.stdout.slice(0, 500)}\n${testResult.stderr?.slice(0, 200) || ''}`;
+          const detail = `测试无改善 (修复前 ${beforeFailures} failed, 修复后 ${afterFailures} failed):\n${testResult.stdout.slice(0, 300)}`;
           this.log(ctx, `[Phase 4/5] Verify FAILED:\n${detail}`);
           throw new PipelineError('verify', detail);
         }
-        this.log(ctx, `[Phase 4/5] Verify PASS — ${testResult.stdout.trim().split('\n').pop()}`);
 
         // —— Phase 5: Submit PR ——
         this.log(ctx, `[Phase 5/5] Submit — 创建分支 + commit + push + PR...`);

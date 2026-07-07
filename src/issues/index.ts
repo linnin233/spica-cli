@@ -78,32 +78,40 @@ export function registerIssueCommands(program: Command): void {
         pollInterval: github.pollInterval,
       }, state);
 
+      // 同仓库串行队列：防止并行处理时互相覆盖修改
+      const repoQueues: Record<string, Promise<void>> = {};
+
       // 绑定事件：新 issue → 流水线处理
       poller.on('new_issue', async ({ repo, issue }) => {
         console.log(
           `[新 Issue] ${repo}#${issue.number}: ${issue.title.slice(0, 80)}`,
         );
 
-        try {
-          const client = new GitHubClient(github.token, repo);
-          const result = await pipeline.execute(
-            client, repo, issue, notifier, state,
-          );
-
-          if (result.success) {
-            console.log(
-              COLORS.success(`[OK] #${issue.number} → ${result.prUrl}`),
+        // 获取或创建该仓库的处理队列（串行）
+        const prev = repoQueues[repo] || Promise.resolve();
+        const task = prev.then(async () => {
+          try {
+            const client = new GitHubClient(github.token, repo);
+            const result = await pipeline.execute(
+              client, repo, issue, notifier, state,
             );
-          } else {
-            console.log(
-              COLORS.error(`[FAIL] #${issue.number}: ${result.error}`),
+
+            if (result.success) {
+              console.log(
+                COLORS.success(`[OK] #${issue.number} → ${result.prUrl}`),
+              );
+            } else {
+              console.log(
+                COLORS.error(`[FAIL] #${issue.number}: ${result.error}`),
+              );
+            }
+          } catch (err) {
+            console.error(
+              COLORS.error(`处理 issue #${issue.number} 异常: ${err instanceof Error ? err.message : String(err)}`),
             );
           }
-        } catch (err) {
-          console.error(
-            COLORS.error(`处理 issue #${issue.number} 异常: ${err instanceof Error ? err.message : String(err)}`),
-          );
-        }
+        });
+        repoQueues[repo] = task;
       });
 
       // 绑定错误事件
