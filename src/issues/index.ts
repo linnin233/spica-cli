@@ -69,7 +69,7 @@ export function registerIssueCommands(program: Command): void {
       await state.save();
 
       // 创建流水线
-      const pipeline = new BugPipeline(await resolveProvider(options.provider));
+      const pipeline = new BugPipeline(await resolveProvider(options.provider), msg => console.log(`  ${msg}`));
 
       // 创建轮询器（daemon）
       const poller = new IssuePoller(github.token, {
@@ -144,7 +144,7 @@ export function registerIssueCommands(program: Command): void {
       const state = new IssueStateManager(getStateFile());
       await state.load();
 
-      const pipeline = new BugPipeline(await resolveProvider(options.provider));
+      const pipeline = new BugPipeline(await resolveProvider(options.provider), msg => console.log(`  ${msg}`));
       const poller = new IssuePoller(github.token, {
         repos,
         labels: github.labels,
@@ -216,7 +216,7 @@ export function registerIssueCommands(program: Command): void {
         return;
       }
 
-      const pipeline = new BugPipeline(await resolveProvider(options.provider));
+      const pipeline = new BugPipeline(await resolveProvider(options.provider), msg => console.log(`  ${msg}`));
       const result = await pipeline.execute(client, repo, issue, notifier, state);
 
       if (result.success) {

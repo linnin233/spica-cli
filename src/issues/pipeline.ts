@@ -62,9 +62,15 @@ class PipelineError extends Error {
 
 export class BugPipeline {
   private providerName: string;
+  private logFn: ((msg: string) => void) | null = null;
 
-  constructor(providerName?: string) {
+  constructor(providerName?: string, logFn?: (msg: string) => void) {
     this.providerName = providerName || 'default';
+    this.logFn = logFn || null;
+  }
+
+  private log(msg: string) {
+    if (this.logFn) this.logFn(msg);
   }
 
   /**
@@ -101,11 +107,12 @@ export class BugPipeline {
 
     try {
       // 留言：开始处理
+      this.log(`[Phase 0/5] 标记处理中 + 留言`);
       await state.markProcessing(repo, issue.number, 'start');
       await client.addComment(issue.number, buildStartComment());
-      ctx.log.push('已留言 "开始处理"');
 
       // Clone 仓库到临时工作目录
+      this.log(`[Phase 0/5] Clone 仓库...`);
       await state.updatePhase(repo, issue.number, 'clone');
       try {
         await client.cloneRepo(ctx.workDir);
@@ -119,7 +126,8 @@ export class BugPipeline {
           `Clone 仓库失败: ${err instanceof Error ? err.message : String(err)}`);
       }
 
-      // 创建 agent 并复用（避免每个 phase 重复 init MCP/skills）
+      // 创建 agent 并复用
+      this.log(`[Phase 1/5] Understand — 分析 issue 内容...`);
       const result = await this.withAgent(ctx, async (agent) => {
         // —— Phase 1: Understand ——
         await state.updatePhase(repo, issue.number, 'understand');
@@ -127,9 +135,10 @@ export class BugPipeline {
         if (!analysis) {
           throw new PipelineError('understand', 'AI 无法理解 issue 内容');
         }
-        ctx.log.push(`Phase 1 Understand 完成: 严重程度=${analysis.severity}`);
+        this.log(`[Phase 1/5] Understand 完成 — 严重程度: ${analysis.severity}`);
 
         // —— Phase 2: Reproduce ——
+        this.log(`[Phase 2/5] Reproduce — 尝试复现 bug...`);
         await state.updatePhase(repo, issue.number, 'reproduce');
         const repro = await this.phaseReproduce(agent, ctx, analysis);
         if (repro.status === 'CANNOT') {
@@ -143,9 +152,10 @@ export class BugPipeline {
           await state.markFailed(repo, issue.number, `CANNOT reproduce: ${repro.detail}`);
           throw new PipelineError('reproduce', '无法复现');
         }
-        ctx.log.push(`Phase 2 Reproduce 完成: ${repro.status}`);
+        this.log(`[Phase 2/5] Reproduce — ${repro.status}`);
 
         // —— Phase 3: Fix ——
+        this.log(`[Phase 3/5] Fix — AI 修复中...`);
         await state.updatePhase(repo, issue.number, 'fix');
         const fixResult = await this.phaseFix(agent, ctx, analysis, repro.evidence);
         if (!fixResult.ok) {
@@ -161,9 +171,10 @@ export class BugPipeline {
           ctx.log.push('Phase 3 Fix: 没有检测到文件变更！agent 声称修复但未实际修改代码');
           throw new PipelineError('fix', 'Agent 未实际修改任何文件，疑似幻觉');
         }
-        ctx.log.push(`Phase 3 Fix 完成 (变更: ${diffResult.stdout.split('\n').filter(Boolean).length} 个文件)`);
+        this.log(`[Phase 3/5] Fix 完成 — 修改了 ${diffResult.stdout.split('\n').filter(Boolean).length} 个文件:\n${diffResult.stdout.trim()}`);
 
         // —— Phase 4: Verify ——
+        this.log(`[Phase 4/5] Verify — 运行测试验证...`);
         await state.updatePhase(repo, issue.number, 'verify');
         const verifyOk = await this.phaseVerify(agent);
         if (!verifyOk) {
@@ -171,9 +182,10 @@ export class BugPipeline {
           ctx.log.push('Phase 4 Verify 失败，代码已回退');
           throw new PipelineError('verify', '测试未通过，已回退所有修改');
         }
-        ctx.log.push('Phase 4 Verify 完成: 测试通过');
+        this.log(`[Phase 4/5] Verify — 测试通过`);
 
         // —— Phase 5: Submit PR ——
+        this.log(`[Phase 5/5] Submit — 创建分支 + commit + push + PR...`);
         await state.updatePhase(repo, issue.number, 'submit');
         const prUrl = await this.phaseSubmit(ctx, fixResult.summary);
         ctx.log.push(`Phase 5 Submit 完成: ${prUrl}`);
