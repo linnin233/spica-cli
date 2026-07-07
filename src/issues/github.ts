@@ -51,6 +51,7 @@ export class GitHubClient {
     path: string,
     body?: unknown,
     options?: { accept?: string },
+    retries = 2,
   ): Promise<T> {
     const url = path.startsWith('http') ? path : `${this.apiBase}${path}`;
 
@@ -66,24 +67,33 @@ export class GitHubClient {
       headers['Accept'] = options.accept;
     }
 
-    const response = await fetch(url, {
-      method,
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-    });
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        const response = await fetch(url, {
+          method,
+          headers,
+          body: body ? JSON.stringify(body) : undefined,
+        });
 
-    if (!response.ok) {
-      const text = await response.text().catch(() => '');
-      throw new Error(
-        `GitHub API ${method} ${path} 返回 ${response.status}: ${text.slice(0, 200)}`,
-      );
+        if (!response.ok) {
+          const text = await response.text().catch(() => '');
+          throw new Error(
+            `GitHub API ${method} ${path} 返回 ${response.status}: ${text.slice(0, 200)}`,
+          );
+        }
+
+        if (response.status === 204) {
+          return undefined as T;
+        }
+
+        return response.json() as Promise<T>;
+      } catch (err) {
+        if (attempt === retries) throw err;
+        // 等待后重试
+        await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+      }
     }
-
-    if (response.status === 204) {
-      return undefined as T;
-    }
-
-    return response.json() as Promise<T>;
+    throw new Error('unreachable');
   }
 
   // —— Issues ——
@@ -178,6 +188,7 @@ export class GitHubClient {
     const args = [
       '-c', 'credential.helper=',      // 禁止凭据管理器弹窗
       '-c', 'core.askPass=',
+      '-c', 'http.sslBackend=openssl', // Windows schannel 有时断连, 用 openssl
       'clone', '--depth', '1',
     ];
     if (branch) {
@@ -185,15 +196,24 @@ export class GitHubClient {
     }
     args.push(cloneUrl, targetPath);
 
-    const result = await execa('git', args, {
-      timeout: 120_000,
-      reject: false,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },  // 禁止终端交互弹窗
-    });
+    // 重试 3 次（网络波动）
+    let lastError: string = '';
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const result = await execa('git', args, {
+        timeout: 120_000,
+        reject: false,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      });
 
-    if (result.exitCode !== 0) {
-      throw new Error(`git clone 失败: ${result.stderr || result.stdout}`);
+      if (result.exitCode === 0) return;
+
+      lastError = result.stderr || result.stdout;
+      if (attempt < 3) {
+        // 等待后重试
+        await new Promise(r => setTimeout(r, 3000));
+      }
     }
+    throw new Error(`git clone 失败 (重试3次): ${lastError}`);
   }
 
   /** commit 并 push 到远程分支 */
