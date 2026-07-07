@@ -52,7 +52,7 @@ export class IssuePoller extends EventEmitter {
   stop(): void {
     this.running = false;
     for (const timer of this.timers.values()) {
-      clearInterval(timer);
+      clearTimeout(timer);
     }
     this.timers.clear();
     console.log('[IssuePoller] 已停止');
@@ -76,15 +76,23 @@ export class IssuePoller extends EventEmitter {
       }
     };
 
+    // 递归定时：每次 poll 完成后等待 interval 再触发下一次，防止任务堆积
+    const scheduleNext = () => {
+      const timer = setTimeout(async () => {
+        await poll();
+        if (this.running) scheduleNext();  // 完成后才安排下一次
+      }, this.config.pollInterval * 1000);
+      this.timers.set(repo, timer);
+    };
+
     // 启动时立刻执行一次
     console.log(`[IssuePoller] ${repo}: 首次扫描开始...`);
-    poll().catch(err => {
+    poll().then(() => {
+      if (this.running) scheduleNext();
+    }).catch(err => {
       console.error(`[IssuePoller] ${repo}: 首次扫描异常:`, err.message || err);
+      if (this.running) scheduleNext();
     });
-
-    // 然后定时执行
-    const timer = setInterval(poll, this.config.pollInterval * 1000);
-    this.timers.set(repo, timer);
   }
 
   /** 对单个仓库执行一次轮询 */
