@@ -65,40 +65,31 @@ export function buildFixPrompt(issue: {
   body: string;
   number: number;
 }, analysis: string, reproEvidence: string): string {
-  return `修复以下 GitHub bug issue。这是一个真实的生产环境 bug，请认真对待。
+  return `修复以下 bug。你必须使用编辑工具实际修改代码文件。
 
-## Issue #${issue.number}: ${issue.title}
+## Bug #${issue.number}: ${issue.title}
 ${issue.body}
 
-## Bug 分析
+## 分析
 ${analysis}
 
-## 复现证据
+## 复现
 ${reproEvidence}
 
-## 修复要求
-1. 定位根因，修复导致 bug 的代码
-2. 保持最小改动原则：只改必要的地方，不重构无关代码
-3. 如果复现时有测试，确保测试通过
-4. 不要修改项目的依赖、构建配置、代码风格
-5. 修复完成后运行项目现有测试确认没有引入回归
+## 要求
+1. 用 read 工具读取需要修改的文件
+2. 用编辑工具修改代码（必须实际执行）
+3. 运行 node test.js 确认测试通过
+4. 测试全部通过后才算完成
 
-开始修复。`;
+现在开始改代码。`;
 }
 
 /**
  * Phase 4: Verify — 验证 prompt（Agent 修复后）
  */
 export function buildVerifyPrompt(): string {
-  return `请验证刚才的修复是否正确：
-
-1. 运行项目完整测试套件
-2. 运行复现脚本/测试，确认从失败变为通过
-3. 运行 lint 检查
-4. 检查是否有遗漏的边界情况
-
-如果所有检查通过，输出 "VERIFIED"。
-如果有任何失败，输出 "FAILED: <原因>" 并回退修改。`;
+  return `运行 node test.js 验证修复。如果输出显示所有测试通过（PASS），回复 VERIFIED。如果任何测试失败，回复 FAILED 并说明原因。`;
 }
 
 /**

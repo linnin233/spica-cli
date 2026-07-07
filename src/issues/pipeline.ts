@@ -151,7 +151,17 @@ export class BugPipeline {
         if (!fixResult.ok) {
           throw new PipelineError('fix', fixResult.error || '修复失败');
         }
-        ctx.log.push('Phase 3 Fix 完成');
+
+        // 确认 agent 实际修改了文件（git diff 检查）
+        const { execa: ex } = await import('execa');
+        const diffResult = await ex('git', ['diff', '--stat'], {
+          cwd: ctx.workDir, timeout: 10_000, reject: false,
+        });
+        if (!diffResult.stdout.trim()) {
+          ctx.log.push('Phase 3 Fix: 没有检测到文件变更！agent 声称修复但未实际修改代码');
+          throw new PipelineError('fix', 'Agent 未实际修改任何文件，疑似幻觉');
+        }
+        ctx.log.push(`Phase 3 Fix 完成 (变更: ${diffResult.stdout.split('\n').filter(Boolean).length} 个文件)`);
 
         // —— Phase 4: Verify ——
         await state.updatePhase(repo, issue.number, 'verify');
