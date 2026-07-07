@@ -107,15 +107,12 @@ export class IssueStateManager {
     await this.save();
   }
 
-  /** 标记为失败（记录原因） */
+  /** 标记为失败（记录原因，但不阻止重试） */
   async markFailed(repo: string, issueNum: number, reason: string): Promise<void> {
     const rs = this.getRepoState(repo);
     rs.processing = rs.processing.filter(e => e.issue !== issueNum);
     rs.failed[issueNum] = reason;
-    // 失败也标记为 processed（不再重试，除非手动清理）
-    if (!rs.processed.includes(issueNum)) {
-      rs.processed.push(issueNum);
-    }
+    // 不加入 processed，允许后续重试
     await this.save();
   }
 
