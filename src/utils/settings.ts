@@ -94,6 +94,24 @@ export interface HookResult {
 }
 
 // 统一 Settings 结构
+// GitHub Issue 自动处理配置
+export interface GithubConfig {
+  token: string;
+  repos: string[];
+  pollInterval: number;        // 轮询间隔秒数
+  labels: string[];            // 关注的 labels
+}
+
+// 邮件通知配置
+export interface EmailConfig {
+  host: string;                 // SMTP 服务器
+  port: number;                 // SMTP 端口
+  user: string;                 // 发件人账号
+  pass: string;                 // 发件人密码或授权码
+  to: string;                   // 收件人邮箱
+}
+
+// 统一 Settings 结构
 export interface Settings {
   defaultProvider?: string;
   providers?: Record<string, ProviderConfig>;
@@ -105,6 +123,8 @@ export interface Settings {
     PreToolUse?: HookDefinition[];
     PostToolUse?: HookDefinition[];
   };
+  github?: GithubConfig;        // GitHub Issue 自动处理
+  email?: EmailConfig;          // 邮件通知
 }
 
 export const DEFAULT_BASE_URLS: Record<string, string> = {};
@@ -436,4 +456,40 @@ export async function setDefaultProvider(name: string): Promise<void> {
 
   settings.defaultProvider = name;
   await saveGlobalSettings(settings);
+}
+
+// —— GitHub / Email config helpers ——
+
+/**
+ * 读取 GitHub 配置，env var 优先于文件配置
+ * 返回 null 表示未配置，issue 功能不启用
+ */
+export function getGithubConfig(settings: Settings): GithubConfig | null {
+  const token = process.env.GITHUB_TOKEN || settings.github?.token;
+  if (!token) return null;
+  return {
+    token,
+    repos: settings.github?.repos || [],
+    pollInterval: settings.github?.pollInterval || 300,
+    labels: settings.github?.labels || ['bug'],
+  };
+}
+
+/**
+ * 读取邮件配置，env var 可覆盖收件人和密码
+ * 返回 null 表示未配置，不发邮件
+ */
+export function getEmailConfig(settings: Settings): EmailConfig | null {
+  const to = process.env.NOTIFY_EMAIL || settings.email?.to;
+  if (!to) return null;
+  const user = settings.email?.user;
+  const pass = settings.email?.pass || process.env.SMTP_PASS;
+  if (!user || !pass || !settings.email?.host) return null;
+  return {
+    host: settings.email.host,
+    port: settings.email.port,
+    user,
+    pass,
+    to,
+  };
 }

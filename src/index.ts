@@ -190,4 +190,8 @@ program
   });
 
 registerProviderCommands(program);
+
+import { registerIssueCommands } from './issues/index';
+registerIssueCommands(program);
+
 program.parse();
