@@ -76,8 +76,11 @@ export class IssuePoller extends EventEmitter {
       }
     };
 
-    // 启动时立刻执行一次（首次扫描不传 since，获取所有历史 issues）
-    poll();
+    // 启动时立刻执行一次
+    console.log(`[IssuePoller] ${repo}: 首次扫描开始...`);
+    poll().catch(err => {
+      console.error(`[IssuePoller] ${repo}: 首次扫描异常:`, err.message || err);
+    });
 
     // 然后定时执行
     const timer = setInterval(poll, this.config.pollInterval * 1000);
@@ -86,6 +89,7 @@ export class IssuePoller extends EventEmitter {
 
   /** 对单个仓库执行一次轮询 */
   private async pollRepo(repo: string, isFirstScan = false): Promise<void> {
+    console.log(`[IssuePoller] ${repo}: 轮询中 (首次=${isFirstScan})...`);
     const client = new GitHubClient(this.token, repo);
 
     // 首次扫描不传 since，获取所有未处理的 issues
@@ -94,6 +98,7 @@ export class IssuePoller extends EventEmitter {
     let issues: GitHubIssue[];
     try {
       issues = await client.listIssues(this.config.labels, since);
+      console.log(`[IssuePoller] ${repo}: API 返回 ${issues.length} 个 issues`);
     } catch (err) {
       this.emit('poll_error', {
         repo,
