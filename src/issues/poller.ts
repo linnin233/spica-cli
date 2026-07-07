@@ -105,13 +105,30 @@ export class IssuePoller extends EventEmitter {
     const newIssues: GitHubIssue[] = [];
 
     for (const issue of issues) {
-      // 去重：跳过已处理或正在处理的
+      // 去重：跳过 state 中已处理或正在处理的
       if (
         this.state.isProcessed(repo, issue.number) ||
         this.state.isProcessing(repo, issue.number)
       ) {
         continue;
       }
+
+      // 检查是否已有 bot 评论（之前处理过但 state 丢了）
+      try {
+        const comments = await client.listComments(issue.number);
+        const botCommented = comments.some(c =>
+          c.body.includes('spica-cli auto-issue-handler') ||
+          c.body.includes('spica-cli 自动处理')
+        );
+        if (botCommented) {
+          // 标记为已处理（恢复 state）
+          await this.state.markProcessed(repo, issue.number);
+          continue;
+        }
+      } catch {
+        // 获取评论失败不影响主流程
+      }
+
       newIssues.push(issue);
     }
 
