@@ -113,17 +113,23 @@ export class IssuePoller extends EventEmitter {
         continue;
       }
 
-      // 检查是否已有 bot 评论（之前处理过但 state 丢了）
+      // 检查是否已有成功的 bot 评论（PR 已创建），跳过重复处理
       try {
         const comments = await client.listComments(issue.number);
-        const botCommented = comments.some(c =>
-          c.body.includes('spica-cli auto-issue-handler') ||
-          c.body.includes('spica-cli 自动处理')
+        const hasSuccessComment = comments.some(c =>
+          c.body.includes('spica-cli 已完成自动修复') ||
+          c.body.includes('Pull Request:')
         );
-        if (botCommented) {
-          // 标记为已处理（恢复 state）
+        if (hasSuccessComment) {
           await this.state.markProcessed(repo, issue.number);
           continue;
+        }
+        // 如果有失败评论但没有成功评论，仍然重新处理
+        const hasBotComment = comments.some(c =>
+          c.body.includes('spica-cli')
+        );
+        if (hasBotComment) {
+          console.log(`  [重新处理] #${issue.number} — 之前失败，重试`);
         }
       } catch {
         // 获取评论失败不影响主流程
