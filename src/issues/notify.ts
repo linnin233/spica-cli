@@ -5,7 +5,11 @@
  */
 
 import { connect } from 'net';
+import { connect as tlsConnect } from 'tls';
 import type { EmailConfig } from '../utils/settings';
+
+/** SSL 端口列表（需要 TLS 加密的端口） */
+const SSL_PORTS = [465, 587];
 
 // —— 类型 ——
 
@@ -92,9 +96,13 @@ export class Notifier {
   /** SMTP 发信 */
   private async sendMail(subject: string, body: string): Promise<void> {
     const { host, port, user, pass, to } = this.config;
+    const useSSL = SSL_PORTS.includes(port);
 
     return new Promise((resolve, reject) => {
-      const socket = connect(port, host);
+      // 端口 465/587 → TLS 加密连接，否则明文
+      const socket = useSSL
+        ? tlsConnect(port, host, { rejectUnauthorized: false })
+        : connect(port, host);
 
       const timeout = setTimeout(() => {
         socket.destroy();
@@ -104,7 +112,7 @@ export class Notifier {
       socket.setEncoding('utf8');
 
       let buffer = '';
-      let step = 0; // 0=等待220, 1=HELO, 2=AUTH, 3=MAIL, 4=RCPT, 5=DATA, 6=发送, 7=QUIT
+      let step = 0; // 0=等待220, 1=EHLO, 2=AUTH, 3=MAIL, 4=RCPT, 5=DATA, 6=发送内容, 7=QUIT
 
       const sendLine = (line: string) => {
         socket.write(line + '\r\n');
@@ -123,7 +131,7 @@ export class Notifier {
 
           const code = parseInt(line.slice(0, 3), 10) || 0;
 
-          // SMTP 错误码：4xx/5xx 开头
+          // SMTP 错误码：4xx/5xx 开头（QUIT 阶段跳过）
           if (code >= 400 && step !== 7) {
             clearTimeout(timeout);
             socket.end();
@@ -131,7 +139,7 @@ export class Notifier {
             return;
           }
 
-          // 多行响应（以 - 分隔）
+          // 多行响应（以 - 分隔前三位），跳过直到最后一行
           if (line[3] === '-') continue;
 
           switch (step) {
@@ -141,33 +149,32 @@ export class Notifier {
                 sendLine(`EHLO spica-cli`);
               }
               break;
-            case 1: // HELO 响应
+            case 1: // EHLO 响应 → 开始 AUTH
               step = 2;
               sendLine('AUTH LOGIN');
               break;
-            case 2: // AUTH 提示
+            case 2: // AUTH 提示输入用户名
               step = 3;
               sendLine(base64(user));
               break;
-            case 3: // 用户名 OK
+            case 3: // 用户名 OK → 输入密码
               step = 4;
               sendLine(base64(pass));
               break;
-            case 4: // 密码 OK
+            case 4: // 密码 OK → MAIL FROM
               step = 5;
               sendLine(`MAIL FROM:<${user}>`);
               break;
-            case 5: // MAIL FROM OK
+            case 5: // MAIL FROM OK → RCPT TO
               step = 6;
               sendLine(`RCPT TO:<${to}>`);
               break;
-            case 6: // RCPT TO OK
+            case 6: // RCPT TO OK → DATA
               step = 7;
               sendLine('DATA');
               break;
-            case 7: // DATA 提示 354
+            case 7: // DATA 提示 354 → 发送邮件内容
               step = 8;
-              // 发送邮件内容
               sendLine(`From: spica-cli <${user}>`);
               sendLine(`To: <${to}>`);
               sendLine(`Subject: =?UTF-8?B?${base64(subject)}?=`);
@@ -177,11 +184,11 @@ export class Notifier {
               sendLine(body);
               sendLine('.');
               break;
-            case 8: // 内容已接收
+            case 8: // 内容已接收（250）→ QUIT
               step = 9;
               sendLine('QUIT');
               break;
-            case 9: // QUIT OK
+            case 9: // QUIT OK（221）
               clearTimeout(timeout);
               socket.end();
               resolve();
@@ -192,7 +199,7 @@ export class Notifier {
 
       socket.on('error', (err) => {
         clearTimeout(timeout);
-        reject(new Error(`SMTP 连接失败: ${err.message}`));
+        reject(new Error(`SMTP ${useSSL ? 'SSL ' : ''}连接失败: ${err.message}`));
       });
 
       socket.on('close', () => {
